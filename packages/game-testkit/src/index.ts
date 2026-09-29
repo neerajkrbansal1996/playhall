@@ -10,6 +10,8 @@
  *   4. serialization round-trip
  *   5. reconnect snapshot equals live state
  *   6. random playouts terminate with a valid result
+ *   7. every result is well-formed: one standing per seat, or empty for a
+ *      reason that did not count (ADR-0006)
  */
 import { SDK_VERSION } from '@playhall/game-sdk'
 
@@ -20,6 +22,7 @@ export const CONFORMANCE_CHECKS = [
   'serialization-round-trip',
   'reconnect-snapshot-matches-live',
   'random-playout-terminates',
+  'result-standings-well-formed',
 ] as const
 
 export type ConformanceCheck = (typeof CONFORMANCE_CHECKS)[number]
