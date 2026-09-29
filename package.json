@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Playhall — browser-based multiplayer game platform monorepo.",
+  "description": "Playhall \u2014 browser-based multiplayer game platform monorepo.",
   "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22.0.0",
@@ -22,6 +22,8 @@
     "format:check": "prettier --check .",
     "test": "pnpm -r test",
     "check:workflow-permissions": "node scripts/ci/assert-workflow-permissions.mjs",
+    "registry:generate": "node tools/generate-games-registry.mjs",
+    "registry:check": "node tools/generate-games-registry.mjs --check",
     "clean": "pnpm -r clean",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",

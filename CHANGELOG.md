@@ -21,3 +21,10 @@ All notable changes to this project are documented here. The format follows
 - ESLint rule banning `Date.now()` and `Math.random()` inside `packages/` and
   `games/`, ahead of the full dependency-boundary rules in M0.2.
 - Licence ledgers: `THIRD_PARTY_LICENSES.md`, `ASSET_LICENSES.md`.
+- `@playhall/platform-core`: game registry, rooms with global 6-character codes,
+  the join matrix, room lifecycle timers, rate limits including a per-IP cap on
+  failed room-code joins, the route table, sitemap/`robots.txt`, and feature
+  flags. See `packages/platform-core/README.md`.
+- `pnpm registry:generate` / `pnpm registry:check`: generates the one allowlisted
+  platform→game module (`apps/*/src/games.generated.ts`, ADR-0002 §3) from each
+  game's declared `playhall.gameEntry`, and fails CI when it is stale.
