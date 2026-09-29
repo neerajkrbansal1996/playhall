@@ -1,0 +1,12 @@
+{
+  "//": "Solution file. Composite library projects only — apps typecheck with `tsc --noEmit`.",
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/game-sdk" },
+    { "path": "./packages/platform-core" },
+    { "path": "./packages/netcode" },
+    { "path": "./packages/game-testkit" },
+    { "path": "./packages/ui" }
+  ]
+}
