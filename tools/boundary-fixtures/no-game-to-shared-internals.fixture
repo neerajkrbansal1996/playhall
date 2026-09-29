@@ -1,7 +1,7 @@
 # expect: no-game-to-shared-internals
-# why: a game deep-importing past @atrium/shared's published surface
+# why: a game deep-importing past @scope/shared's published surface
 === file: games/fx-a/src/index.ts ===
-// @atrium/shared exports only its index. Reaching a file behind it pins the game to an
+// @scope/shared exports only its index. Reaching a file behind it pins the game to an
 // internal layout that is not part of any contract.
 import { ALPHABET } from '../../../packages/shared/src/room-code'
 
