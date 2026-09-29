@@ -1,0 +1,14 @@
+{
+  "//": "Type-checks the test sources (including the tic-tac-toe and realtime conformance fixtures) without emitting. Not part of the composite build graph.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "declaration": false,
+    "declarationMap": false,
+    "composite": false,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@atrium/realtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lobby / turn-based realtime service. Owns the wire protocol and room runner.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@atrium/platform-core": "workspace:*",
+    "@atrium/shared": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.6",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
