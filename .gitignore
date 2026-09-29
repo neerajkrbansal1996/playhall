@@ -1,4 +1,7 @@
 node_modules/
+# Sibling git worktrees. `git worktree add .worktrees/<branch>` puts another
+# branch's checkout inside this one; it is never content of this branch.
+.worktrees/
 dist/
 .next/
 out/
