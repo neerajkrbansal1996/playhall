@@ -1,0 +1,8 @@
+# expect: no-game-node-builtins
+# why: a game doing I/O, which destroys determinism and therefore replay and crash recovery
+=== file: games/fx-a/src/index.ts ===
+// Game modules are pure. No filesystem, no network, no ambient clock — that is what makes a
+// match reproducible from its seed and recoverable after a restart.
+import { readFileSync } from 'node:fs'
+
+export const id = readFileSync('openings.json', 'utf8')
