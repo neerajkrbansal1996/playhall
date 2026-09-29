@@ -11,7 +11,7 @@
  *     # expect: no-game-to-platform
  *     # why: a one-line statement of the violation being proven
  *     === file: games/fx-a/src/index.ts ===
- *     import { createRoom } from '@atrium/platform-core'
+ *     import { createRoom } from '@playhall/platform-core'
  *
  * `expect: none` means the fixture must produce **no** error — that is the positive control
  * that stops the suite from passing on a rule set that simply rejects everything.

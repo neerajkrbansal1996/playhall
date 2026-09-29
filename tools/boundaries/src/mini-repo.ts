@@ -39,7 +39,7 @@ const COPIED_FROM_REPO = [
  */
 export const SCOPE_TOKEN = '@scope'
 
-/** The npm scope the real workspace uses, e.g. `@atrium`. */
+/** The npm scope the real workspace uses, e.g. `@playhall`. */
 export function workspaceScope(repoRoot: string): string {
   const sdkName = JSON.parse(
     readFileSync(join(repoRoot, 'packages', 'game-sdk', 'package.json'), 'utf8'),
@@ -77,7 +77,7 @@ const STUB_PACKAGES = [
 
 /** Source files the stub packages start with. Every edge below is legal. */
 const STUB_SOURCES: Record<string, string> = {
-  'packages/shared/src/index.ts': "export const BRAND_KEY = 'atrium'\n",
+  'packages/shared/src/index.ts': "export const BRAND_KEY = 'playhall'\n",
   // Not re-exported from index, so a deep import into it is the violation
   // `no-game-to-shared-internals` exists to catch.
   'packages/shared/src/room-code.ts': "export const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'\n",
@@ -131,7 +131,7 @@ function packageManifest(name: string): string {
  */
 export function createMiniRepo(repoRoot: string): string {
   const scope = workspaceScope(repoRoot)
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'atrium-boundaries-')))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'playhall-boundaries-')))
 
   for (const relPath of COPIED_FROM_REPO) {
     const target = join(root, relPath)
