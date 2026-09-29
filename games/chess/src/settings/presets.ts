@@ -57,9 +57,7 @@ export const CHESS_SETTINGS_PRESETS: readonly ChessSettingsPreset[] = [
 
 const PRESETS_BY_ID = new Map(CHESS_SETTINGS_PRESETS.map((p) => [p.id, p]))
 
-export function getChessSettingsPreset(
-  id: string,
-): ChessSettingsPreset | undefined {
+export function getChessSettingsPreset(id: string): ChessSettingsPreset | undefined {
   return PRESETS_BY_ID.get(id)
 }
 

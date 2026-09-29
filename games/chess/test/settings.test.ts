@@ -16,6 +16,8 @@ import {
   featuredChessSettingsPresets,
   formFieldKeys,
   getChessSettingsPreset,
+  getTimeControlPreset,
+  isTimeControlPresetId,
   hasClock,
   assignColors,
   resolveHostColor,
@@ -81,6 +83,20 @@ describe('time control presets', () => {
     expect(TIME_CONTROL_PRESETS.find((p) => p.id === id)?.category).toBe(category)
   })
 
+  it('recognises preset ids and rejects anything else', () => {
+    expect(isTimeControlPresetId('3+2')).toBe(true)
+    expect(isTimeControlPresetId('7+7')).toBe(false)
+    expect(isTimeControlPresetId('custom')).toBe(false)
+    expect(isTimeControlPresetId(undefined)).toBe(false)
+    expect(isTimeControlPresetId(32)).toBe(false)
+  })
+
+  it('throws rather than guessing when handed an id that skipped the schema', () => {
+    expect(() =>
+      getTimeControlPreset('7+7' as unknown as (typeof TIME_CONTROL_PRESET_IDS)[number]),
+    ).toThrow(/Unknown chess time control preset/)
+  })
+
   it('categorises a custom control with the same base + 40 x increment rule', () => {
     // 2+1 is 160s (bullet) but 2+2 is 200s (blitz) — the boundary is real.
     expect(categoryFor(2, 1)).toBe('bullet')
@@ -133,27 +149,23 @@ describe('schema rejects invalid input', () => {
 })
 
 describe('custom time control bounds', () => {
-  const custom = (
-    customInitialMinutes: unknown,
-    customIncrementSeconds: unknown,
-  ) => () =>
+  const custom = (customInitialMinutes: unknown, customIncrementSeconds: unknown) => () =>
     parse({ timeControl: 'custom', customInitialMinutes, customIncrementSeconds })
 
   it('accepts the exact lower and upper bounds', () => {
-    expect(custom(CUSTOM_INITIAL_MINUTES.min, CUSTOM_INCREMENT_SECONDS.min)()).toMatchObject(
-      { customInitialMinutes: 0.5, customIncrementSeconds: 0 },
-    )
-    expect(custom(CUSTOM_INITIAL_MINUTES.max, CUSTOM_INCREMENT_SECONDS.max)()).toMatchObject(
-      { customInitialMinutes: 180, customIncrementSeconds: 60 },
-    )
+    expect(custom(CUSTOM_INITIAL_MINUTES.min, CUSTOM_INCREMENT_SECONDS.min)()).toMatchObject({
+      customInitialMinutes: 0.5,
+      customIncrementSeconds: 0,
+    })
+    expect(custom(CUSTOM_INITIAL_MINUTES.max, CUSTOM_INCREMENT_SECONDS.max)()).toMatchObject({
+      customInitialMinutes: 180,
+      customIncrementSeconds: 60,
+    })
   })
 
-  it.each([0.25, 0.4, 0, -5, 180.5, 181, 1000])(
-    'rejects %p minutes',
-    (minutes) => {
-      expect(custom(minutes, 0)).toThrow()
-    },
-  )
+  it.each([0.25, 0.4, 0, -5, 180.5, 181, 1000])('rejects %p minutes', (minutes) => {
+    expect(custom(minutes, 0)).toThrow()
+  })
 
   it.each([1.3, 2.75, 10.1])('rejects %p minutes (not a half-minute step)', (minutes) => {
     expect(custom(minutes, 0)).toThrow()
@@ -171,12 +183,9 @@ describe('custom time control bounds', () => {
     expect(custom(5, inc)).not.toThrow()
   })
 
-  it.each([NaN, Infinity, -Infinity, '5', null])(
-    'rejects %p as a minute value',
-    (minutes) => {
-      expect(custom(minutes, 0)).toThrow()
-    },
-  )
+  it.each([NaN, Infinity, -Infinity, '5', null])('rejects %p as a minute value', (minutes) => {
+    expect(custom(minutes, 0)).toThrow()
+  })
 })
 
 describe('resolveTimeControl', () => {
@@ -336,8 +345,7 @@ describe('form descriptor', () => {
   it('offers every time control the schema accepts, and nothing it does not', () => {
     const field = chessSettingsForm.fields.find((f) => f.key === 'timeControl')
     expect(field?.kind).toBe('select')
-    const values =
-      field?.kind === 'select' ? field.options.map((o) => o.value) : []
+    const values = field?.kind === 'select' ? field.options.map((o) => o.value) : []
     expect(values).toEqual([...TIME_CONTROL_PRESET_IDS, 'custom', 'unlimited'])
     for (const value of values) {
       expect(() => parse({ timeControl: value })).not.toThrow()
@@ -358,9 +366,7 @@ describe('form descriptor', () => {
   })
 
   it('states number bounds that match the schema exactly', () => {
-    const minutes = chessSettingsForm.fields.find(
-      (f) => f.key === 'customInitialMinutes',
-    )
+    const minutes = chessSettingsForm.fields.find((f) => f.key === 'customInitialMinutes')
     expect(minutes?.kind).toBe('number')
     if (minutes?.kind === 'number') {
       expect(minutes.min).toBe(CUSTOM_INITIAL_MINUTES.min)
@@ -368,9 +374,7 @@ describe('form descriptor', () => {
       expect(minutes.step).toBe(CUSTOM_INITIAL_MINUTES.step)
     }
 
-    const increment = chessSettingsForm.fields.find(
-      (f) => f.key === 'customIncrementSeconds',
-    )
+    const increment = chessSettingsForm.fields.find((f) => f.key === 'customIncrementSeconds')
     if (increment?.kind === 'number') {
       expect(increment.min).toBe(CUSTOM_INCREMENT_SECONDS.min)
       expect(increment.max).toBe(CUSTOM_INCREMENT_SECONDS.max)

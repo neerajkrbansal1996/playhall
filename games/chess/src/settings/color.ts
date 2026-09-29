@@ -44,7 +44,5 @@ export function assignColors(
   rng: Rng,
 ): ColorAssignment {
   const host = resolveHostColor(preference, rng)
-  return host === WHITE
-    ? { w: hostSeatId, b: guestSeatId }
-    : { w: guestSeatId, b: hostSeatId }
+  return host === WHITE ? { w: hostSeatId, b: guestSeatId } : { w: guestSeatId, b: hostSeatId }
 }

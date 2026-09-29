@@ -15,7 +15,6 @@ export {
   CUSTOM_INCREMENT_SECONDS,
   categoryFor,
   estimatedDurationSeconds,
-  formatTimeControl,
   getTimeControlPreset,
   isTimeControlPresetId,
   type TimeControlCategory,
