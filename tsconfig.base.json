@@ -25,8 +25,11 @@
     "declarationMap": true,
     "sourceMap": true,
     "composite": true,
-    "emitDeclarationOnly": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "emitDeclarationOnly": true
+
+    // NOTE: `outDir` / `rootDir` are deliberately NOT set here. Path options in
+    // an extended config resolve relative to the file that declares them, so a
+    // value here would point every package at the repo root. Each project
+    // declares its own.
   }
 }

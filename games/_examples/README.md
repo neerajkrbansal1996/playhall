@@ -3,7 +3,7 @@
 Reference implementations that prove the Game SDK works, and that double as the
 worked examples in the SDK docs.
 
-- **tic-tac-toe** — the first consumer of `@atrium/game-sdk`, built in M1 *before*
+- **tic-tac-toe** — the first consumer of `@atrium/game-sdk`, built in M1 _before_
   Chess. If tic-tac-toe cannot be written against the SDK without reaching past it,
   the SDK is wrong and the contract changes before Chess starts.
 

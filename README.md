@@ -24,12 +24,12 @@ pnpm setup   # install + start Redis and Postgres
 pnpm dev     # start both apps
 ```
 
-| What                | Where                                            |
-| ------------------- | ------------------------------------------------ |
-| Web app             | http://localhost:3000                            |
-| Realtime service    | http://localhost:3001 (`/health`)                |
-| Postgres            | `postgresql://atrium:atrium@localhost:5432/atrium` |
-| Redis               | `redis://localhost:6379`                         |
+| What             | Where                                              |
+| ---------------- | -------------------------------------------------- |
+| Web app          | http://localhost:3000                              |
+| Realtime service | http://localhost:3001 (`/health`)                  |
+| Postgres         | `postgresql://atrium:atrium@localhost:5432/atrium` |
+| Redis            | `redis://localhost:6379`                           |
 
 `cp .env.example .env` if you need to change ports or point at a different
 Redis/Postgres. Defaults match `docker-compose.yml`, so the copy is optional.

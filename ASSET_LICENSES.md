@@ -7,9 +7,9 @@ release blocker.
 Required for each entry: what it is, where it came from, the exact licence, a link to
 the licence text, whether attribution is required, and where the attribution is shown.
 
-| Asset | Type | Source / author | Licence | Attribution required | Attribution shown at | Used by |
-| ----- | ---- | --------------- | ------- | -------------------- | -------------------- | ------- |
-| _(none yet)_ | | | | | | |
+| Asset        | Type | Source / author | Licence | Attribution required | Attribution shown at | Used by |
+| ------------ | ---- | --------------- | ------- | -------------------- | -------------------- | ------- |
+| _(none yet)_ |      |                 |         |                      |                      |         |
 
 ## Pending decisions
 
