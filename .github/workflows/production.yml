@@ -1,0 +1,81 @@
+name: Production deploy
+
+# A merge to `main` reaches production — but only behind the same gates a PR
+# faces, and only after the deployed URL answers its health check.
+#
+# Note on ordering: this workflow re-runs the gates itself via `ci-gate` rather
+# than trusting that "CI passed on the PR". Two PRs can each be green alone and
+# red together, and branch protection (which would force a rebase) is not
+# available on this repo's plan yet. Re-running on the merge commit is what
+# makes the promise "main is deployable" true rather than probable.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two production deploys at once, and never cancel one halfway.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gates:
+    name: gates
+    uses: ./.github/workflows/ci.yml
+
+  web:
+    name: deploy web
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # A GitHub Environment is where the production secrets live and where a
+    # required reviewer can be attached later. The environment does not need to
+    # exist for this to run; it is created on first use.
+    environment:
+      name: production-web
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: production
+          target: web
+          health-path: /api/health
+          provider: ${{ vars.DEPLOY_PROVIDER }}
+          probe-attempts: '30'
+
+  realtime:
+    name: deploy realtime
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: production-realtime
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      REALTIME_DEPLOY_TOKEN: ${{ secrets.REALTIME_DEPLOY_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: production
+          target: realtime
+          health-path: /health
+          provider: ${{ vars.REALTIME_DEPLOY_PROVIDER || vars.DEPLOY_PROVIDER }}
+          probe-attempts: '30'
