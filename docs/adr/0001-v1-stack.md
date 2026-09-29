@@ -5,6 +5,10 @@
 - **Amended:** 2026-09-30 (rev 2) — board resolved the budget, the data-store tier, the
   repository and the product name. See [Board decisions](#board-decisions-applied-rev-2).
   **§6 changed materially**: Redis is no longer the durability tier.
+- **Amended:** 2026-09-30 (rev 3) — §10 only. Rev 2's brand text contradicted the committed
+  `brand.ts` and left a fail-open default that could ship the codename to a player. Resolved in
+  §10. The repository decision's knock-on effect on the PR gate is
+  [ADR-0004](./0004-pr-gate-without-branch-protection.md).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -18,26 +22,26 @@ one result model. Most players arrive by tapping a link on a phone over mobile d
 
 The stack choices below are constrained by non-functional targets we are held to:
 
-| Target                                                   | Constrains                               |
-| -------------------------------------------------------- | ---------------------------------------- |
-| Turn-based action round-trip < 150 ms p95 in-region      | transport, persistence, hosting region   |
-| 30 Hz tick, < 5 ms p99 per tick for a 12-player room     | server framework, GC pressure, codec     |
-| < 30 KB/s down per client in real-time                   | wire format — rules out JSON-only        |
-| Landing LCP < 2 s on mid-range Android over 4G           | web framework, bundle budget             |
-| Turn-based game bundle < 250 KB gzipped (excl. assets)   | ORM/client library footprint             |
-| Adding a game adds **zero** bytes to other bundles       | dynamic imports, no static game registry |
-| 2,000 concurrent turn-based rooms on one instance        | per-room memory, room runner design      |
-| Turn-based games survive a server restart                | Redis + Postgres match log              |
-| WCAG 2.1 AA on platform UI                               | component library                        |
+| Target                                                 | Constrains                               |
+| ------------------------------------------------------ | ---------------------------------------- |
+| Turn-based action round-trip < 150 ms p95 in-region    | transport, persistence, hosting region   |
+| 30 Hz tick, < 5 ms p99 per tick for a 12-player room   | server framework, GC pressure, codec     |
+| < 30 KB/s down per client in real-time                 | wire format — rules out JSON-only        |
+| Landing LCP < 2 s on mid-range Android over 4G         | web framework, bundle budget             |
+| Turn-based game bundle < 250 KB gzipped (excl. assets) | ORM/client library footprint             |
+| Adding a game adds **zero** bytes to other bundles     | dynamic imports, no static game registry |
+| 2,000 concurrent turn-based rooms on one instance      | per-room memory, room runner design      |
+| Turn-based games survive a server restart              | Redis + Postgres match log               |
+| WCAG 2.1 AA on platform UI                             | component library                        |
 
 Three of these ten are the load-bearing ones for this ADR: the **< 30 KB/s** real-time
 budget, the **zero bytes to other bundles** rule, and **restart survival**.
 
 There is an eleventh constraint, added in rev 2 and binding on every section below:
 
-| Target                                      | Constrains                                    |
-| ------------------------------------------- | --------------------------------------------- |
-| **Monthly infrastructure budget: $0**       | every managed service, every tier, every vendor |
+| Target                                | Constrains                                      |
+| ------------------------------------- | ----------------------------------------------- |
+| **Monthly infrastructure budget: $0** | every managed service, every tier, every vendor |
 
 The board set the infrastructure budget at **$0** (§11). That is not a footnote — it moved
 one decision in this ADR (§6) and it bounds what M5 can prove (§11.2).
@@ -76,7 +80,7 @@ Task orchestration: **plain `pnpm -r` / `--filter` for M0**, with TypeScript pro
 references (`composite: true`) for incremental typecheck.
 
 **Alternatives.** Turborepo and Nx both give remote caching and a task graph, which we will
-want once CI runtime becomes the bottleneck. Both lost *for now* on **reversibility**: they
+want once CI runtime becomes the bottleneck. Both lost _for now_ on **reversibility**: they
 are cheap to add later (a `turbo.json` plus script rewrites, a day) and add a
 configuration surface we do not yet need. **Revisit** when CI wall-clock on a
 single-package change exceeds 5 minutes — that is the trigger, not team preference.
@@ -125,7 +129,7 @@ was Colyseus for both kinds of game. **I am recommending we amend it.**
 Colyseus is a good product and solves real problems — rooms, matchmaking, delta-encoded
 binary state sync, multi-process allocation. It lost on four of our lenses:
 
-- **Redaction completeness.** Our contract requires that *every byte* leaving the server
+- **Redaction completeness.** Our contract requires that _every byte_ leaving the server
   passes through `getViewFor` / `getSnapshotFor`. Colyseus's model is "mutate `this.state`,
   the framework diffs it and broadcasts," with per-client hiding bolted on via `@filter()`
   decorators. That inverts the default: a new field is **visible unless someone remembers to
@@ -140,7 +144,7 @@ binary state sync, multi-process allocation. It lost on four of our lenses:
   time and randomness via `ctx.now` / `ctx.rng` with the seed stored on the match. Colyseus
   rooms are stateful objects with their own `this.clock` and lifecycle. Achievable, but we
   would be fighting the framework's grain to get replays and reproducible tests.
-- **Reversibility.** Adopting Colyseus as *the* server framework is an **expensive** choice
+- **Reversibility.** Adopting Colyseus as _the_ server framework is an **expensive** choice
   to undo — it owns the room lifecycle, matchmaking and the wire protocol. Writing a room
   runner for turn-based games against our own SDK contract is **moderate** at worst, and it
   is work the roadmap already assigns us in `packages/platform-core` and `packages/netcode`.
@@ -164,11 +168,11 @@ on [PER-2](/PER/issues/PER-2).
 
 The recommendation, stated as the board's actual choice:
 
-| Option                                           | Cost to reverse | Risk carried                                                                                   |
-| ------------------------------------------------ | --------------- | ---------------------------------------------------------------------------------------------- |
-| **A. Our room runner now** *(recommended)*       | Moderate        | We write and test a room runner. Real-time engine choice deferred to M4/M6 with better data.    |
-| B. Colyseus now for turn-based too               | Expensive       | Opt-in redaction, framework types in games, determinism friction. Saves room-runner work in M1. |
-| C. Colyseus for real-time only, ours for turn    | Moderate        | Effectively A plus a pre-commitment to Colyseus for M6 made before the M4 spike has any data.   |
+| Option                                        | Cost to reverse | Risk carried                                                                                    |
+| --------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| **A. Our room runner now** _(recommended)_    | Moderate        | We write and test a room runner. Real-time engine choice deferred to M4/M6 with better data.    |
+| B. Colyseus now for turn-based too            | Expensive       | Opt-in redaction, framework types in games, determinism friction. Saves room-runner work in M1. |
+| C. Colyseus for real-time only, ours for turn | Moderate        | Effectively A plus a pre-commitment to Colyseus for M6 made before the M4 spike has any data.   |
 
 > **Measurement owed.** Option A's cost is real work, and I am not going to claim a number I
 > have not measured. The honest figure is: the room runner, match log and timer service are
@@ -282,13 +286,13 @@ withdrawn.
 
 - The **Postgres match log is the sole tier of record.** Every applied action is appended
   there, and a room is fully reconstructible from `(seed, module version, ordered action
-  log, last snapshot)` with no Redis key surviving.
+log, last snapshot)` with no Redis key surviving.
 - **Redis holds only derived or cheap-to-lose data**: current state cache, presence, pub/sub,
   locks, and the code → room mapping. Losing the whole keyspace costs a rehydrate and a
   reconnect, never a match.
 - **The code → room mapping is the one exception that needs care.** It is cheap to lose only
   because the room row in Postgres also carries its code, so the mapping is rebuildable; a
-  code lookup that misses in Redis falls through to Postgres and repopulates. It is *not*
+  code lookup that misses in Redis falls through to Postgres and repopulates. It is _not_
   regenerated with a new code, because a shared link must keep working.
 - `noeviction` and `appendonly yes` stay in `docker-compose.yml` and stay **recommended**
   wherever they are available, because they turn a routine event into a non-event. They are
@@ -356,11 +360,11 @@ survive a free-tier Redis that drops its keyspace. `packages/platform-core` owns
 
 **Blast radius, stated rather than hidden** (rev 2 — the Redis row changed):
 
-- *An app instance dies mid-match.* The room lock expires, another instance rehydrates from
+- _An app instance dies mid-match._ The room lock expires, another instance rehydrates from
   the last snapshot plus the match log, and play resumes at the correct state. During that
   window the player sees "reconnecting" — never a stale board presented as live. Showing a
   correct state late beats showing a wrong state now.
-- *Redis dies hard, or a free tier drops the whole keyspace.* **Nothing is lost.** Rooms
+- _Redis dies hard, or a free tier drops the whole keyspace._ **Nothing is lost.** Rooms
   rehydrate from the Postgres match log, players see "reconnecting", and play resumes at the
   correct state.
   > **Rev 1 said** that with `appendfsync everysec` an in-flight match could lose **up to 1
@@ -368,7 +372,7 @@ survive a free-tier Redis that drops its keyspace. `packages/platform-core` owns
   > accepting it** (§6.1). The rev 1 mitigations — `appendfsync always`, or a replica with
   > `WAIT` — are moot, and one of them (a replica) was not free anyway. This is the one place
   > where the board's $0 constraint made the design strictly more correct.
-- *Postgres dies.* In-flight matches stop. This is the failure we cannot design around, and
+- _Postgres dies._ In-flight matches stop. This is the failure we cannot design around, and
   it is the reason the durability point sits there and nowhere else. On a free tier with no
   persistence guarantee this is a real risk, not a theoretical one — so it is named here and
   is what [PER-38](/PER/issues/PER-38) has to price.
@@ -497,6 +501,35 @@ is not hard-coding it; the mechanism is unchanged and is the whole point. Specif
   `isProvisional` stays `true` until they are decided, because a name alone is not enough to
   ship share previews (product principle 4) — those need a real domain.
 
+**Rev 3 — rev 2 does not match the code, and the mismatch is a fail-open default.** Rev 2 asserts
+`isProvisional` stays `true` until domain and logo land. The committed implementation computes
+`isProvisional: name === INTERNAL_CODENAME`, so the moment anyone sets the name to `Playhall`
+it flips to `false` and rev 2's guarantee silently evaporates. Rev 2 also keeps the codename as
+the _default_, which means an environment with `NEXT_PUBLIC_BRAND_NAME` unset ships **"Atrium"
+to a player**. Both are resolved here rather than left for whoever hits them first:
+
+- **The default becomes the approved name.** `brand.ts` holds `Playhall` as the fallback, with
+  the env var retained as an override for environment labelling. Rev 2's "the string may not
+  enter `brand.ts`" is withdrawn: it is self-defeating. `brand.ts` is the file this section
+  designates as the single source of truth, so pushing the value out into per-environment env
+  vars replaces **one** reviewable, diffable place with **four** (local, preview, staging,
+  production), each able to be missing. Missing configuration must degrade to the correct name,
+  not to a codename. The no-literals rule is unchanged and still has teeth — it forbids the
+  string _anywhere but_ `brand.ts`, which is the rule as originally written.
+- **`isProvisional` is derived from what is actually unsettled.** It becomes
+  `name !== APPROVED_NAME || domain === ''`, so it stays `true` while the domain is open — which
+  is what rev 2 meant — and also catches a reverted or mis-set name override, which is what the
+  original text meant. One expression, both jobs.
+- **`INTERNAL_CODENAME` stops being a fallback** and survives only as the value the guard
+  compares against.
+
+Logo is deliberately excluded from `isProvisional`: it is an asset, not a string, and gating a
+boolean on a missing file conflates two different checks. It stays tracked on
+[PER-2](/PER/issues/PER-2) and in `ASSET_LICENSES.md`.
+
+The code change is small and belongs to whoever next touches `packages/shared` — assigned in the
+epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does not carry code.
+
 ---
 
 ## Consequences
@@ -529,14 +562,14 @@ is not hard-coding it; the mechanism is unchanged and is the whole point. Specif
 
 **Cost to reverse**
 
-| Decision                  | Cost      |
-| ------------------------- | --------- |
-| Task runner (§2)          | Cheap     |
-| Codec / transport (§4.1)  | Cheap — that is the point of the seam |
-| ORM (§5)                  | Moderate  |
-| Room runner vs Colyseus   | Moderate now, **expensive** after M2 once games depend on the contract shape |
+| Decision                   | Cost                                                                                                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Task runner (§2)           | Cheap                                                                                                                                                                      |
+| Codec / transport (§4.1)   | Cheap — that is the point of the seam                                                                                                                                      |
+| ORM (§5)                   | Moderate                                                                                                                                                                   |
+| Room runner vs Colyseus    | Moderate now, **expensive** after M2 once games depend on the contract shape                                                                                               |
 | Redis as cache only (§6.1) | **Cheap — and cheaper than rev 1's design, which is the point.** Making Redis losable means adding, removing or swapping it is a config change, not a correctness argument |
-| Postgres as tier of record | Expensive — this is now the load-bearing durability choice |
+| Postgres as tier of record | Expensive — this is now the load-bearing durability choice                                                                                                                 |
 
 ## Revisit triggers
 
@@ -559,13 +592,13 @@ is not hard-coding it; the mechanism is unchanged and is the whole point. Specif
 
 Rev 1 escalated four items to the board on [PER-2](/PER/issues/PER-2). Three are resolved.
 
-| # | Item | Outcome | Effect on this ADR |
-| - | ---- | ------- | ------------------ |
-| 1 | **§4.4** — drop Colyseus from M1–M5, keep as M6 candidate | **Still open** — approval [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), endorsed by Chief of Staff | §4.4 stays `Board-gated`. Not blocking; see §11.1 |
-| 2 | Paid tiers for Sentry / PostHog / uptime | **Denied. Budget $0, free tiers only** | §8 rewritten as a standing constraint |
-| 3 | Managed Redis + Postgres | **Free tiers or Docker; costed proposal at M4. Assume no persistence guarantees and cold-start latency** | **§6 materially amended** — §6.1, §6.2, §6.3 |
-| 4 | Code repository | **Resolved** — private repo `neerajkrbansal1996/gameroom` ([PER-35](/PER/issues/PER-35) closed) | This ADR lands there; unblocks [PER-36](/PER/issues/PER-36) and [PER-6](/PER/issues/PER-6) |
-| + | Final product name | **Decided: Playhall.** Domain and logo still open | §10 amended; the string lives only in `BRAND.name` |
+| #   | Item                                                      | Outcome                                                                                                               | Effect on this ADR                                                                         |
+| --- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1   | **§4.4** — drop Colyseus from M1–M5, keep as M6 candidate | **Still open** — approval [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), endorsed by Chief of Staff | §4.4 stays `Board-gated`. Not blocking; see §11.1                                          |
+| 2   | Paid tiers for Sentry / PostHog / uptime                  | **Denied. Budget $0, free tiers only**                                                                                | §8 rewritten as a standing constraint                                                      |
+| 3   | Managed Redis + Postgres                                  | **Free tiers or Docker; costed proposal at M4. Assume no persistence guarantees and cold-start latency**              | **§6 materially amended** — §6.1, §6.2, §6.3                                               |
+| 4   | Code repository                                           | **Resolved** — private repo `neerajkrbansal1996/gameroom` ([PER-35](/PER/issues/PER-35) closed)                       | This ADR lands there; unblocks [PER-36](/PER/issues/PER-36) and [PER-6](/PER/issues/PER-6) |
+| +   | Final product name                                        | **Decided: Playhall.** Domain and logo still open                                                                     | §10 amended; the string lives only in `BRAND.name`                                         |
 
 Hosting provider remains open and is deliberately still out of scope here — it is
 [PER-38](/PER/issues/PER-38), and it needs cost per 1,000 concurrent players. The $0 budget
