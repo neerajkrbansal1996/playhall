@@ -115,6 +115,9 @@ importers:
 
   games/chess:
     dependencies:
+      '@playhall/game-sdk':
+        specifier: workspace:*
+        version: link:../../packages/game-sdk
       chess.js:
         specifier: ^1.4.0
         version: 1.4.0

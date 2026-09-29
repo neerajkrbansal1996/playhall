@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { asSeatId } from '../src/sdk/contract.js'
 import {
   CHESS_SETTINGS_DEFAULTS,
   CHESS_SETTINGS_KEYS,
@@ -275,17 +276,17 @@ describe('colour assignment', () => {
   })
 
   it('seats the host and guest on opposite colours', () => {
-    expect(assignColors('white', 'seat-host', 'seat-guest', explodingRng)).toEqual({
-      w: 'seat-host',
-      b: 'seat-guest',
+    expect(assignColors('white', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng)).toEqual({
+      w: asSeatId('seat-host'),
+      b: asSeatId('seat-guest'),
     })
-    expect(assignColors('black', 'seat-host', 'seat-guest', explodingRng)).toEqual({
-      w: 'seat-guest',
-      b: 'seat-host',
+    expect(assignColors('black', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng)).toEqual({
+      w: asSeatId('seat-guest'),
+      b: asSeatId('seat-host'),
     })
-    expect(assignColors('random', 'seat-host', 'seat-guest', () => 0.9)).toEqual({
-      w: 'seat-guest',
-      b: 'seat-host',
+    expect(assignColors('random', asSeatId('seat-host'), asSeatId('seat-guest'), () => 0.9)).toEqual({
+      w: asSeatId('seat-guest'),
+      b: asSeatId('seat-host'),
     })
   })
 
