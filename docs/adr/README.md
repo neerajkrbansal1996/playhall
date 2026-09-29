@@ -44,4 +44,4 @@ so per decision rather than downgrading the whole document.
 | ------------------------------------------------- | ------------------------------- | ------------------------------------------ |
 | [0001](./0001-v1-stack.md)                        | The v1 stack                    | Accepted, except §4.4 which is board-gated |
 | [0002](./0002-dependency-boundary-enforcement.md) | Dependency-boundary enforcement | Accepted                                   |
-| [0003](./0003-game-sdk-contract-v1.md)            | Fix the Game SDK contract at v1 | Accepted                                   |
+| [0008](./0008-game-sdk-contract-v1.md)            | Fix the Game SDK contract at v1 | Accepted                                   |

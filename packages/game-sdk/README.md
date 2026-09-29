@@ -313,4 +313,4 @@ the shipping examples live in `games/_examples/`.
 
 ## Decisions
 
-Rationale, alternatives and consequences: [`docs/adr/0003-game-sdk-contract-v1.md`](../../docs/adr/0003-game-sdk-contract-v1.md).
+Rationale, alternatives and consequences: [`docs/adr/0008-game-sdk-contract-v1.md`](../../docs/adr/0008-game-sdk-contract-v1.md).

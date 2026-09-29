@@ -1,4 +1,4 @@
-# ADR-0003: Fix the Game SDK contract at v1
+# ADR-0008: Fix the Game SDK contract at v1
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
