@@ -1,5 +1,5 @@
 /**
- * @atrium/game-testkit — the conformance suite every game must pass before CI
+ * @playhall/game-testkit — the conformance suite every game must pass before CI
  * will merge it.
  *
  * The checks (declared here so the contract is visible from M0; implemented in
@@ -11,7 +11,7 @@
  *   5. reconnect snapshot equals live state
  *   6. random playouts terminate with a valid result
  */
-import { SDK_VERSION } from '@atrium/game-sdk'
+import { SDK_VERSION } from '@playhall/game-sdk'
 
 export const CONFORMANCE_CHECKS = [
   'determinism',

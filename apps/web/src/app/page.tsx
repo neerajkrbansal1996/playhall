@@ -1,4 +1,4 @@
-import { BRAND } from '@atrium/shared'
+import { BRAND } from '@playhall/shared'
 
 import { Button } from '@/components/ui/button'
 
@@ -27,7 +27,7 @@ export default function HomePage() {
 
       <p className="text-muted-foreground text-xs">
         M0 skeleton — lobby flows land in M1.
-        {BRAND.isProvisional ? ' Product name is provisional (internal codename).' : null}
+        {BRAND.isProvisional ? ' Branding is not final yet.' : null}
       </p>
     </main>
   )

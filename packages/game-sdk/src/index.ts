@@ -1,8 +1,8 @@
 /**
- * `@atrium/game-sdk` — the only package a game may import.
+ * `@playhall/game-sdk` — the only package a game may import.
  *
  * A game imports from here and from third-party libraries. Never from
- * `@atrium/platform-core`, never from `apps/*`, never from another game. CI
+ * `@playhall/platform-core`, never from `apps/*`, never from another game. CI
  * fails the build on a violation.
  *
  * See `README.md` for the contract walkthrough and the purity rules.

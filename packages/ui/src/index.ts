@@ -1,5 +1,5 @@
 /**
- * @atrium/ui — shared presentational primitives used by apps/web.
+ * @playhall/ui — shared presentational primitives used by apps/web.
  *
  * Owned jointly with the Frontend Engineer; components land as the lobby UI
  * does. Keep this package free of platform and game imports so it stays

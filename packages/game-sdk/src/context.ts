@@ -64,7 +64,7 @@ export interface GameContextInit {
 /**
  * The single place a `GameContext` is built.
  *
- * `@atrium/platform-core` and `@atrium/game-testkit` both call this so that a
+ * `@playhall/platform-core` and `@playhall/game-testkit` both call this so that a
  * replay in a test and a replay on the server derive the same RNG stream.
  */
 export function createGameContext(init: GameContextInit): GameContext {

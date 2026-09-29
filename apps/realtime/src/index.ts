@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
-import { BRAND } from '@atrium/shared'
-import { platformBuildInfo } from '@atrium/platform-core'
+import { BRAND } from '@playhall/shared'
+import { platformBuildInfo } from '@playhall/platform-core'
 import { loadEnv } from './env'
 
 const env = loadEnv()
@@ -17,7 +17,7 @@ const server = createServer((req, res) => {
     res.end(
       JSON.stringify({
         ok: true,
-        service: '@atrium/realtime',
+        service: '@playhall/realtime',
         brand: BRAND.name,
         brandIsProvisional: BRAND.isProvisional,
         versions: platformBuildInfo(),

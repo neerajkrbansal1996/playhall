@@ -1,9 +1,10 @@
-# Atrium
+# Playhall
 
-> **Atrium is an internal codename.** The product name, domain and logo are a board
-> decision and are still open. Nothing in this repo may hard-code a brand string —
-> read it from `packages/shared/src/brand.ts` (`BRAND.name`), which falls back to the
-> codename and can be overridden with `NEXT_PUBLIC_BRAND_NAME`.
+> **The name is decided; the domain and logo are not.** The board approved _Playhall_;
+> domain and logo are still open (PER-2). Nothing in this repo may hard-code a brand
+> string — read it from `packages/shared/src/brand.ts` (`BRAND.name`), which defaults to
+> the approved name and can be overridden with `NEXT_PUBLIC_BRAND_NAME`. `BRAND.isProvisional`
+> stays `true` until the domain lands. See ADR-0001 §10.
 
 A browser-based multiplayer game platform. Anyone can open a lobby for any game, share a
 link or a 6-character code, and play live with friends. No downloads, no sign-up, guests
@@ -24,12 +25,12 @@ pnpm setup   # install + start Redis and Postgres
 pnpm dev     # start both apps
 ```
 
-| What             | Where                                              |
-| ---------------- | -------------------------------------------------- |
-| Web app          | http://localhost:3000                              |
-| Realtime service | http://localhost:3001 (`/health`)                  |
-| Postgres         | `postgresql://atrium:atrium@localhost:5432/atrium` |
-| Redis            | `redis://localhost:6379`                           |
+| What             | Where                                                    |
+| ---------------- | -------------------------------------------------------- |
+| Web app          | http://localhost:3000                                    |
+| Realtime service | http://localhost:3001 (`/health`)                        |
+| Postgres         | `postgresql://playhall:playhall@localhost:5432/playhall` |
+| Redis            | `redis://localhost:6379`                                 |
 
 `cp .env.example .env` if you need to change ports or point at a different
 Redis/Postgres. Defaults match `docker-compose.yml`, so the copy is optional.
@@ -63,7 +64,7 @@ docs/adr/           Architecture decision records.
 
 ## Rules that the build enforces
 
-1. **Games are plugins.** A game package imports `@atrium/game-sdk` and third-party
+1. **Games are plugins.** A game package imports `@playhall/game-sdk` and third-party
    libraries — never platform internals, never another game. The platform never imports
    a game directly; games load through the registry. Enforced in CI from M0.2.
 2. **Determinism.** No `Date.now()`, no `Math.random()`, no I/O inside game modules or

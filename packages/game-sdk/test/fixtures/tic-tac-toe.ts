@@ -4,7 +4,7 @@
  * This is a *contract fixture*, not the shipping game — `games/_examples/tic-tac-toe`
  * (PER-18) is that, and it is owned by Platform Engineer. Its job here is to
  * prove, in the same commit that defines the contracts, that a complete
- * turn-based game can be written using nothing but `@atrium/game-sdk`: no
+ * turn-based game can be written using nothing but `@playhall/game-sdk`: no
  * platform internals, no I/O, no `Date.now`, no `Math.random`.
  *
  * Note the single import below. That is the whole point.

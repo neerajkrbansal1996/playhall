@@ -1,9 +1,9 @@
 {
-  "name": "@atrium/game-sdk",
+  "name": "@playhall/game-sdk",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The only package a game may import. Manifest, server contracts and client contracts for Atrium games.",
+  "description": "The only package a game may import. Manifest, server contracts and client contracts for Playhall games.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

@@ -1,5 +1,5 @@
 /**
- * TEMPORARY local shim for `@atrium/game-sdk`.
+ * TEMPORARY local shim for `@playhall/game-sdk`.
  *
  * `packages/game-sdk` does not exist yet (PER-10 is still in progress), but the
  * chess rules do not depend on the SDK's *implementation* — only on the shape of
@@ -7,7 +7,7 @@
  * surface, and nothing else, so the rules can be written and tested now.
  *
  * When PER-10 lands, the fix is one edit per import site: delete this file and
- * point the imports at `@atrium/game-sdk`. Everything here is type-only except
+ * point the imports at `@playhall/game-sdk`. Everything here is type-only except
  * `SCORE`, so there is no runtime coupling to unwind.
  *
  * The surface below is also the concrete ADR request to the CTO: these are the

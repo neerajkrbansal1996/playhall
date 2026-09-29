@@ -1,5 +1,5 @@
 {
-  "name": "@atrium/shared",
+  "name": "@playhall/shared",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,6 +11,14 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.8",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   }
 }

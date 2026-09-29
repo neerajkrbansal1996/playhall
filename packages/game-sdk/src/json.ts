@@ -21,7 +21,7 @@ export interface JsonObject {
  *
  * Opt-in: `type _check = AssertJsonSafe<MyState>`. It is a best-effort type
  * (it cannot see through `unknown` or index signatures), so the authoritative
- * check is the round-trip assertion in `@atrium/game-testkit`.
+ * check is the round-trip assertion in `@playhall/game-testkit`.
  */
 export type JsonSafe<T> = T extends JsonPrimitive
   ? T

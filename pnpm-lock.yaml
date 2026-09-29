@@ -41,10 +41,10 @@ importers:
 
   apps/realtime:
     dependencies:
-      '@atrium/platform-core':
+      '@playhall/platform-core':
         specifier: workspace:*
         version: link:../../packages/platform-core
-      '@atrium/shared':
+      '@playhall/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       zod:
@@ -63,10 +63,10 @@ importers:
 
   apps/web:
     dependencies:
-      '@atrium/shared':
+      '@playhall/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@atrium/ui':
+      '@playhall/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       class-variance-authority:
@@ -150,29 +150,39 @@ importers:
 
   packages/game-testkit:
     dependencies:
-      '@atrium/game-sdk':
+      '@playhall/game-sdk':
         specifier: workspace:*
         version: link:../game-sdk
-      '@atrium/shared':
+      '@playhall/shared':
         specifier: workspace:*
         version: link:../shared
 
   packages/netcode:
     dependencies:
-      '@atrium/shared':
+      '@playhall/shared':
         specifier: workspace:*
         version: link:../shared
 
   packages/platform-core:
     dependencies:
-      '@atrium/game-sdk':
+      '@playhall/game-sdk':
         specifier: workspace:*
         version: link:../game-sdk
-      '@atrium/shared':
+      '@playhall/shared':
         specifier: workspace:*
         version: link:../shared
 
-  packages/shared: {}
+  packages/shared:
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^2.1.8
+        version: 2.1.9(vitest@2.1.9(@types/node@22.20.4)(lightningcss@1.32.0))
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.4)(lightningcss@1.32.0)
 
   packages/ui:
     dependencies:

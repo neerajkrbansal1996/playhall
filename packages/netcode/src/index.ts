@@ -1,5 +1,5 @@
 /**
- * @atrium/netcode — real-time transport: fixed-tick loop, binary snapshots,
+ * @playhall/netcode — real-time transport: fixed-tick loop, binary snapshots,
  * delta compression, interpolation, lag compensation.
  *
  * M6 is board-gated. Do NOT build the kit here ahead of that gate. The package

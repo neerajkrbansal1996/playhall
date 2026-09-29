@@ -1,5 +1,5 @@
 {
-  "name": "@atrium/platform-core",
+  "name": "@playhall/platform-core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@atrium/shared": "workspace:*",
-    "@atrium/game-sdk": "workspace:*"
+    "@playhall/shared": "workspace:*",
+    "@playhall/game-sdk": "workspace:*"
   }
 }

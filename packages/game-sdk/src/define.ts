@@ -6,7 +6,7 @@
  * client. The platform never imports a game package directly — it holds
  * modules the registry gave it, and it only ever reads manifest fields and
  * calls contract methods. A game, symmetrically, imports only
- * `@atrium/game-sdk`. CI fails the build on a violation in either direction.
+ * `@playhall/game-sdk`. CI fails the build on a violation in either direction.
  */
 
 import type {

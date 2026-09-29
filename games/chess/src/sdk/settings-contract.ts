@@ -1,5 +1,5 @@
 /**
- * TEMPORARY local shim for the settings half of `@atrium/game-sdk`.
+ * TEMPORARY local shim for the settings half of `@playhall/game-sdk`.
  *
  * Companion to `./contract.ts`. A zod schema alone is not enough for the
  * platform to render a create-lobby form: it knows `timeControl` is one of

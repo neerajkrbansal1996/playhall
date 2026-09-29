@@ -1,5 +1,5 @@
 {
-  "name": "@atrium/netcode",
+  "name": "@playhall/netcode",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,6 +15,6 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@atrium/shared": "workspace:*"
+    "@playhall/shared": "workspace:*"
   }
 }
