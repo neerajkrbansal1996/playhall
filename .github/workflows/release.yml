@@ -1,30 +1,30 @@
-name: Production deploy
+name: Release
 
-# A merge to `main` reaches production — but only behind the same gates a PR
-# faces, and only after the deployed URL answers its health check.
+# Production deploys. Tag-triggered, never branch-triggered.
 #
-# Note on ordering: this workflow re-runs the gates itself via `ci-gate` rather
-# than trusting that "CI passed on the PR". Two PRs can each be green alone and
-# red together, and branch protection (which would force a rebase) is not
-# available on this repo's plan yet. Re-running on the merge commit is what
-# makes the promise "main is deployable" true rather than probable.
+# ADR-0004 §Decision 5: releases are cut from tags, never from "whatever is on
+# `main`". `main` cannot be protected on this GitHub plan, so an unreviewed
+# commit *can* land there — the tag is what stops it becoming production. A
+# human cutting `vX.Y.Z` is the gate that branch protection would otherwise be.
+#
+# The gates re-run here too. A tag can point at any commit, including one that
+# never saw `main`.
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag or SHA to deploy. Must already be tagged for a real release.
+        required: true
 
-# Never run two production deploys at once, and never cancel one halfway.
 concurrency:
-  group: production
+  group: release
   cancel-in-progress: false
 
 permissions:
   contents: read
-
-defaults:
-  run:
-    shell: bash
 
 jobs:
   gates:
@@ -36,16 +36,15 @@ jobs:
     needs: gates
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # A GitHub Environment is where the production secrets live and where a
-    # required reviewer can be attached later. The environment does not need to
-    # exist for this to run; it is created on first use.
+    # The GitHub Environment holds the production secrets and is where a
+    # required reviewer can be attached later — the one approval gate that does
+    # not need branch protection.
     environment:
       name: production-web
       url: ${{ steps.deploy.outputs.url }}
     env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -67,7 +66,8 @@ jobs:
       name: production-realtime
       url: ${{ steps.deploy.outputs.url }}
     env:
-      REALTIME_DEPLOY_TOKEN: ${{ secrets.REALTIME_DEPLOY_TOKEN }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -77,5 +77,8 @@ jobs:
           environment: production
           target: realtime
           health-path: /health
+          # `apps/realtime` needs a persistent-process host, so it is almost
+          # certainly a different provider from web (ADR-0003 §8). Its own
+          # variable keeps that possible.
           provider: ${{ vars.REALTIME_DEPLOY_PROVIDER || vars.DEPLOY_PROVIDER }}
           probe-attempts: '30'
