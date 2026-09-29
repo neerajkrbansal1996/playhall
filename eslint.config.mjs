@@ -53,6 +53,16 @@ export default tseslint.config(
   },
   {
     files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}'],
+    // Repo tooling runs under Node, not in a browser. Declared inline rather than
+    // via the `globals` package, which pnpm does not hoist to the root.
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        URL: 'readonly',
+      },
+    },
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
