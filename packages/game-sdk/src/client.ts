@@ -116,7 +116,7 @@ export interface HUDProps<TSnapshot> {
 /**
  * Props for the **optional** custom settings form.
  *
- * ADR-0004: `manifest.settingsForm` is the floor and it is mandatory — the shell
+ * ADR-0007: `manifest.settingsForm` is the floor and it is mandatory — the shell
  * must be able to configure any lobby from the descriptor alone, with no game
  * code loaded, because the create-lobby path is the LCP path. A game may
  * additionally ship a `SettingsForm` component as progressive enhancement; the

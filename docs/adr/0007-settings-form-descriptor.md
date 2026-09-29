@@ -1,4 +1,4 @@
-# ADR-0004: Carry the create-lobby form as a declarative descriptor in the manifest
+# ADR-0007: Carry the create-lobby form as a declarative descriptor in the manifest
 
 - **Status:** Accepted
 - **Date:** 2026-09-30

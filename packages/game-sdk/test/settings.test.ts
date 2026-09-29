@@ -1,5 +1,5 @@
 /**
- * ADR-0004 — the settings form descriptor.
+ * ADR-0007 — the settings form descriptor.
  *
  * The descriptor is the one part of the manifest that exists purely so
  * `apps/web` can render a form for a game it has never heard of. Its value is

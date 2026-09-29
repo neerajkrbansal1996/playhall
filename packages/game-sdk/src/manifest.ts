@@ -125,7 +125,7 @@ export interface GameManifest<TSettings = unknown> {
   readonly defaultSettings: TSettings
   readonly presets: readonly SettingsPreset<TSettings>[]
   /**
-   * How the create-lobby form renders (ADR-0004). Presentation only: it is
+   * How the create-lobby form renders (ADR-0007). Presentation only: it is
    * carried in `GameCatalogEntry` as plain JSON so the shell can render a
    * complete, correct form having loaded no game code, and it grants no
    * validation power — `settingsSchema` remains the only authority.
@@ -317,7 +317,7 @@ export function validateManifest<TSettings>(
 
   // The descriptor against the schema it claims to render: a field bound to a
   // key that does not exist, an option the schema rejects, a conditional field
-  // that can never appear. See `settings.ts` / ADR-0004.
+  // that can never appear. See `settings.ts` / ADR-0007.
   for (const issue of checkSettingsForm(manifest)) {
     problems.push({ path: issue.path, message: `[${issue.code}] ${issue.message}` })
   }

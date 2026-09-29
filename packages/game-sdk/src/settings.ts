@@ -1,7 +1,7 @@
 /**
  * The create-lobby settings form descriptor.
  *
- * Decision record: `docs/adr/0004-settings-form-descriptor.md` (PER-37).
+ * Decision record: `docs/adr/0007-settings-form-descriptor.md` (PER-37).
  *
  * A game's `settingsSchema` is the **authority**: zod, `.strict()`, parsed
  * server-side before a lobby exists. It says `timeControl` is one of twelve

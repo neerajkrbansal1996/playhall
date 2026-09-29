@@ -144,7 +144,7 @@ export const manifest: GameManifest<TicTacToeSettings> = {
       featured: true,
     },
   ],
-  // The generality test for ADR-0004: tic-tac-toe is nothing like chess and
+  // The generality test for ADR-0007: tic-tac-toe is nothing like chess and
   // needs no field kind chess did not need, and no chess concept.
   settingsForm: {
     version: 1,
