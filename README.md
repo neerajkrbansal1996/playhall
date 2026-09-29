@@ -52,12 +52,12 @@ want to know what a game may touch. A failure names the rule and explains why:
 
 ```
 error no-game-to-platform: games/chess/src/index.ts → packages/platform-core/src/index.ts
-  A game talks to the platform ONLY through @atrium/game-sdk. Importing platform
+  A game talks to the platform ONLY through @playhall/game-sdk. Importing platform
   internals couples the game to code that is free to change under it, ...
 ```
 
 Every rule has a fixture in `tools/boundary-fixtures/` proving it actually fires, run by
-`pnpm --filter @atrium/boundaries test`. A rule without a fixture is a rule nobody has
+`pnpm --filter @playhall/boundaries test`. A rule without a fixture is a rule nobody has
 proven works, so the suite fails if you add one without the other. Widening a rule needs
 an ADR — see [ADR-0002](./docs/adr/0002-dependency-boundary-enforcement.md).
 
@@ -84,7 +84,7 @@ docs/adr/           Architecture decision records.
 
 ## Rules that the build enforces
 
-1. **Games are plugins.** A game package imports `@atrium/game-sdk` and third-party
+1. **Games are plugins.** A game package imports `@playhall/game-sdk` and third-party
    libraries — never platform internals, never another game. The platform never imports
    a game directly; games load through the registry. Enforced by `pnpm boundaries`.
 2. **Determinism.** No `Date.now()`, no `new Date()`, no `performance.now()`, no
