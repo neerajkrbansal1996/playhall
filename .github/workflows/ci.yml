@@ -1,0 +1,211 @@
+name: CI
+
+# Design note (PER-6): branch protection cannot be enabled on this repo yet
+# (private repo on the current GitHub plan — see docs/ci-cd.md). So the pipeline
+# is built so that turning protection on later is a settings change, not a
+# workflow rewrite:
+#
+#   * `ci-gate` is the single aggregate job. Require that one check and every
+#     gate below becomes required transitively. Adding or renaming a gate never
+#     changes the required-check list.
+#   * `merge_group` is already a trigger, so a merge queue can be switched on
+#     with no edit here.
+#   * Every gate runs through `scripts/ci/gate.mjs`, so a gate whose
+#     implementation has not landed yet reports PENDING instead of erroring on a
+#     missing pnpm script.
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  # `production.yml` calls this on every push to `main`, so the gates run
+  # against the merge commit itself. There is deliberately no `push` trigger
+  # here — it would double every `main` run and double the Actions minutes.
+  workflow_call:
+
+# One run per ref. A force-push supersedes the previous run instead of queueing
+# behind it. `main` is never cancelled, so the production pipeline always has a
+# completed CI run to gate on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-hygiene:
+    name: pr-hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linked issue and conventional PR title
+        run: node scripts/ci/pr-hygiene.mjs
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs typecheck
+
+  # Kept as its own job on purpose (ADR-0002): the boundary rule set is the
+  # contract that makes "games are plugins" true, and its failure must be
+  # readable on its own rather than buried in a lint log.
+  boundaries:
+    name: boundaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs boundaries
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs unit
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: |
+            packages/*/coverage/**
+            games/*/coverage/**
+            games/_examples/*/coverage/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The conformance suite. This is the gate that blocks a game from merging if
+  # it leaks hidden information, is non-deterministic, or accepts an illegal
+  # action. Separate from `unit` so a game author sees *which* contract broke.
+  testkit:
+    name: testkit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs testkit
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Same images as docker-compose.yml, so "green locally" and "green in CI"
+    # mean the same thing.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: atrium
+          POSTGRES_PASSWORD: atrium
+          POSTGRES_DB: atrium
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U atrium -d atrium"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://atrium:atrium@localhost:5432/atrium
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs integration
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: atrium
+          POSTGRES_PASSWORD: atrium
+          POSTGRES_DB: atrium
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U atrium -d atrium"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://atrium:atrium@localhost:5432/atrium
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs e2e
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/**
+            test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # THE required check. Require only this one in branch protection.
+  #
+  # `needs` + `always()` means this job runs even when a gate fails, and then
+  # fails itself unless every gate it depends on succeeded. `pr-hygiene` may be
+  # `skipped` because it does not run on push/merge_group; a `skipped` result
+  # for any other job is treated as a failure, so a mistakenly conditioned job
+  # cannot quietly stop gating.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [pr-hygiene, lint, typecheck, boundaries, unit, testkit, integration, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assert every gate passed
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci/assert-gates.mjs
