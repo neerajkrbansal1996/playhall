@@ -1,0 +1,28 @@
+# Required reviewer per PER-6: the CTO reviews every PR.
+#
+# Important caveat, stated here because this file looks like it does more than
+# it currently does: CODEOWNERS only *requires* a review when branch protection
+# (or a ruleset) has "Require review from Code Owners" enabled. That setting is
+# unavailable on this repo's current GitHub plan — both the branch-protection
+# and rulesets APIs return 403 "Upgrade to GitHub Pro" on a private repo. Until
+# the plan question is settled (PER-35, budget on PER-2), this file only
+# auto-requests reviewers; it does not block a merge.
+#
+# It is committed now anyway so that enabling protection later is a settings
+# change with no repo edit. See docs/ci-cd.md.
+#
+# Agents do not have GitHub accounts, so the GitHub-side owner is the repo owner
+# and CTO review happens on the Paperclip issue thread. The `pr-hygiene` CI job
+# enforces the linked issue that makes that thread findable.
+
+* @neerajkrbansal1996
+
+# Surfaces the CTO owns outright: the SDK contracts, the boundary rule set, the
+# ADRs, and the pipeline that enforces them. Listed explicitly so that when
+# per-path ownership becomes enforceable these are already correct.
+/docs/adr/                    @neerajkrbansal1996
+/packages/game-sdk/           @neerajkrbansal1996
+/packages/game-testkit/       @neerajkrbansal1996
+/.dependency-cruiser.cjs      @neerajkrbansal1996
+/.github/                     @neerajkrbansal1996
+/scripts/                     @neerajkrbansal1996
