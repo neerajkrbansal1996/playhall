@@ -82,6 +82,16 @@ export default tseslint.config(
     },
   },
   {
+    // The single exemption to the determinism rule above, and it must stay single.
+    // `Clock` is the platform's only source of ambient time: the timer service,
+    // the room runner and every reducer take a `Clock` and are therefore
+    // testable without waiting in real time. Widening this glob would let a
+    // second, unsynchronised notion of "now" into the codebase, which is
+    // exactly the bug the timer service exists to prevent.
+    files: ['packages/platform-core/src/timers/clock.ts'],
+    rules: { 'no-restricted-properties': 'off' },
+  },
+  {
     /**
      * Editor-time half of ADR-0002. `pnpm boundaries` (dependency-cruiser) is the gate; this
      * layer exists because a violation caught while typing is worth more than one caught in CI,
