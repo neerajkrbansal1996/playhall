@@ -1,0 +1,9 @@
+# expect: no-static-game-import-in-registry
+# why: the one allowlisted platform->game edge used statically instead of via import()
+=== file: apps/web/src/games.generated.ts ===
+// The generated registry is the single allowlisted platform->game edge, and only dynamically.
+// A static import pulls every game into the shared chunk and breaks "adding a game adds zero
+// bytes to other bundles".
+import { id } from '@atrium/fx-b'
+
+export const registry = { 'fx-b': id }
