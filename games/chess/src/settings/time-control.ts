@@ -27,9 +27,7 @@ export const TIME_CONTROL_CUSTOM = 'custom'
 export const TIME_CONTROL_UNLIMITED = 'unlimited'
 
 export type TimeControlSelection =
-  | TimeControlPresetId
-  | typeof TIME_CONTROL_CUSTOM
-  | typeof TIME_CONTROL_UNLIMITED
+  TimeControlPresetId | typeof TIME_CONTROL_CUSTOM | typeof TIME_CONTROL_UNLIMITED
 
 export type TimeControlCategory = 'bullet' | 'blitz' | 'rapid' | 'classical'
 
@@ -56,17 +54,11 @@ export const CUSTOM_INCREMENT_SECONDS = { min: 0, max: 60, step: 1 } as const
  * derived from it rather than hard-coded so a custom control lands in the same
  * buckets as a preset.
  */
-export function estimatedDurationSeconds(
-  initialMinutes: number,
-  incrementSeconds: number,
-): number {
+export function estimatedDurationSeconds(initialMinutes: number, incrementSeconds: number): number {
   return initialMinutes * 60 + incrementSeconds * 40
 }
 
-export function categoryFor(
-  initialMinutes: number,
-  incrementSeconds: number,
-): TimeControlCategory {
+export function categoryFor(initialMinutes: number, incrementSeconds: number): TimeControlCategory {
   const seconds = estimatedDurationSeconds(initialMinutes, incrementSeconds)
   if (seconds < 180) return 'bullet'
   if (seconds < 480) return 'blitz'
@@ -102,15 +94,4 @@ export function getTimeControlPreset(id: TimeControlPresetId): TimeControlPreset
 
 export function isTimeControlPresetId(value: unknown): value is TimeControlPresetId {
   return typeof value === 'string' && PRESETS_BY_ID.has(value as TimeControlPresetId)
-}
-
-/** Human label for a control, e.g. `3+2` or `No clock`. */
-export function formatTimeControl(
-  initialMinutes: number,
-  incrementSeconds: number,
-): string {
-  const minutes = Number.isInteger(initialMinutes)
-    ? String(initialMinutes)
-    : `${initialMinutes}`
-  return `${minutes}+${incrementSeconds}`
 }

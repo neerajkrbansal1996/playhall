@@ -30,12 +30,7 @@ const CATEGORY_LABELS: Record<TimeControlCategory, string> = {
   classical: 'Classical',
 }
 
-const CATEGORY_ORDER: readonly TimeControlCategory[] = [
-  'bullet',
-  'blitz',
-  'rapid',
-  'classical',
-]
+const CATEGORY_ORDER: readonly TimeControlCategory[] = ['bullet', 'blitz', 'rapid', 'classical']
 
 const OTHER_GROUP = 'Other'
 
@@ -122,6 +117,4 @@ export function formFieldKeys(): readonly string[] {
  * would render a control wired to nothing, so the test suite asserts both
  * directions of this correspondence.
  */
-export const CHESS_SETTINGS_KEYS: readonly string[] = Object.keys(
-  CHESS_SETTINGS_DEFAULTS,
-)
+export const CHESS_SETTINGS_KEYS: readonly string[] = Object.keys(CHESS_SETTINGS_DEFAULTS)

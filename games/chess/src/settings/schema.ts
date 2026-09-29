@@ -80,9 +80,7 @@ export const CHESS_SETTINGS_DEFAULTS = {
  */
 export const chessSettingsSchema = z
   .object({
-    timeControl: timeControlSelectionSchema.default(
-      CHESS_SETTINGS_DEFAULTS.timeControl,
-    ),
+    timeControl: timeControlSelectionSchema.default(CHESS_SETTINGS_DEFAULTS.timeControl),
     customInitialMinutes: customInitialMinutesSchema.default(
       CHESS_SETTINGS_DEFAULTS.customInitialMinutes,
     ),
@@ -118,9 +116,7 @@ export interface ResolvedTimeControl {
  * Returns `null` for "No clock" — the caller must then not request a clock at
  * all rather than requesting an infinite one.
  */
-export function resolveTimeControl(
-  settings: ChessSettings,
-): ResolvedTimeControl | null {
+export function resolveTimeControl(settings: ChessSettings): ResolvedTimeControl | null {
   if (settings.timeControl === TIME_CONTROL_UNLIMITED) return null
 
   if (settings.timeControl === TIME_CONTROL_CUSTOM) {
