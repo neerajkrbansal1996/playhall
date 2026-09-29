@@ -1,0 +1,49 @@
+name: Main
+
+# What happens when something lands on `main`.
+#
+# Note what is *not* here: a production deploy. ADR-0004 §Decision 5 requires
+# releases to be cut from tags, never from "whatever is on `main`", and that is
+# the containment for `main` being unprotectable — an unreviewed commit can
+# reach `main`, but it cannot become a release without a human cutting a tag.
+# `release.yml` owns deploys. PER-6 as originally written said "main merges
+# deploy to production"; ADR-0004 postdates it and names PER-6 as its
+# implementation, so the ADR wins. Flagged to the CTO on the issue.
+#
+# So `main` gets the two things that make the unprotectable branch honest:
+# the gates re-run on the merge commit, and a direct push is detected.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Re-run the gates on the merge commit rather than trusting "CI was green on
+  # the PR". Two PRs can each be green alone and red together, and with no
+  # branch protection nothing forces a rebase before merge.
+  gates:
+    name: gates
+    uses: ./.github/workflows/ci.yml
+
+  # ADR-0004 §Decision 2. Cannot prevent a direct push; makes one loud.
+  push-audit:
+    name: push-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assert this commit arrived via a merged PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/assert-merged-via-pr.mjs
