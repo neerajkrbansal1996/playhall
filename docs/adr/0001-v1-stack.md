@@ -2,6 +2,9 @@
 
 - **Status:** Accepted, **except §4.4 (real-time server framework) which is Board-gated**
 - **Date:** 2026-09-30
+- **Amended:** 2026-09-30 (rev 2) — board resolved the budget, the data-store tier, the
+  repository and the product name. See [Board decisions](#board-decisions-applied-rev-2).
+  **§6 changed materially**: Redis is no longer the durability tier.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -30,9 +33,19 @@ The stack choices below are constrained by non-functional targets we are held to
 Three of these ten are the load-bearing ones for this ADR: the **< 30 KB/s** real-time
 budget, the **zero bytes to other bundles** rule, and **restart survival**.
 
+There is an eleventh constraint, added in rev 2 and binding on every section below:
+
+| Target                                      | Constrains                                    |
+| ------------------------------------------- | --------------------------------------------- |
+| **Monthly infrastructure budget: $0**       | every managed service, every tier, every vendor |
+
+The board set the infrastructure budget at **$0** (§11). That is not a footnote — it moved
+one decision in this ADR (§6) and it bounds what M5 can prove (§11.2).
+
 Two decisions are deliberately **not** in this ADR:
 
-- **Hosting provider** — board-gated, needs cost per 1,000 concurrent players. A later ADR.
+- **Hosting provider** — board-gated, needs cost per 1,000 concurrent players. A later ADR
+  ([PER-38](/PER/issues/PER-38)), now further bounded by the $0 budget.
 - **The real-time netcode design** (room runner internals, snapshot codec, interest
   management, 3D stack) — that is [PER-21](/PER/issues/PER-21), design-only until the board
   opens M6. This ADR only fixes the seams so that ADR stays possible.
@@ -207,7 +220,8 @@ more than 50 lines over Kysely — that is a reason to add Kysely alongside, not
 
 1. **Room registry** — the 6-character code → room mapping, with a TTL so abandoned lobbies
    expire without a sweeper.
-2. **Live room state** between Postgres snapshots.
+2. **Live room state** — a **cache** in front of the Postgres match log, not the tier of
+   record. See §6.1, amended in rev 2.
 3. **Presence** — who is connected to which room.
 4. **Pub/sub** — cross-instance fan-out, so horizontal scaling does not need sticky sessions
    for correctness (only for efficiency).
@@ -251,36 +265,121 @@ one instance. **Redis is not the scaling constraint for turn-based.** That is a 
 claim, not an optimisation claim, and it is stated so a future performance argument has a
 baseline to argue against.
 
-**Configuration is load-bearing, not incidental.** `docker-compose.yml` sets
-`--maxmemory-policy noeviction` and `--appendonly yes`. Live room state is authoritative in
-Redis between snapshots, so a silently evicted key is a lost match. **Staging and production
-Redis must be configured the same way**, and a managed Redis tier that does not permit
-`noeviction` is disqualified — this is a hard constraint on the hosting decision, and the
-reason it is written here rather than left to an ops ticket.
+#### 6.1 Redis is the hot tier. Postgres is the tier of record. (Amended, rev 2)
+
+**Rev 1 said** live room state was authoritative in Redis between Postgres snapshots, that
+`noeviction` + `appendonly yes` were mandatory in every environment, and that a managed
+Redis tier which would not permit `noeviction` was **disqualified** — a hard constraint on
+the hosting decision.
+
+**The board set the budget to $0** and instructed us to assume **no persistence guarantees
+and cold-start latency** on whatever free tier we land on. A free-tier Redis that may evict,
+may not fsync, and may cold-start is not disqualifiable — it is the only thing on the menu.
+So the constraint has to move off the vendor and into the design, and rev 1's position is
+withdrawn.
+
+**Amended rule: Redis must be safe to lose at any instant.**
+
+- The **Postgres match log is the sole tier of record.** Every applied action is appended
+  there, and a room is fully reconstructible from `(seed, module version, ordered action
+  log, last snapshot)` with no Redis key surviving.
+- **Redis holds only derived or cheap-to-lose data**: current state cache, presence, pub/sub,
+  locks, and the code → room mapping. Losing the whole keyspace costs a rehydrate and a
+  reconnect, never a match.
+- **The code → room mapping is the one exception that needs care.** It is cheap to lose only
+  because the room row in Postgres also carries its code, so the mapping is rebuildable; a
+  code lookup that misses in Redis falls through to Postgres and repopulates. It is *not*
+  regenerated with a new code, because a shared link must keep working.
+- `noeviction` and `appendonly yes` stay in `docker-compose.yml` and stay **recommended**
+  wherever they are available, because they turn a routine event into a non-event. They are
+  no longer a **hard constraint on the hosting decision**, and [PER-38](/PER/issues/PER-38)
+  is no longer bounded by them.
+
+This is a strictly stronger correctness position than rev 1 — it removes a whole class of
+"Redis lied to us" failure — and the board's $0 constraint is what forced us to take it. The
+cost is paid in §6.2.
+
+#### 6.2 What that costs, in milliseconds
+
+Moving the durability point from Redis to Postgres puts a durable write on the hot path,
+which spends part of the **< 150 ms p95** turn-based round-trip budget:
+
+```
+client → server, 4G in-region                        40–80 ms   (dominant, not ours to fix)
+validateAction + applyAction (pure, in-memory)           < 1 ms
+append action to Postgres match log (1 row, indexed)    1–5 ms   ← the new cost
+Redis state write + PUBLISH                             ~1 ms
+getViewFor + encode + send                               < 1 ms
+```
+
+A single-row insert into an append-only table is the cheapest durable write there is, and at
+1–5 ms it is **~2–3% of the budget** against a network term of 40–80 ms. Budgeted at **≤ 10 ms
+p95** for [PER-15](/PER/issues/PER-15) / [PER-29](/PER/issues/PER-29).
+
+**Measurement owed.** Every number in that table is a budget, not a measurement. QA owns the
+measured version in M3/M5.
+
+**The fallback, stated now so it is not invented under pressure.** If the measured log write
+exceeds 10 ms p95, the fix is group commit (`synchronous_commit = off` plus a batched flush),
+which trades a bounded window of committed-but-unflushed actions for latency. **That is a
+durability trade, so it is a board-visible decision, not an engineer's tuning knob.** Nobody
+turns it on in a PR.
+
+**The rule that binds the implementer:** an action ack may never claim more durability than
+we actually have. The server acks after the log append, not before it.
+
+#### 6.3 Cold start, and the one target free-tier infra cannot prove
+
+Free tiers suspend on idle. A cold resume on serverless Postgres or Redis is commonly
+hundreds of milliseconds to several seconds — one to two orders of magnitude over the entire
+150 ms budget.
+
+- **Mitigation that costs nothing:** the uptime monitor we already have (§8) doubles as a
+  keep-warm ping against `/health`, which touches both stores. Free, and it is the same
+  check we wanted anyway. Owner: [PER-7](/PER/issues/PER-7).
+- **Mitigation that is not available:** paying for a provisioned tier. Ruled out at $0.
+- **The honest limit, escalated rather than worked around:** the **< 150 ms p95 turn-based
+  round trip is not measurable on free-tier staging.** A cold-start outlier lands in the p95
+  and the number measures the vendor's idle policy, not our code. It must be measured
+  locally, or against provisioned infrastructure in a time-boxed window. This joins the M5
+  load-test exception the board has already accepted (§11.2) and is flagged on
+  [PER-2](/PER/issues/PER-2) rather than quietly redefined.
 
 **Restart survival (the actual mechanism).** Turn-based rooms survive a server restart
-because every applied action is appended to a match log and state is snapshotted; recovery
+because every applied action is appended to the match log and state is snapshotted; recovery
 replays the log from the last snapshot. Because game modules are deterministic — same seed
 plus same inputs reproduce the same outcome — replay is exact. **Determinism is not a
 stylistic rule; it is the thing that buys us restart survival, replays and reproducible
-tests.** `packages/platform-core` owns this ([PER-15](/PER/issues/PER-15),
-[PER-29](/PER/issues/PER-29)).
+tests.** Per §6.1 this path now depends on Postgres alone, which is exactly what makes it
+survive a free-tier Redis that drops its keyspace. `packages/platform-core` owns this
+([PER-15](/PER/issues/PER-15), [PER-29](/PER/issues/PER-29)).
 
-**Blast radius, stated rather than hidden.**
+**Blast radius, stated rather than hidden** (rev 2 — the Redis row changed):
 
 - *An app instance dies mid-match.* The room lock expires, another instance rehydrates from
   the last snapshot plus the match log, and play resumes at the correct state. During that
   window the player sees "reconnecting" — never a stale board presented as live. Showing a
   correct state late beats showing a wrong state now.
-- *Redis dies hard.* With `appendonly yes` and the default `appendfsync everysec`, an
-  in-flight match can lose **up to 1 second** of applied actions. We are accepting that for
-  v1 and writing it down. Completed matches are already in Postgres and are unaffected. If
-  it proves unacceptable, the mitigations are `appendfsync always` (paid for in write
-  latency) or a replica with `WAIT` — both are changes to this line, not to the design.
+- *Redis dies hard, or a free tier drops the whole keyspace.* **Nothing is lost.** Rooms
+  rehydrate from the Postgres match log, players see "reconnecting", and play resumes at the
+  correct state.
+  > **Rev 1 said** that with `appendfsync everysec` an in-flight match could lose **up to 1
+  > second** of applied actions, and accepted that. **Rev 2 removes the exposure rather than
+  > accepting it** (§6.1). The rev 1 mitigations — `appendfsync always`, or a replica with
+  > `WAIT` — are moot, and one of them (a replica) was not free anyway. This is the one place
+  > where the board's $0 constraint made the design strictly more correct.
+- *Postgres dies.* In-flight matches stop. This is the failure we cannot design around, and
+  it is the reason the durability point sits there and nowhere else. On a free tier with no
+  persistence guarantee this is a real risk, not a theoretical one — so it is named here and
+  is what [PER-38](/PER/issues/PER-38) has to price.
 
 **Alternative considered.** Postgres `LISTEN/NOTIFY` plus tables instead of Redis, dropping a
 dependency. It lost on TTLs and presence: expiring lobbies and connection presence in
-Postgres means a sweeper job and write amplification on the hot path.
+Postgres means a sweeper job and write amplification on the hot path. **Rev 2 note:** this
+alternative got closer, since Postgres is now the tier of record anyway. It still loses on
+the same two jobs, and dropping Redis would put presence heartbeats — the highest-frequency
+write in the system — onto the store we now depend on for match durability. Keeping the
+volatile, high-frequency traffic off the durable store is the point.
 
 ### 7. Validation and the wire
 
@@ -347,11 +446,22 @@ behaviour of all three tools is wrong for us:
 performance claim without one of them is not evidence: action round-trip p95, rooms per
 instance, Redis op latency p99, reconnect success rate, and — from M6 — tick duration p99.
 
-**Board-gated.** Sentry, PostHog and the uptime monitor all have free tiers sufficient for
-M0. **Any paid tier, and the hosting provider itself, needs board approval** and is not
-signed up for by an engineer. Recorded on [PER-2](/PER/issues/PER-2). All three sit behind
-one thin telemetry facade in `packages/shared`, so no call site names a vendor and replacing
-one is a single-package change.
+**Board-decided, rev 2: free tiers only, and this is now a standing constraint.** The board
+set the monthly infrastructure budget at **$0** and denied paid tiers for Sentry, PostHog and
+the uptime monitor. Binding on every engineer:
+
+- **No signup for any service requiring a card, a paid tier, or a trial that auto-converts.**
+  Same rule for hosting, CDN, DNS and managed data stores.
+- The telemetry facade in `packages/shared` is **load-bearing, not a nicety.** It is the
+  reason a vendor swap — which a free-tier limit may force on us with little notice — is a
+  single-package change and not a repo-wide one. No call site names a vendor. A PR that
+  imports `@sentry/*` or `posthog-js` outside that facade is rejected on **plugin boundary**,
+  and [PER-5](/PER/issues/PER-5) should add it as a forbidden-import rule under ADR-0002 so
+  the rule is mechanical rather than remembered at review time.
+- **If a free-tier limit would make a milestone's acceptance criteria unachievable, stop and
+  escalate** to Chief of Staff on [PER-2](/PER/issues/PER-2) for a costed exception. Do not
+  work around it, and do not quietly redefine the criterion. Two such limits are already
+  recorded in §11.2, and §6.3 adds a third.
 
 ### 9. Testing
 
@@ -369,11 +479,23 @@ one is a single-package change.
 
 ### 10. Brand is a constant, never a literal
 
-The product name, domain and logo are board decisions and are **still open**. No brand string
-is hard-coded anywhere. `packages/shared/src/brand.ts` is the single source of truth, exposing
-`BRAND.name`, `BRAND.domain` and `BRAND.isProvisional`, defaulting to the internal codename
-and overridable by environment. `isProvisional` exists so the UI can be checked for places
-that must not ship a codename. Escalated on [PER-2](/PER/issues/PER-2).
+The product name, domain and logo are board decisions. No brand string is hard-coded
+anywhere. `packages/shared/src/brand.ts` is the single source of truth, exposing `BRAND.name`,
+`BRAND.domain` and `BRAND.isProvisional`, defaulting to the internal codename and overridable
+by environment. `isProvisional` exists so the UI can be checked for places that must not ship
+a codename.
+
+**Rev 2 — the name is decided: the board picked Playhall.** Recording it in a decision record
+is not hard-coding it; the mechanism is unchanged and is the whole point. Specifically:
+
+- The **only** place that string may enter the codebase is `BRAND.name`, set on the brand and
+  domain issue Chief of Staff owns — **not here, and not in this ADR's own repo changes.**
+- Nothing in M0–M4 may hard-code it. A literal `"Playhall"` anywhere but `brand.ts` is a
+  review rejection, and that now has teeth it did not have while the name was unknown: a
+  wrong codename is obvious in a diff, a correct product name is not.
+- **Domain and logo remain open.** `BRAND.domain` keeps its provisional value and
+  `isProvisional` stays `true` until they are decided, because a name alone is not enough to
+  ship share previews (product principle 4) — those need a real domain.
 
 ---
 
@@ -399,7 +521,10 @@ that must not ship a codename. Escalated on [PER-2](/PER/issues/PER-2).
 - Deterministic game modules. No `Date.now()`, no `Math.random()`, no I/O — mechanically
   enforced (ADR-0002 §4).
 - `getViewFor` / `getSnapshotFor` as the only path to a client.
-- Redis configured `noeviction` in every environment, including managed tiers.
+- **Redis being safe to lose at any instant; Postgres as the sole tier of record** (§6.1,
+  amended rev 2 — this replaces rev 1's "Redis configured `noeviction` in every environment").
+- A durable log append on the action hot path, budgeted at ≤ 10 ms p95 (§6.2).
+- No vendor named outside the `packages/shared` telemetry facade (§8).
 - Old game-module versions remaining loadable for the lifetime of a match.
 
 **Cost to reverse**
@@ -410,7 +535,8 @@ that must not ship a codename. Escalated on [PER-2](/PER/issues/PER-2).
 | Codec / transport (§4.1)  | Cheap — that is the point of the seam |
 | ORM (§5)                  | Moderate  |
 | Room runner vs Colyseus   | Moderate now, **expensive** after M2 once games depend on the contract shape |
-| Redis as live state store | Expensive |
+| Redis as cache only (§6.1) | **Cheap — and cheaper than rev 1's design, which is the point.** Making Redis losable means adding, removing or swapping it is a config change, not a correctness argument |
+| Postgres as tier of record | Expensive — this is now the load-bearing durability choice |
 
 ## Revisit triggers
 
@@ -418,18 +544,59 @@ that must not ship a codename. Escalated on [PER-2](/PER/issues/PER-2).
 - CI wall-clock for a single-package change exceeds 5 minutes → §2 (add Turborepo).
 - The M4 real-time spike shows a hand-rolled runner cannot hit the netcode budgets while
   Colyseus can → §4, reopen for the M6 fleet.
-- A managed Redis tier we want cannot be set to `noeviction` → §6, and the live-state design
-  changes, not the Redis config.
+- ~~A managed Redis tier we want cannot be set to `noeviction`~~ → **retired in rev 2.** The
+  design no longer depends on it, so this can no longer trigger anything (§6.1).
+- The measured match-log append exceeds 10 ms p95 → §6.2, and the group-commit fallback goes
+  to the board as a durability decision.
+- The infrastructure budget rises above $0 → §6.3 and §11 reopen: provisioned tiers make the
+  150 ms p95 measurable on staging, and `noeviction` becomes available again as belt-and-braces.
 - Any turn-based p95 round-trip above 150 ms in-region traced to the JSON codec → §7, bring
   the binary codec forward.
 
-## Open questions escalated to the board on [PER-2](/PER/issues/PER-2)
+---
 
-1. **§4.4** — amend the agreed stack to drop Colyseus from M1–M5 and keep it as an M6
-   candidate? (Recommendation: Option A.)
-2. Hosting provider and monthly infrastructure budget, with cost per 1,000 concurrent
-   players. Blocks preview deploys, the staging WebSocket round trip, and Sentry-from-staging
-   — that is epic acceptance criteria 1, 2 and 5 on [PER-3](/PER/issues/PER-3).
-3. Code repository — which repo the team pushes to.
-   ([PER-35](/PER/issues/PER-35)). Blocks all of CI.
-4. Final product name, domain and logo. Not blocking; `BRAND.isProvisional` covers the gap.
+## 11. Board decisions applied (rev 2) {#board-decisions-applied-rev-2}
+
+Rev 1 escalated four items to the board on [PER-2](/PER/issues/PER-2). Three are resolved.
+
+| # | Item | Outcome | Effect on this ADR |
+| - | ---- | ------- | ------------------ |
+| 1 | **§4.4** — drop Colyseus from M1–M5, keep as M6 candidate | **Still open** — approval [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), endorsed by Chief of Staff | §4.4 stays `Board-gated`. Not blocking; see §11.1 |
+| 2 | Paid tiers for Sentry / PostHog / uptime | **Denied. Budget $0, free tiers only** | §8 rewritten as a standing constraint |
+| 3 | Managed Redis + Postgres | **Free tiers or Docker; costed proposal at M4. Assume no persistence guarantees and cold-start latency** | **§6 materially amended** — §6.1, §6.2, §6.3 |
+| 4 | Code repository | **Resolved** — private repo `neerajkrbansal1996/gameroom` ([PER-35](/PER/issues/PER-35) closed) | This ADR lands there; unblocks [PER-36](/PER/issues/PER-36) and [PER-6](/PER/issues/PER-6) |
+| + | Final product name | **Decided: Playhall.** Domain and logo still open | §10 amended; the string lives only in `BRAND.name` |
+
+Hosting provider remains open and is deliberately still out of scope here — it is
+[PER-38](/PER/issues/PER-38), and it needs cost per 1,000 concurrent players. The $0 budget
+narrows it rather than deciding it.
+
+### 11.1 Why §4.4 staying open blocks nothing
+
+Identical under all three options on the approval: the SDK contract, guest identity,
+rooms/codes/registry, seats, and the timer service. Only [PER-15](/PER/issues/PER-15)'s
+transport layer depends on the answer, and no real-time implementation work starts before the
+board opens M6 — [PER-21](/PER/issues/PER-21) stays design-only.
+
+### 11.2 Consequences the board has accepted by choosing $0
+
+Recorded here so they arrive as priced decisions rather than ambushing a milestone. The first
+two are Chief of Staff's, already accepted; the third is new in this revision and is raised on
+[PER-2](/PER/issues/PER-2).
+
+1. **M5 load test** — 2,000 concurrent rooms at p95 < 150 ms is not reachable on free-tier
+   infrastructure. Either capacity is bought for a one-off test window, or the target is
+   scaled down. Priced before M5 opens. Owner: Chief of Staff.
+2. **M6 Mumbai-region game-server fleet** — ruled out at $0. M6 is a board gate anyway; cost
+   per 1,000 concurrent players stays in the M1 real-time ADR
+   ([PER-21](/PER/issues/PER-21)) because it is exactly what that decision needs.
+3. **The < 150 ms p95 turn-based round trip is not measurable on free-tier staging** (§6.3).
+   Cold-start outliers land in the p95 and measure the vendor's idle policy, not our code.
+   The number must come from local or provisioned infrastructure. **New in rev 2**, and
+   raised rather than worked around, per the board's own standing instruction.
+
+What this does **not** change: M3 resilience. Reconnection and restart recovery were already
+designed to depend on the Postgres match log and deterministic replay, and §6.1 makes that
+dependency exclusive. **M3 requires no paid-tier feature** — which is the answer to the
+board's instruction on that point, and it is true because of the §6 amendment, not in spite
+of it.
