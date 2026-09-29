@@ -4,15 +4,15 @@
  * express.
  *
  * dependency-cruiser reasons about *edges*: a dependency it has never seen imported produces
- * no edge, so `@atrium/platform-core` sitting in `games/chess/package.json` with no import yet
+ * no edge, so `@playhall/platform-core` sitting in `games/chess/package.json` with no import yet
  * is invisible to it. ADR-0002 §1 lists "validates declared package.json dependencies" as a
  * dependency-cruiser capability; it is not one (verified against dependency-cruiser 18.4.0 —
  * every `dependencyTypes` value is import-derived). The rule is still worth enforcing, because
  * a declared dependency is a stated intent to cross the boundary and it will be imported by
  * the next commit, so it is enforced here instead and runs in the same `pnpm boundaries` job.
  *
- * Contract: a game package's manifest may declare exactly one @atrium package —
- * `@atrium/game-sdk`. Third-party dependencies are unrestricted.
+ * Contract: a game package's manifest may declare exactly one @playhall package —
+ * `@playhall/game-sdk`. Third-party dependencies are unrestricted.
  *
  * Paths are resolved relative to cwd, so this can be pointed at a scratch repo by the
  * boundary fixture tests.

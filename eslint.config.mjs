@@ -89,11 +89,11 @@ export default tseslint.config(
      * without duplicating the rule set. If these two ever disagree, the rule set in
      * `.dependency-cruiser.cjs` is the contract and this is the stale copy.
      *
-     * One known divergence, stated rather than hidden: this layer forbids `@atrium/shared`
-     * outright, matching ADR-0002 rule 8 ("a game package may declare only @atrium/game-sdk"),
+     * One known divergence, stated rather than hidden: this layer forbids `@playhall/shared`
+     * outright, matching ADR-0002 rule 8 ("a game package may declare only @playhall/game-sdk"),
      * whereas the §2 import table forbids only deep imports into shared. Raised with the CTO on
-     * PER-5; if index-level `@atrium/shared` is meant to be legal for games, this narrows to
-     * `@atrium/shared/*` and rule 8 needs to say so.
+     * PER-5; if index-level `@playhall/shared` is meant to be legal for games, this narrows to
+     * `@playhall/shared/*` and rule 8 needs to say so.
      */
     files: ['games/**/*.{ts,tsx}'],
     rules: {

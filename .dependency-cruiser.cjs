@@ -1,5 +1,5 @@
 /**
- * Atrium dependency-boundary rule set — the mechanical form of ADR-0002.
+ * Playhall dependency-boundary rule set — the mechanical form of ADR-0002.
  *
  * This file IS the boundary contract. Read it top to bottom and you know what a game
  * may touch. Widening any rule here is a reviewed change and needs an ADR (ADR-0002,
@@ -11,6 +11,20 @@
  */
 
 const { join } = require('node:path')
+
+/**
+ * Package names quoted in the `comment` strings below are read from the SDK's own manifest,
+ * never typed as literals. Those comments are printed by the `err-long` reporter, so they are
+ * the advice an engineer acts on when the gate stops them — advice naming a scope the workspace
+ * no longer uses is worse than no advice. The rules themselves match paths, not package names,
+ * so a scope rename cannot affect enforcement; this keeps the prose honest alongside it.
+ */
+const SDK_NAME = require(join(__dirname, 'packages/game-sdk/package.json')).name
+const SCOPE = SDK_NAME.startsWith('@') ? SDK_NAME.split('/')[0] : null
+if (SCOPE === null) {
+  throw new Error(`.dependency-cruiser.cjs: SDK package name "${SDK_NAME}" is not scoped.`)
+}
+const SHARED_NAME = `${SCOPE}/shared`
 
 /** The platform internals a game may never reach. `game-sdk` and `shared` are handled separately. */
 const PLATFORM_INTERNALS = '^packages/(platform-core|netcode|game-testkit|ui)/'
@@ -36,7 +50,7 @@ module.exports = {
       name: 'no-game-to-platform',
       severity: 'error',
       comment:
-        'A game talks to the platform ONLY through @atrium/game-sdk. Importing platform ' +
+        `A game talks to the platform ONLY through ${SDK_NAME}. Importing platform ` +
         'internals couples the game to code that is free to change under it, and breaks the ' +
         'promise that a game needs no change outside its own folder. Need something? Ask the ' +
         'CTO for an SDK addition (ADR first) rather than reaching past the contract.',
@@ -65,7 +79,7 @@ module.exports = {
       name: 'no-game-to-shared-internals',
       severity: 'error',
       comment:
-        'Import @atrium/shared through its published surface, not by deep path. A deep import ' +
+        `Import ${SHARED_NAME} through its published surface, not by deep path. A deep import ` +
         'bypasses the export map and pins the game to an internal file layout.',
       from: { path: '^games/' },
       to: { path: '^packages/shared/src/(?!index)' },
@@ -98,7 +112,7 @@ module.exports = {
       severity: 'error',
       comment:
         'game-sdk is a contract, not a client of the platform. It must stay dependency-light ' +
-        'and independently publishable, so it depends on nothing of ours except @atrium/shared. ' +
+        `and independently publishable, so it depends on nothing of ours except ${SHARED_NAME}. ` +
         'If the SDK seems to need platform code, the logic belongs on the platform side of the ' +
         'contract instead.',
       from: { path: '^packages/game-sdk/' },
