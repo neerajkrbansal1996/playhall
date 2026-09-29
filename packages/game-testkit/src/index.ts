@@ -11,7 +11,7 @@
  *   5. reconnect snapshot equals live state
  *   6. random playouts terminate with a valid result
  */
-import { GAME_SDK_VERSION } from '@atrium/game-sdk'
+import { SDK_VERSION } from '@atrium/game-sdk'
 
 export const CONFORMANCE_CHECKS = [
   'determinism',
@@ -24,4 +24,5 @@ export const CONFORMANCE_CHECKS = [
 
 export type ConformanceCheck = (typeof CONFORMANCE_CHECKS)[number]
 
-export const TESTKIT_SDK_VERSION = GAME_SDK_VERSION
+/** The SDK version this testkit build conforms to. Recorded on every run. */
+export const TESTKIT_SDK_VERSION = SDK_VERSION
