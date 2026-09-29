@@ -22,8 +22,7 @@ export type SeatId = string
  * still not see a player's pending draw offer, so the viewer is always gated.
  */
 export type Viewer =
-  | { readonly kind: 'player'; readonly seatId: SeatId }
-  | { readonly kind: 'spectator' }
+  { readonly kind: 'player'; readonly seatId: SeatId } | { readonly kind: 'spectator' }
 
 /**
  * Everything a game module is allowed to read from the outside world.

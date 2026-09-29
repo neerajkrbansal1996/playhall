@@ -23,7 +23,11 @@ interface Verdict {
 function verdictOf(ending: ChessEnding): Verdict {
   switch (ending.reason) {
     case 'checkmate':
-      return { status: 'decisive', winner: ending.winner, reason: `${COLOR_NAME[ending.winner]} wins by checkmate` }
+      return {
+        status: 'decisive',
+        winner: ending.winner,
+        reason: `${COLOR_NAME[ending.winner]} wins by checkmate`,
+      }
     case 'resignation':
       return {
         status: 'decisive',

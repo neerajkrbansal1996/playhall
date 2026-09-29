@@ -14,8 +14,7 @@
 import type { JsonObject } from './json.js'
 
 export type Result<T, E> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E }
+  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: E }
 
 export function ok<T>(value: T): { readonly ok: true; readonly value: T } {
   return { ok: true, value }
@@ -64,8 +63,7 @@ export interface ActionError<TCode extends string = StandardActionErrorCode> {
  * every call site than `{ ok: true, value: undefined }`.
  */
 export type ValidationResult<TCode extends string = StandardActionErrorCode> =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: ActionError<TCode> }
+  { readonly ok: true } | { readonly ok: false; readonly error: ActionError<TCode> }
 
 /** The single shared "this action is legal" value. */
 export const VALID: ValidationResult<string> = Object.freeze({ ok: true })

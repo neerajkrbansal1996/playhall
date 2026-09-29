@@ -72,9 +72,6 @@ export function timeoutEnding(fen: string, flagged: Color): ChessEnding {
 }
 
 /** Convenience wrapper: replay a move list and report any forced ending. */
-export function endingAfter(
-  initialFen: string,
-  moves: readonly string[],
-): ChessEnding | null {
+export function endingAfter(initialFen: string, moves: readonly string[]): ChessEnding | null {
   return detectAutomaticEnding(analyse(initialFen, moves))
 }

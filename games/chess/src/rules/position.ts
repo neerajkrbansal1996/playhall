@@ -1,5 +1,23 @@
 import { Chess, type Move } from 'chess.js'
-import type { Color, MoveInput } from './types.js'
+import type { Color, MoveInput, PromotionPiece } from './types.js'
+
+const PROMOTION_PIECES: readonly string[] = ['q', 'r', 'b', 'n']
+
+/**
+ * chess.js types `Move.promotion` as any piece symbol, including `p` and `k`,
+ * which a promotion can never be. Narrow it rather than casting at the call site.
+ */
+function asPromotion(piece: string | undefined): PromotionPiece | undefined {
+  return piece !== undefined && PROMOTION_PIECES.includes(piece)
+    ? (piece as PromotionPiece)
+    : undefined
+}
+
+/** Build a `MoveInput`, omitting `promotion` entirely when there is none. */
+function moveInput(from: string, to: string, promotion: string | undefined): MoveInput {
+  const piece = asPromotion(promotion)
+  return piece ? { from, to, promotion: piece } : { from, to }
+}
 
 /** The standard starting position, as a FEN. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -133,9 +151,7 @@ export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
         move.to === to?.toLowerCase() &&
         (promotion === undefined || move.promotion === promotion.toLowerCase()),
     )
-    return match
-      ? { from: match.from, to: match.to, ...(match.promotion ? { promotion: match.promotion } : {}) }
-      : null
+    return match ? moveInput(match.from, match.to, match.promotion) : null
   }
 
   // SAN, compared with decorations stripped so "Nf3+" and "Nf3" both resolve.
@@ -145,9 +161,5 @@ export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const only = matches.length === 1 ? matches[0] : undefined
   if (!only) return null
 
-  return {
-    from: only.from,
-    to: only.to,
-    ...(only.promotion ? { promotion: only.promotion } : {}),
-  }
+  return moveInput(only.from, only.to, only.promotion)
 }

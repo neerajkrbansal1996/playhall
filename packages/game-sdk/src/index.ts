@@ -34,11 +34,7 @@ export type { Rng } from './rng.js'
 export { createContextRng, createMatchSeed, createRng, deriveSeed } from './rng.js'
 
 export type { GameContext, GameContextInit, RealtimeContext } from './context.js'
-export {
-  FORBIDDEN_GLOBALS_IN_GAMES,
-  createGameContext,
-  createRealtimeContext,
-} from './context.js'
+export { FORBIDDEN_GLOBALS_IN_GAMES, createGameContext, createRealtimeContext } from './context.js'
 
 export type {
   ActionError,

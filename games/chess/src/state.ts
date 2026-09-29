@@ -1,8 +1,4 @@
-import {
-  availableDrawClaims,
-  detectAutomaticEnding,
-  timeoutEnding,
-} from './rules/endings.js'
+import { availableDrawClaims, detectAutomaticEnding, timeoutEnding } from './rules/endings.js'
 import { analyse, replay, START_FEN, tryMove } from './rules/position.js'
 import {
   opponent,
@@ -106,7 +102,7 @@ const done = (state: ChessMatchState): ChessActionResult => ({ ok: true, state }
 
 export interface SetupInput {
   /** The two seats, in the order the platform assigned them. */
-  readonly seats: readonly [SeatId, SeatId];
+  readonly seats: readonly [SeatId, SeatId]
   /** `seats[0]` is the host, so the preference is read from their point of view. */
   readonly colorPreference: ColorPreference
   readonly settings?: ChessRulesSettings
@@ -171,7 +167,8 @@ export function canAbort(state: ChessMatchState): boolean {
  */
 export function firstMoveDeadline(state: ChessMatchState): number | null {
   if (state.phase === 'finished' || state.moves.length >= 2) return null
-  const reference = state.moves.length === 0 ? state.startedAt : (state.lastMoveAt ?? state.startedAt)
+  const reference =
+    state.moves.length === 0 ? state.startedAt : (state.lastMoveAt ?? state.startedAt)
   return reference + FIRST_MOVE_TIMEOUT_MS
 }
 
@@ -293,11 +290,7 @@ function offerDraw(state: ChessMatchState, color: Color): ChessActionResult {
   })
 }
 
-function claimDraw(
-  state: ChessMatchState,
-  claim: DrawClaim,
-  color: Color,
-): ChessActionResult {
+function claimDraw(state: ChessMatchState, claim: DrawClaim, color: Color): ChessActionResult {
   const position = analyse(state.initialFen, state.moves)
   // FIDE 9.2/9.3: the claim belongs to the player whose turn it is.
   if (position.turn !== color) return fail('not_your_turn')

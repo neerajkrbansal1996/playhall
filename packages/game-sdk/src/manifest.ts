@@ -226,7 +226,11 @@ export function validateManifest<TSettings>(
     problems.push({ path: 'teamCount', message: "teamCount is only valid when teams is 'fixed'" })
   }
 
-  if (manifest.supportsBots && manifest.turnModel === 'realtime' && manifest.realtime === undefined) {
+  if (
+    manifest.supportsBots &&
+    manifest.turnModel === 'realtime' &&
+    manifest.realtime === undefined
+  ) {
     problems.push({ path: 'supportsBots', message: 'bots require a resolvable turn model' })
   }
 

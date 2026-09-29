@@ -129,15 +129,9 @@ export function defineTurnBasedGame<
   TEvent extends GameEvent = GameEvent,
   TErrorCode extends string = StandardActionErrorCode,
 >(
-  module: Omit<
-    TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode>,
-    'kind'
-  >,
+  module: Omit<TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode>, 'kind'>,
 ): TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode> {
-  assertModule(module.manifest as GameManifest<never>, 'turn-based', [
-    'sequential',
-    'simultaneous',
-  ])
+  assertModule(module.manifest as GameManifest<never>, 'turn-based', ['sequential', 'simultaneous'])
   return { kind: 'turn-based', ...module }
 }
 
