@@ -6,17 +6,17 @@
 - **Milestone:** M1 (design only). Implementation is **M6**, which is a board gate.
 - **Issue:** [PER-21](/PER/issues/PER-21) (epic [PER-9](/PER/issues/PER-9))
 
-| §                        | Decision                                          | Status                                                      |
-| ------------------------ | ------------------------------------------------- | ----------------------------------------------------------- |
-| §1                       | Room runner: one runner, two drivers              | **Accepted** — binds [PER-15](/PER/issues/PER-15) in M1     |
-| §2                       | Transport adapter with a `channel` argument       | **Accepted** — binds [PER-15](/PER/issues/PER-15) in M1     |
-| §3                       | The real-time SDK contract                        | **Accepted as a specification**, frozen with M2             |
-| §4                       | Netcode kit design                                | **Proposed** — builds in M6                                 |
-| §5                       | Game-server fleet and allocation                  | **Proposed** — builds in M6                                 |
-| §6                       | 3D stack (Three.js + R3F + Rapier)                | **Proposed, conditional on a measurement** — see §6.4       |
-| §7                       | Asset pipeline                                    | **Proposed** — builds in M6                                 |
-| §8                       | Input service                                     | **Proposed** — builds in M6                                 |
-| §9                       | Fleet hosting                                     | **Board-gated** — comparison only, the board picks          |
+| §   | Decision                                    | Status                                                  |
+| --- | ------------------------------------------- | ------------------------------------------------------- |
+| §1  | Room runner: one runner, two drivers        | **Accepted** — binds [PER-15](/PER/issues/PER-15) in M1 |
+| §2  | Transport adapter with a `channel` argument | **Accepted** — binds [PER-15](/PER/issues/PER-15) in M1 |
+| §3  | The real-time SDK contract                  | **Accepted as a specification**, frozen with M2         |
+| §4  | Netcode kit design                          | **Proposed** — builds in M6                             |
+| §5  | Game-server fleet and allocation            | **Proposed** — builds in M6                             |
+| §6  | 3D stack (Three.js + R3F + Rapier)          | **Proposed, conditional on a measurement** — see §6.4   |
+| §7  | Asset pipeline                              | **Proposed** — builds in M6                             |
+| §8  | Input service                               | **Proposed** — builds in M6                             |
+| §9  | Fleet hosting                               | **Board-gated** — comparison only, the board picks      |
 
 ## Context
 
@@ -38,15 +38,15 @@ not also need, that section is wrong and has to be redesigned, not granted an ex
 
 ### The targets this designs against
 
-| Target                                             | Where it binds                                    |
-| -------------------------------------------------- | ------------------------------------------------- |
-| 30 Hz server tick                                  | §1.2 scheduler, §4 snapshot cadence               |
-| Tick < 5 ms p99 for a 12-player room               | §1.3 budget decomposition, §6.3 physics           |
-| < 30 KB/s down per client                          | §4.4 codec arithmetic                             |
-| Playable at 150 ms RTT / 30 ms jitter / 2% loss    | §4.2 prediction, §4.3 interpolation, §2 transport |
-| 60 fps desktop, ≥ 30 fps mid-range Android         | §6.4 spike protocol — the one we must **measure** |
-| Adding a game adds zero bytes to other bundles     | §7.1, and ADR-0001 §3                             |
-| Server is authoritative for every position and clock | §4.5 clock sync, §4.6 lag compensation          |
+| Target                                               | Where it binds                                    |
+| ---------------------------------------------------- | ------------------------------------------------- |
+| 30 Hz server tick                                    | §1.2 scheduler, §4 snapshot cadence               |
+| Tick < 5 ms p99 for a 12-player room                 | §1.3 budget decomposition, §6.3 physics           |
+| < 30 KB/s down per client                            | §4.4 codec arithmetic                             |
+| Playable at 150 ms RTT / 30 ms jitter / 2% loss      | §4.2 prediction, §4.3 interpolation, §2 transport |
+| 60 fps desktop, ≥ 30 fps mid-range Android           | §6.4 spike protocol — the one we must **measure** |
+| Adding a game adds zero bytes to other bundles       | §7.1, and ADR-0001 §3                             |
+| Server is authoritative for every position and clock | §4.5 clock sync, §4.6 lag compensation            |
 
 ### What is deliberately not here
 
@@ -101,7 +101,10 @@ function pass() {
   next += TICK_MS // 33.333…, accumulated — never `now + TICK_MS`
   for (const room of rooms) room.tick()
   const lateBy = monotonicNow() - next
-  if (lateBy > TICK_MS) { metrics.tickSkipped.inc(); next = monotonicNow() } // drop, never spiral
+  if (lateBy > TICK_MS) {
+    metrics.tickSkipped.inc()
+    next = monotonicNow()
+  } // drop, never spiral
   setTimeout(pass, Math.max(0, next - monotonicNow()))
 }
 ```
@@ -170,12 +173,12 @@ are the cheaper lever (§4.4 leaves ~89% of the budget unused); latency is not.
 
 They share a runner. They **do not share a process.**
 
-| | Turn-based | Real-time |
-| --- | --- | --- |
-| Runs in | `apps/realtime` (the lobby/turn service) | a game-server fleet node (§5) |
-| Pacing | event-driven | 30 Hz fixed tick |
-| Restart survival | **yes** — replay the match log | **no** — see below |
-| Scaling unit | rooms per instance (target 2,000) | rooms per core (~16, §9.1) |
+|                  | Turn-based                               | Real-time                     |
+| ---------------- | ---------------------------------------- | ----------------------------- |
+| Runs in          | `apps/realtime` (the lobby/turn service) | a game-server fleet node (§5) |
+| Pacing           | event-driven                             | 30 Hz fixed tick              |
+| Restart survival | **yes** — replay the match log           | **no** — see below            |
+| Scaling unit     | rooms per instance (target 2,000)        | rooms per core (~16, §9.1)    |
 
 A real-time room must not be co-tenanted with the lobby, and this is a **blast radius**
 decision, not a performance preference: one room's physics overrun would add jitter to every
@@ -286,8 +289,8 @@ interface RealtimeGameModule<World, Input, Snapshot, Result> {
   manifest: GameManifest & { kind: 'realtime' }
 
   // wire
-  inputSchema: ZodType<Input>          // validated at the edge before it reaches the sim
-  inputCodec: FieldSchema<Input>       // binary layout, §4.4
+  inputSchema: ZodType<Input> // validated at the edge before it reaches the sim
+  inputCodec: FieldSchema<Input> // binary layout, §4.4
   snapshotCodec: FieldSchema<Snapshot> // binary layout + quantisation + delta rules, §4.4
 
   // simulation — pure, deterministic, ctx.now and ctx.rng only
@@ -353,7 +356,7 @@ have its own subtly different unfairness.
 - **No transport access.** A game never sees a socket, a peer, or a byte count. It cannot choose
   a channel, force a flush, or address a client.
 - **No physics engine supplied by the platform.** A real-time game brings its own physics as a
-  third-party dependency (§6.3). This is deliberate: physics is a *game* concern, and a platform
+  third-party dependency (§6.3). This is deliberate: physics is a _game_ concern, and a platform
   that supplied one would be picking the second game's engine today.
 
 > **The boundary check that matters, run against the M6 design.** A real-time game needs: a
@@ -430,7 +433,7 @@ Only the **local player** is predicted. Everything else is interpolated (§4.3).
    that seat. Within tolerance — **5 cm of position, 2° of orientation** — it does nothing.
 4. Outside tolerance, it snaps to the server state and **replays** every unacked input through
    the same `stepLocalPlayer`. The correction is applied to the simulation state, while the
-   *rendered* position is smoothed toward it over ~100 ms so the player sees a slide, not a
+   _rendered_ position is smoothed toward it over ~100 ms so the player sees a slide, not a
    teleport.
 
 Two consequences worth stating:
@@ -498,19 +501,19 @@ baseline or event is added. This is the arithmetic that makes the `Codec` seam n
 
 **Baselines are per client and acked, not "the previous tick."** The server keeps a ring of the
 last 32 snapshots it sent each client; each snapshot deltas against the newest one that client
-has acknowledged. A lost snapshot therefore costs a *slightly larger next snapshot*, not a
+has acknowledged. A lost snapshot therefore costs a _slightly larger next snapshot_, not a
 desync — which is the property that lets §2's `unreliable` channel become real later without
 touching this format.
 
 **Codec choice: a hand-rolled `DataView` encoder generated from the game's `snapshotCodec`
 schema**, writing into a preallocated reused `ArrayBuffer`.
 
-| Alternative          | Why it lost                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| msgpackr             | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule. |
-| Protobuf             | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand. |
-| FlatBuffers          | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick. |
-| `@colyseus/schema`   | Solves binary + delta well, and is rejected by ADR-0001 §4.2 for the same reason here: it puts a framework type hierarchy inside game state. A game would depend on the platform's netcode library. |
+| Alternative            | Why it lost                                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| msgpackr               | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule.                                                                 |
+| Protobuf               | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand.                                                              |
+| FlatBuffers            | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick.                 |
+| `@colyseus/schema`     | Solves binary + delta well, and is rejected by ADR-0001 §4.2 for the same reason here: it puts a framework type hierarchy inside game state. A game would depend on the platform's netcode library.          |
 | Bit-packing everything | Squeezing the 10 B entity to ~6 B is possible. Rejected on **budget before optimisation**: we are at 21% of the ceiling. Spending CPU in the tick loop to save bytes we are not short of is the wrong trade. |
 
 ### 4.5 Clock sync
@@ -528,7 +531,7 @@ samples are the ones least polluted by queueing delay. Re-sync every 2 s for the
 match, then every 10 s. The estimate is slewed, never stepped, so interpolation does not jump.
 
 **The rule that matters: a client-supplied timestamp is never authoritative for anything.** The
-server stamps the tick; the synced clock exists only so the client knows *which* server time to
+server stamps the tick; the synced clock exists only so the client knows _which_ server time to
 render at (§4.3) and so the server can estimate one-way delay for rewind (§4.6). A client that
 lies about its clock can make its own rendering worse and can, at most, request a rewind — which
 is capped and clamped in §4.6.
@@ -553,7 +556,7 @@ When the server processes a hit test for seat S:
 rewind = clamp(rtt(S)/2 + interpolationDelay(S), 0, 200 ms)
 ```
 
-— computed from the **server's** RTT measurement and the client's *reported* interpolation
+— computed from the **server's** RTT measurement and the client's _reported_ interpolation
 delay, both clamped. The world's hitboxes are reconstructed at `now − rewind`, interpolating
 between the two stored ticks that bracket it (which is why 33 ms granularity is sufficient
 without simulating at 60 Hz, §1.4). The hit test runs against that reconstruction; everything
@@ -563,9 +566,9 @@ else — scoring, state changes — happens in the present.
 after you reach cover.** That is the trade every server-authoritative shooter makes, and the cap
 is what bounds it. At 200 ms the worst case is ~6 ticks of "I was already behind the wall."
 
-| Alternative                       | Why it lost                                                                                                                                                     |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No lag compensation (favour the target) | A player at our stated 150 ms RTT target would have to lead by ~11 cm per m/s of target speed to hit anything. That is our *design* audience, not an edge case. |
+| Alternative                             | Why it lost                                                                                                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No lag compensation (favour the target) | A player at our stated 150 ms RTT target would have to lead by ~11 cm per m/s of target speed to hit anything. That is our _design_ audience, not an edge case. |
 | Uncapped rewind (favour the shooter)    | A 600 ms player kills you most of a second after you broke line of sight, and it is trivially exploitable by inflating reported delay. The cap is the control.  |
 | Cap at 100 ms                           | Under-serves the 150 ms RTT target — a player exactly at target would still be partially uncompensated. 200 ms covers 150 ms RTT + a 67 ms buffer with margin.  |
 
@@ -574,16 +577,16 @@ is what bounds it. At 200 ms the worst case is ~6 ticks of "I was already behind
 Every metric goes through the `packages/shared` telemetry facade (ADR-0001 §8): no call site
 names a vendor, the hot path is sampled, and a snapshot payload is never logged.
 
-| Target                              | Metric                                                                   | Gate                               |
-| ----------------------------------- | ------------------------------------------------------------------------ | ---------------------------------- |
-| tick < 5 ms p99, 12-player room     | `tick_duration_ms` (histogram, per node and per room)                    | node refuses allocation over p99   |
-| 30 Hz                               | `tick_jitter_ms` (scheduled − actual), `tick_skipped_total`              | alert on any sustained skip        |
-| < 30 KB/s down per client           | `snapshot_bytes` (histogram), `downstream_bytes_per_second` (per client) | M6 acceptance criterion            |
-| playable at 150 ms / 30 ms / 2%     | `input_rtt_ms`, `snapshot_gap_total`, `interpolation_buffer_ms`          | loss-test acceptance               |
-| prediction is actually correct      | `reconciliation_corrections_total` + correction magnitude histogram      | the quality signal of §4.2         |
-| rewind stays bounded                | `rewind_ms` histogram, `rewind_capped_total`                             | fairness audit                     |
-| ≥ 30 fps mid-range Android          | `client_fps` p5 / p50, reported by the client sampler                    | held in production, not just in a spike |
-| p99 is not GC                       | `gc_pause_ms`, `heap_used`, `rooms_hosted` per node                      | §1.3 escape-hatch trigger          |
+| Target                          | Metric                                                                   | Gate                                    |
+| ------------------------------- | ------------------------------------------------------------------------ | --------------------------------------- |
+| tick < 5 ms p99, 12-player room | `tick_duration_ms` (histogram, per node and per room)                    | node refuses allocation over p99        |
+| 30 Hz                           | `tick_jitter_ms` (scheduled − actual), `tick_skipped_total`              | alert on any sustained skip             |
+| < 30 KB/s down per client       | `snapshot_bytes` (histogram), `downstream_bytes_per_second` (per client) | M6 acceptance criterion                 |
+| playable at 150 ms / 30 ms / 2% | `input_rtt_ms`, `snapshot_gap_total`, `interpolation_buffer_ms`          | loss-test acceptance                    |
+| prediction is actually correct  | `reconciliation_corrections_total` + correction magnitude histogram      | the quality signal of §4.2              |
+| rewind stays bounded            | `rewind_ms` histogram, `rewind_capped_total`                             | fairness audit                          |
+| ≥ 30 fps mid-range Android      | `client_fps` p5 / p50, reported by the client sampler                    | held in production, not just in a spike |
+| p99 is not GC                   | `gc_pause_ms`, `heap_used`, `rooms_hosted` per node                      | §1.3 escape-hatch trigger               |
 
 The last one is the point of the table: **`client_fps` p5 from real devices is the only way the
 ≥ 30 fps target survives contact with the actual phone population.** A lab spike (§6.4) decides
@@ -660,7 +663,7 @@ to survive from this ADR into whatever M6 actually builds.
   against a **$0 standing budget**. **Revisit at > 50 nodes**, where hand-rolled allocation stops
   being cheaper than adopting the thing that already works.
 - **Serverless / edge functions.** Rejected structurally: no long-lived stateful process, no
-  fixed-tick loop. Cloudflare Durable Objects are the one serverless shape that *can* hold state
+  fixed-tick loop. Cloudflare Durable Objects are the one serverless shape that _can_ hold state
   and a loop, and they are costed in §9.2 rather than dismissed.
 - **Peer-to-peer / host-authoritative** (one player's browser simulates). Rejected outright on
   **server-authoritative**: it hands the outcome, the positions and the clock to a client. It is
@@ -674,7 +677,7 @@ to survive from this ADR into whatever M6 actually builds.
 ### 6.1 Decision (conditional — see §6.4)
 
 **Three.js, driven by react-three-fiber, with Rapier (Rust → WASM) for physics.** This is a
-*proposal with a measurement attached*: the engine choice is settled by measured p5 fps on a
+_proposal with a measurement attached_: the engine choice is settled by measured p5 fps on a
 mid-range Android in the M4 spike ([PER-30](/PER/issues/PER-30)), not by this paragraph.
 
 ### 6.2 Why this is the candidate to beat
@@ -707,7 +710,7 @@ to.** Cross-platform floating-point determinism for a full rigid-body solver is 
 principle and fragile in practice. So:
 
 - **The local player is a kinematic capsule with swept collision** — position integration and a
-  shape cast, no solver, no contact islands. That *is* reproducible across engines, and it is
+  shape cast, no solver, no contact islands. That _is_ reproducible across engines, and it is
   the only thing `stepLocalPlayer` (§3.1) has to reproduce.
 - **Rigid-body dynamics — props tumbling, objects being pushed — run on the server only** and
   reach the client as interpolated snapshot data (§4.3). Nobody predicts them, so nobody has to
@@ -716,9 +719,9 @@ principle and fragile in practice. So:
 This is the **determinism** lens applied as a design constraint rather than a hope: we shrank
 the surface that has to be deterministic until it is a surface that actually is.
 
-**Physics alternatives.** *cannon-es*: pure JS, no WASM step, but materially slower and we would
-be running it inside a 5 ms server budget. *ammo.js* (Bullet): mature and battle-tested, but a
-large emscripten build and an awkward manual-memory API. *Jolt (WASM)*: excellent engine with
+**Physics alternatives.** _cannon-es_: pure JS, no WASM step, but materially slower and we would
+be running it inside a 5 ms server budget. _ammo.js_ (Bullet): mature and battle-tested, but a
+large emscripten build and an awkward manual-memory API. _Jolt (WASM)_: excellent engine with
 newer JS bindings — the closest competitor, and the one to re-check at M6 if Rapier disappoints.
 Rapier wins today on the combination of small WASM (~1 MB), first-class TypeScript bindings, an
 opt-in deterministic mode, and the same binary on both sides.
@@ -745,10 +748,10 @@ transferred bytes.
 
 **Pass bar:**
 
-| | Bar |
-| --- | --- |
+|                   | Bar                                 |
+| ----------------- | ----------------------------------- |
 | Mid-range Android | **p5 ≥ 30 fps** and median ≥ 40 fps |
-| Desktop reference | median ≥ 60 fps |
+| Desktop reference | median ≥ 60 fps                     |
 
 **p5, not median, is the bar.** A median of 30 fps with dips to 12 is not a game that anyone
 enjoys; the target says "≥ 30 fps on a mid-range Android" and the honest reading of that is the
@@ -775,7 +778,7 @@ stutters on the phones our players actually own is not recoverable.
 - **PlayCanvas.** MIT engine with an excellent mobile performance record and the smallest
   runtime of the three. It loses on **where the game lives**: PlayCanvas's real advantage is its
   hosted editor, which is a paid vendor (board-gated at $0) and which puts scene authoring
-  *outside the repository* — at which point a game stops being "a folder" and the plugin
+  _outside the repository_ — at which point a game stops being "a folder" and the plugin
   boundary is no longer checkable in a diff. Used engine-only it gives up the thing that makes
   it better. Still measured in §6.4, because if it wins by a wide margin that changes the
   calculus.
@@ -791,7 +794,7 @@ stutters on the phones our players actually own is not recoverable.
 
 ### 7.1 Decision
 
-**Per-game, content-hashed, immutable CDN bundles**, addressed by game *and module version*:
+**Per-game, content-hashed, immutable CDN bundles**, addressed by game _and module version_:
 
 ```
 /<cdn>/games/<gameId>/<moduleVersion>/<content-hash>.<ext>
@@ -826,12 +829,12 @@ the secondary benefit.
 
 ### 7.2 Budgets, and the loader
 
-| | Budget |
-| --- | --- |
+|                                                           | Budget       |
+| --------------------------------------------------------- | ------------ |
 | Real-time game **code** bundle, gzipped, excluding assets | **≤ 600 KB** |
-| Real-time game **assets**, first playable | **≤ 3 MB** |
-| Real-time game assets, total | **≤ 8 MB** |
-| Bytes added to any *other* game's bundle, or to the lobby | **0** |
+| Real-time game **assets**, first playable                 | **≤ 3 MB**   |
+| Real-time game assets, total                              | **≤ 8 MB**   |
+| Bytes added to any _other_ game's bundle, or to the lobby | **0**        |
 
 The 250 KB turn-based bundle budget does not apply to a 3D game and pretending otherwise would
 just mean missing it. The **zero** row is the one that is non-negotiable and it is the existing
@@ -871,10 +874,10 @@ actions with default bindings — never raw key codes.
 ```ts
 // declared by the game, consumed by the platform input service
 const actions = {
-  move:   { kind: 'axis2' },
-  look:   { kind: 'delta2' },
-  use:    { kind: 'button', keyboard: 'KeyE', touch: { label: 'Use',   slot: 1 } },
-  taunt:  { kind: 'button', keyboard: 'KeyT', touch: { label: 'Taunt', slot: 2 } },
+  move: { kind: 'axis2' },
+  look: { kind: 'delta2' },
+  use: { kind: 'button', keyboard: 'KeyE', touch: { label: 'Use', slot: 1 } },
+  taunt: { kind: 'button', keyboard: 'KeyT', touch: { label: 'Taunt', slot: 2 } },
 }
 ```
 
@@ -922,10 +925,10 @@ The cost comparison itself belongs to [ADR-0003](./0003-hosting-and-cost-model.m
 prices five providers per 1,000 concurrent players and is already in front of the board. This
 ADR's job is to supply the two design inputs that model runs on — and to correct one of them.
 
-| ADR-0003 input                       | Value used there                      | What this design says                                             |
-| ------------------------------------ | ------------------------------------- | ------------------------------------------------------------------ |
-| **I10** real-time down per client    | 30 KB/s ceiling, **10 KB/s** design point | **≈ 6.3 KB/s** including framing (§4.4) — a further ~37% below    |
-| **I11** real-time CPU per room       | 2 ms mean per tick, ~16 rooms/core    | **4.2 ms budgeted, p99 < 5 ms** (§1.3) — consistent, still owed    |
+| ADR-0003 input                    | Value used there                          | What this design says                                           |
+| --------------------------------- | ----------------------------------------- | --------------------------------------------------------------- |
+| **I10** real-time down per client | 30 KB/s ceiling, **10 KB/s** design point | **≈ 6.3 KB/s** including framing (§4.4) — a further ~37% below  |
+| **I11** real-time CPU per room    | 2 ms mean per tick, ~16 rooms/core        | **4.2 ms budgeted, p99 < 5 ms** (§1.3) — consistent, still owed |
 
 **The egress consequence is large enough that the board should see it.** Re-running ADR-0003 §4
 at the §4.4 design point of 6.3 KB/s instead of its 10 KB/s assumption:
@@ -941,7 +944,7 @@ Which moves the monthly egress bill per 1,000 concurrent players to roughly:
 
 | Provider | @ 30 KB/s | @ 10 KB/s | **@ 6.3 KB/s (this design)** |
 | -------- | --------: | --------: | ---------------------------: |
-| Hetzner  |    $0–76  |    $0–23  |                    **$0–14** |
+| Hetzner  |     $0–76 |     $0–23 |                    **$0–14** |
 | Fly.io   |    $1,577 |      $526 |                     **$332** |
 | Railway  |    $3,942 |    $1,314 |                     **$830** |
 | AWS      |    $6,329 |    $2,276 |                   **$1,436** |
@@ -995,7 +998,7 @@ That would place it second only to Hetzner, and ahead of Fly.io by ~7×.
 description.** Items 1 and 2 are the ones that would disqualify it, and both are measurable in a
 half-day spike at $0 on the free tier. That spike belongs in M4 ([PER-30](/PER/issues/PER-30)).
 
-### 9.3 What the board is being asked — and what it is *not* being asked
+### 9.3 What the board is being asked — and what it is _not_ being asked
 
 **Not asked for now: any M6 spend.** The standing infrastructure budget is $0, M6 is itself a
 board gate ([PER-32](/PER/issues/PER-32)), and no provider has been signed up for. No card, no
@@ -1021,19 +1024,19 @@ provider here, and neither is ADR-0003.**
 
 ## Evidence
 
-| Claim | Basis |
-| --- | --- |
-| Snapshot fits the 30 KB/s budget at ~21% | Derived, §4.4. **Budget, not measurement** |
-| JSON does not fit | Derived, ADR-0001 §7 — 1.5–3× over a 1,000 B/tick ceiling |
-| Tick budget decomposes to 4.2 ms against 5 ms p99 | Derived, §1.3. **Every line is a budget**; the physics line is the least certain |
-| Input triple-redundancy loses a frame ~1 per 4 h at 2% loss | Derived, §4.1 — 0.02³ |
-| Two-interval buffer absorbs one loss; 2 consecutive ≈ 1 per 83 s | Derived, §4.3 — 0.02² at 30 Hz |
-| TCP HOL costs ~150 ms every ~1.7 s at 2% loss / 150 ms RTT | Derived, §2.2 |
-| KTX2/ASTC is 4× less VRAM than RGBA8 | Format arithmetic, §7.1 |
-| Hitbox ring costs ~4.6 KB per room | Derived, §4.6 |
-| Provider prices | [ADR-0003](./0003-hosting-and-cost-model.md) published list prices, 2026-09-30, **quotes not measurements** |
-| Durable Objects ≈ $0.27 per concurrent player-month | Derived from published rates, **[unverified]**, §9.2 |
-| Engine bundle sizes, decoder sizes, Babylon/PlayCanvas fps | **[unverified]** — §6.4 owes all of it |
+| Claim                                                            | Basis                                                                                                       |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Snapshot fits the 30 KB/s budget at ~21%                         | Derived, §4.4. **Budget, not measurement**                                                                  |
+| JSON does not fit                                                | Derived, ADR-0001 §7 — 1.5–3× over a 1,000 B/tick ceiling                                                   |
+| Tick budget decomposes to 4.2 ms against 5 ms p99                | Derived, §1.3. **Every line is a budget**; the physics line is the least certain                            |
+| Input triple-redundancy loses a frame ~1 per 4 h at 2% loss      | Derived, §4.1 — 0.02³                                                                                       |
+| Two-interval buffer absorbs one loss; 2 consecutive ≈ 1 per 83 s | Derived, §4.3 — 0.02² at 30 Hz                                                                              |
+| TCP HOL costs ~150 ms every ~1.7 s at 2% loss / 150 ms RTT       | Derived, §2.2                                                                                               |
+| KTX2/ASTC is 4× less VRAM than RGBA8                             | Format arithmetic, §7.1                                                                                     |
+| Hitbox ring costs ~4.6 KB per room                               | Derived, §4.6                                                                                               |
+| Provider prices                                                  | [ADR-0003](./0003-hosting-and-cost-model.md) published list prices, 2026-09-30, **quotes not measurements** |
+| Durable Objects ≈ $0.27 per concurrent player-month              | Derived from published rates, **[unverified]**, §9.2                                                        |
+| Engine bundle sizes, decoder sizes, Babylon/PlayCanvas fps       | **[unverified]** — §6.4 owes all of it                                                                      |
 
 > **Measurement owed — the full list, so none of it is quietly forgotten.** Owner: the M4
 > real-time spike, [PER-30](/PER/issues/PER-30), before M6 opens.
@@ -1094,15 +1097,15 @@ provider here, and neither is ADR-0003.**
 
 **Cost to reverse**
 
-| Decision | Cost |
-| --- | --- |
-| Transport adapter / `channel` argument (§2) | **Cheap** — that is what the seam is for |
-| `RoomDriver` split (§1.1) | **Cheap now** (the code is unwritten), expensive after M2 |
-| Real-time SDK contract (§3) | **Cheap now**, **board-gated** after M2 — which is why it is specified now |
-| Snapshot wire format (§4.4) | Moderate — versioned, so a swap is a migration, not a rewrite |
-| 3D engine (§6) | Moderate *before* Prop Hunt's scene is authored; **expensive** after |
-| Fleet provider (§9) | Moderate — this is why §5 keeps allocation behind an `Allocator` interface |
-| No restart survival for real-time (§1.5) | Moderate — adding periodic world snapshots later is additive |
+| Decision                                    | Cost                                                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------- |
+| Transport adapter / `channel` argument (§2) | **Cheap** — that is what the seam is for                                   |
+| `RoomDriver` split (§1.1)                   | **Cheap now** (the code is unwritten), expensive after M2                  |
+| Real-time SDK contract (§3)                 | **Cheap now**, **board-gated** after M2 — which is why it is specified now |
+| Snapshot wire format (§4.4)                 | Moderate — versioned, so a swap is a migration, not a rewrite              |
+| 3D engine (§6)                              | Moderate _before_ Prop Hunt's scene is authored; **expensive** after       |
+| Fleet provider (§9)                         | Moderate — this is why §5 keeps allocation behind an `Allocator` interface |
+| No restart survival for real-time (§1.5)    | Moderate — adding periodic world snapshots later is additive               |
 
 ---
 
