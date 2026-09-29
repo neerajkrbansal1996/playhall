@@ -12,3 +12,4 @@ export {
   isValidRoomCode,
   normalizeRoomCode,
 } from './room-code'
+export * from './telemetry'
