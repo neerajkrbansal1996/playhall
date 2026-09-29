@@ -12,7 +12,15 @@
  * `.dependency-cruiser.cjs` is copied, not re-written: the whole value of the negative suite is
  * that it exercises the file CI runs.
  */
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -23,21 +31,51 @@ const COPIED_FROM_REPO = [
   'tools/boundaries/resolve-anchor.d.ts',
 ]
 
-/** Workspace packages the fixtures need to be able to reach (or be blocked from reaching). */
+/**
+ * The token fixtures and stubs write instead of a literal npm scope. The scope is a brand string
+ * and the brand is still a board decision, so nothing here spells it out — the real workspace's
+ * scope is read from the SDK manifest and substituted in. Rename the scope and this suite keeps
+ * testing the thing that actually ships.
+ */
+export const SCOPE_TOKEN = '@scope'
+
+/** The npm scope the real workspace uses, e.g. `@atrium`. */
+export function workspaceScope(repoRoot: string): string {
+  const sdkName = JSON.parse(
+    readFileSync(join(repoRoot, 'packages', 'game-sdk', 'package.json'), 'utf8'),
+  ).name as string
+  const scope = sdkName.split('/')[0]
+  if (scope === undefined || !scope.startsWith('@')) {
+    throw new Error(`packages/game-sdk is named "${sdkName}", which has no npm scope to derive.`)
+  }
+  return scope
+}
+
+/** Replaces every `@scope` token with the workspace's real scope. */
+export function applyScope(text: string, scope: string): string {
+  return text.replaceAll(SCOPE_TOKEN, scope)
+}
+
+/**
+ * Workspace packages the fixtures need to be able to reach (or be blocked from reaching), by
+ * directory and unscoped package name.
+ */
 const STUB_PACKAGES = [
-  { dir: 'packages/shared', name: '@atrium/shared' },
-  { dir: 'packages/game-sdk', name: '@atrium/game-sdk' },
-  { dir: 'packages/platform-core', name: '@atrium/platform-core' },
-  { dir: 'packages/netcode', name: '@atrium/netcode' },
-  { dir: 'packages/game-testkit', name: '@atrium/game-testkit' },
-  { dir: 'packages/ui', name: '@atrium/ui' },
+  { dir: 'packages/shared', name: 'shared' },
+  { dir: 'packages/game-sdk', name: 'game-sdk' },
+  { dir: 'packages/platform-core', name: 'platform-core' },
+  { dir: 'packages/netcode', name: 'netcode' },
+  { dir: 'packages/game-testkit', name: 'game-testkit' },
+  { dir: 'packages/ui', name: 'ui' },
+  { dir: 'apps/web', name: 'web' },
+  { dir: 'apps/realtime', name: 'realtime' },
   // `fx-a` is the game under test; fixtures overwrite its files. `fx-b` is the second game, so
   // `no-game-to-game` has a real neighbour to be blocked from.
-  { dir: 'games/fx-a', name: '@atrium/fx-a' },
-  { dir: 'games/fx-b', name: '@atrium/fx-b' },
+  { dir: 'games/fx-a', name: 'fx-a' },
+  { dir: 'games/fx-b', name: 'fx-b' },
 ]
 
-/** Source files the stub packages start with. All of these edges are legal. */
+/** Source files the stub packages start with. Every edge below is legal. */
 const STUB_SOURCES: Record<string, string> = {
   'packages/shared/src/index.ts': "export const BRAND_KEY = 'atrium'\n",
   // Not re-exported from index, so a deep import into it is the violation
@@ -45,19 +83,19 @@ const STUB_SOURCES: Record<string, string> = {
   'packages/shared/src/room-code.ts': "export const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'\n",
   'packages/game-sdk/src/index.ts': "export type GameId = string & { __brand: 'GameId' }\n",
   'packages/platform-core/src/index.ts':
-    "import { BRAND_KEY } from '@atrium/shared'\nexport const brandKey = BRAND_KEY\n",
+    "import { BRAND_KEY } from '@scope/shared'\nexport const brandKey = BRAND_KEY\n",
   'packages/netcode/src/index.ts': 'export const TICK_HZ = 30\n',
   'packages/game-testkit/src/index.ts':
-    "import type { GameId } from '@atrium/game-sdk'\nexport type Conformance = { id: GameId }\n",
+    "import type { GameId } from '@scope/game-sdk'\nexport type Conformance = { id: GameId }\n",
   'packages/ui/src/index.ts': "export const cn = (...parts: string[]) => parts.join(' ')\n",
-  'apps/web/src/app/page.ts':
-    "import { brandKey } from '@atrium/platform-core'\nexport default brandKey\n",
+  'apps/web/src/index.ts':
+    "import { brandKey } from '@scope/platform-core'\nexport default brandKey\n",
   'apps/realtime/src/index.ts':
-    "import { brandKey } from '@atrium/platform-core'\nexport const boot = () => brandKey\n",
+    "import { brandKey } from '@scope/platform-core'\nexport const boot = () => brandKey\n",
   'games/fx-a/src/index.ts':
-    "import type { GameId } from '@atrium/game-sdk'\nexport const id = 'fx-a' as GameId\n",
+    "import type { GameId } from '@scope/game-sdk'\nexport const id = 'fx-a' as GameId\n",
   'games/fx-b/src/index.ts':
-    "import type { GameId } from '@atrium/game-sdk'\nexport const id = 'fx-b' as GameId\n",
+    "import type { GameId } from '@scope/game-sdk'\nexport const id = 'fx-b' as GameId\n",
 }
 
 function write(root: string, relPath: string, contents: string): void {
@@ -92,6 +130,7 @@ function packageManifest(name: string): string {
  * every resolved path would come back absolute instead of repo-relative and no rule would match.
  */
 export function createMiniRepo(repoRoot: string): string {
+  const scope = workspaceScope(repoRoot)
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'atrium-boundaries-')))
 
   for (const relPath of COPIED_FROM_REPO) {
@@ -103,26 +142,24 @@ export function createMiniRepo(repoRoot: string): string {
   write(
     root,
     'package.json',
-    `${JSON.stringify({ name: 'atrium-scratch', private: true, type: 'module' }, null, 2)}\n`,
+    `${JSON.stringify({ name: 'scratch', private: true, type: 'module' }, null, 2)}\n`,
   )
 
   for (const { dir, name } of STUB_PACKAGES) {
-    write(root, join(dir, 'package.json'), packageManifest(name))
+    write(root, join(dir, 'package.json'), packageManifest(`${scope}/${name}`))
   }
-  write(root, 'apps/web/package.json', packageManifest('@atrium/web'))
-  write(root, 'apps/realtime/package.json', packageManifest('@atrium/realtime'))
 
   for (const [relPath, contents] of Object.entries(STUB_SOURCES)) {
-    write(root, relPath, contents)
+    write(root, relPath, applyScope(contents, scope))
   }
 
   // Workspace resolution: pnpm links workspace packages into node_modules, and that is how
-  // `@atrium/platform-core` becomes the path `packages/platform-core/src/index.ts` in the graph.
+  // `<scope>/platform-core` becomes the path `packages/platform-core/src/index.ts` in the graph.
   // Reproduce it with plain symlinks so the fixtures can use real package specifiers.
-  const scope = join(root, 'node_modules', '@atrium')
-  mkdirSync(scope, { recursive: true })
+  const scopeDir = join(root, 'node_modules', scope)
+  mkdirSync(scopeDir, { recursive: true })
   for (const { dir, name } of STUB_PACKAGES) {
-    const link = join(scope, name.replace('@atrium/', ''))
+    const link = join(scopeDir, name)
     symlinkSync(relative(dirname(link), join(root, dir)), link, 'dir')
   }
 

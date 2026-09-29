@@ -3,6 +3,17 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import prettier from 'eslint-config-prettier'
 import globals from 'globals'
+import { readFileSync } from 'node:fs'
+
+/**
+ * The npm scope, read from the SDK's own manifest rather than written out. The scope is a brand
+ * string and the brand is still a board decision — a literal here would turn the game-import
+ * rule below into a no-op the day the scope is renamed, which is worse than not having it.
+ */
+const SDK_NAME = JSON.parse(
+  readFileSync(new URL('./packages/game-sdk/package.json', import.meta.url), 'utf8'),
+).name
+const SCOPE = SDK_NAME.split('/')[0]
 
 export default tseslint.config(
   {
@@ -89,9 +100,9 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@atrium/*', '!@atrium/game-sdk', '!@atrium/game-sdk/*', '@atrium/shared/*'],
+              group: [`${SCOPE}/*`, `!${SDK_NAME}`, `!${SDK_NAME}/*`, `${SCOPE}/shared/*`],
               message:
-                'A game may import @atrium/game-sdk and third-party libraries, nothing else. ' +
+                `A game may import ${SDK_NAME} and third-party libraries, nothing else. ` +
                 'Enforced for real by `pnpm boundaries` (ADR-0002); this is the editor warning.',
             },
             {

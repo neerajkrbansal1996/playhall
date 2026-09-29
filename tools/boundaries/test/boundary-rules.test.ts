@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { loadFixtures, type Fixture } from '../src/fixtures.js'
-import { createMiniRepo } from '../src/mini-repo.js'
+import { applyScope, createMiniRepo, workspaceScope } from '../src/mini-repo.js'
 
 const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -64,6 +64,9 @@ const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 const fixtures = loadFixtures(fixtureDir)
 
+/** Fixtures write `@scope/...`; the real scope is read from the SDK manifest (see mini-repo). */
+const scope = workspaceScope(repoRoot)
+
 interface RunResult {
   readonly status: number
   readonly output: string
@@ -75,7 +78,7 @@ function run(fixture: Fixture): RunResult {
     for (const [relPath, contents] of fixture.files) {
       const target = join(miniRepo, relPath)
       mkdirSync(dirname(target), { recursive: true })
-      writeFileSync(target, contents)
+      writeFileSync(target, applyScope(contents, scope))
     }
 
     const [command, args] =
@@ -180,7 +183,7 @@ describe.each(fixtures.filter((fixture) => fixture.expectRule !== null))(
       const comment = rulesByName.get(expectedRule)?.comment
       const expectedExplanation =
         fixture.tool === 'declared-deps'
-          ? 'A game package may declare exactly one @atrium dependency'
+          ? `A game package may declare exactly one ${scope} dependency`
           : collapse(comment ?? '').slice(0, 60)
 
       expect(expectedExplanation.length, `rule ${expectedRule} has no comment`).toBeGreaterThan(20)
