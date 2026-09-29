@@ -266,6 +266,18 @@ stylistic rule; it is the thing that buys us restart survival, replays and repro
 tests.** `packages/platform-core` owns this ([PER-15](/PER/issues/PER-15),
 [PER-29](/PER/issues/PER-29)).
 
+**Blast radius, stated rather than hidden.**
+
+- *An app instance dies mid-match.* The room lock expires, another instance rehydrates from
+  the last snapshot plus the match log, and play resumes at the correct state. During that
+  window the player sees "reconnecting" — never a stale board presented as live. Showing a
+  correct state late beats showing a wrong state now.
+- *Redis dies hard.* With `appendonly yes` and the default `appendfsync everysec`, an
+  in-flight match can lose **up to 1 second** of applied actions. We are accepting that for
+  v1 and writing it down. Completed matches are already in Postgres and are unaffected. If
+  it proves unacceptable, the mitigations are `appendfsync always` (paid for in write
+  latency) or a replica with `WAIT` — both are changes to this line, not to the design.
+
 **Alternative considered.** Postgres `LISTEN/NOTIFY` plus tables instead of Redis, dropping a
 dependency. It lost on TTLs and presence: expiring lobbies and connection presence in
 Postgres means a sweeper job and write amplification on the hot path.
