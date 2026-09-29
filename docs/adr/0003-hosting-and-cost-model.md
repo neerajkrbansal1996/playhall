@@ -1,9 +1,13 @@
 # ADR-0003: Cost the hosting candidates per 1,000 concurrent players and escalate the choice
 
-- **Status:** **Board-gated** for the provider choice and the monthly budget (§7, §10).
-  **Accepted** for the workload model (§2), the constraint findings (§5) — including the
-  disqualification of Upstash as the production live-state store — and the free-tier path (§8).
+- **Status:** **Board-gated** for the provider choice and for the three priced proposals in §11.
+  **Accepted** for the workload model (§2), the cost models (§3, §4), the constraint findings
+  (§5) and the $0 topology (§8).
 - **Date:** 2026-09-30
+- **Amended:** 2026-09-30 (**rev 2**) — the board set the infrastructure budget to **$0**, and
+  [ADR-0001](./0001-v1-stack.md) rev 2 withdrew the `noeviction` disqualifier. **§5.1, §7, §8
+  and §10 changed materially and §0 and §11 are new.** See
+  [What changed in rev 2](#what-changed-in-rev-2).
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -32,6 +36,73 @@ teaspoon. Both are below.
 This ADR **records a recommendation with numbers. It does not pick a provider.** The choice
 and the budget go to the board on [PER-2](/PER/issues/PER-2). Nothing here authorises a
 signup, and no paid tier has been signed up for.
+
+### What changed in rev 2 {#what-changed-in-rev-2}
+
+Rev 1 was written before three inputs landed. All three arrived within an hour of each other
+on 2026-09-30, and two of them change conclusions rather than wording.
+
+| Input                                                                            | Effect on this ADR                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The board set the infrastructure budget to $0** ([PER-2](/PER/issues/PER-2))   | §7's recommendation becomes **conditional on a budget existing**. The operative section at $0 is §8, which is rewritten as a topology with ceilings. §10 stops asking for $250/month. §11 is new.                                                               |
+| **`noeviction` withdrawn as a gate** ([ADR-0001](./0001-v1-stack.md) rev 2 §6.1) | §5.1's five-provider pass/fail table stops being an eliminator. **Upstash is re-admitted.** The replacement constraint — Postgres durability and a ≤ 10 ms p95 log append — is costed in §5.1b, and **the free-tier topology fails it**, which §11.3 escalates. |
+| **Always-on WebSocket flag from M0.4** ([PER-7](/PER/issues/PER-7))              | New §8.3 prices the cheapest correct always-on process per environment. It is the smallest of the three asks in §11 and the most urgent.                                                                                                                        |
+
+Rev 1's §2, §3, §4, §6 and §9 are unchanged: the arithmetic did not move, only the durability
+model and the budget did.
+
+**This ADR does not depend on the outcome of [approval 15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df)**
+(Colyseus vs. an in-house `RoomRunner`, [ADR-0001](./0001-v1-stack.md) §4.4). Both answers
+produce the same fleet shape — a long-lived Node process per room shard, addressed by room id —
+so §4's sizing and §5.4's routing constraint hold either way. The only line either answer moves
+is memory per room (I9), and §9's sensitivity table already carries it.
+
+---
+
+## 0. Summary for the board {#summary-for-the-board}
+
+The three things Chief of Staff asked for, in one screen. Everything below is the derivation.
+
+**1. Cost per 1,000 concurrent players per month ($/concurrent player-month in brackets):**
+
+| Provider                | Turn-based (M1–M5, real) |          Real-time (M6, projection) |
+| ----------------------- | -----------------------: | ----------------------------------: |
+| Hetzner bare VM (floor) |          **$41** (0.041) |             **$52–128** (0.05–0.13) |
+| Hetzner + managed data  |              $62 (0.062) |                                   — |
+| **Fly.io**              |         **$100** (0.100) |                   $1,853 **(1.85)** |
+| Railway                 |             $149 (0.149) |                   $4,267 **(4.27)** |
+| AWS ECS/Fargate         |   $208–336 (0.208–0.336) |                   $6,617 **(6.62)** |
+| Render                  |             $225 (0.225) | **$12,022 (12.02) — disqualifying** |
+
+Turn-based cost at our scale is **~90% a fixed floor** (§2.1): 1,000 concurrent players is a
+quarter of one instance. Real-time cost is **dominated by egress** (§4) — 85% of the Fly bill,
+96% of the AWS one and 98% of Render's: 30 KB/s × 1,000 clients is **78.8 TB/month**, and the
+per-GB rate differs **153×** across the candidate set.
+
+**2. What $0 buys, and where it stops.** §8 gives a free-tier topology — Cloudflare Pages +
+Render free + Upstash free + Neon free — that carries M0 through roughly M2. **The ceiling
+that bites first is not a quota, it is a correctness failure:** Render's free tier spins a
+service down after 15 minutes without traffic, and a spun-down room server drops its sockets
+and loses live room state (§8.2). The first _quota_ to bite is Upstash's 500K commands/month,
+which at our 10 s heartbeat is **about 20 concurrent players for two hours a day** (§8.2).
+
+**3. The three things $0 cannot buy, priced as discrete asks** (§11). They are deliberately
+separate so the board can approve one and refuse the others:
+
+| #     | Ask                                                      | Shape                | Number                                    |
+| ----- | -------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| §11.1 | An always-on process for `apps/realtime`, prod + staging | **standing monthly** | **$6–7/month**                            |
+| §11.2 | The M5 load test at 2,000 rooms                          | **one-off window**   | **$8** (capacity) / **$100 cap** (p95)    |
+| §11.3 | A Mumbai-region fleet for M6                             | **standing monthly** | **$75/month** pilot; $488/mo at 1,000 CCU |
+
+**The single most useful number in this document is $6–7/month.** That is the entire distance
+between "$0, and the staging WebSocket server drops connections when a game goes quiet" and a
+correct always-on production and staging pair. It is 0.03% of one engineer-day per month.
+
+**One decision the board is making without being asked:** which regions v1 serves (§5.5,
+§11.3). If the answer is India, **Fly's India egress is $0.12/GB — 6× its NA/EU rate** — which
+adds $53/month to the turn-based number above and $7,900/month to the real-time one, and moves
+the recommendation. Raised as Decision 3 in §10.
 
 ---
 
@@ -140,8 +211,14 @@ Two further constraints fall out of the CPU line:
 ## 3. Turn-based cost per 1,000 concurrent players
 
 Common footprint costed for every candidate: **2 app instances** (HA floor — one instance
-cannot be deployed without downtime), **1 Redis** ≥ 256 MB with `noeviction` and AOF, **1
-Postgres** ~4 GB with 50 GB storage, **526 GB egress** (U₂₄).
+cannot be deployed without downtime), **1 Redis** ≥ 256 MB, **1 Postgres** ~4 GB with 50 GB
+storage, **526 GB egress** (U₂₄).
+
+> **Rev 2 note.** Rev 1 specified the Redis line as "≥ 256 MB with `noeviction` and AOF". Per
+> [ADR-0001](./0001-v1-stack.md) rev 2 §6.1 that is now a preference, not a requirement, and
+> **Redis is priced here as a replaceable cache, not a system of record.** No candidate's Redis
+> line moves as a result — the cheapest tier at each provider already clears 32 MB (§2.1) —
+> so §3's totals are unchanged. What the withdrawal changes is §5.1, not §3.
 
 ### 3.1 Fly.io — **≈ $100/month per U₂₄ ($0.100 per concurrent player-month)**
 
@@ -165,8 +242,10 @@ multiplier 1.0–1.615, **1.1 used** for `iad`/`ewr`.
 
 At the 0.27 duty cycle (I3) egress falls to $2.84 → **$92/month**.
 
-**Redis is a self-run Fly Machine under our own `redis.conf`, not Upstash.** See §5.1 — this is
-a correctness requirement, and it happens to be cheaper.
+**Redis is priced as a self-run Fly Machine under our own `redis.conf`.** Rev 1 called this a
+correctness requirement; per §5.1 it is now only a **cost** preference — $8.69/month against
+$10/month for the cheapest Upstash fixed plan, and we already run the same `redis.conf`
+locally. Either is acceptable.
 
 ### 3.2 Railway — **≈ $149/month per U₂₄ ($0.149)**
 
@@ -337,10 +416,19 @@ Hetzner  EU: 30 TB included on CCX33, 48.8 TB × €1/TB × 1.08          = $   
 
 ## 5. Hard constraints — every candidate checked
 
-### 5.1 Redis must support `maxmemory-policy noeviction`
+### 5.1 Redis eviction policy — **a preference, not a gate** (rev 2)
 
-[ADR-0001](./0001-v1-stack.md) §6: live room state is authoritative in Redis between Postgres
-snapshots, so a silently evicted key is a lost match.
+> **Rev 1 said `maxmemory-policy noeviction` was a hard constraint that disqualified a
+> provider, on the grounds that live room state was authoritative in Redis between Postgres
+> snapshots. [ADR-0001](./0001-v1-stack.md) rev 2 §6.1 withdrew that.** Redis is now a cache in
+> front of the Postgres match log. A room is fully reconstructible from `(seed, module version,
+ordered action log, last snapshot)` **with no Redis key surviving**, so losing the entire
+> keyspace costs a rehydrate and a reconnect, never a match.
+>
+> **Nothing below disqualifies anything.** The table is kept because the evidence is real and
+> a provider that _does_ let us pin the policy is still preferable — an evicted key costs a
+> Postgres read that a pinned key does not. It ranks candidates; it no longer eliminates them.
+> The constraint that replaced it is **§5.1b**, and it is the more expensive one.
 
 | Provider | Verdict                                                                                                                             | Finding                                                                                                                                                                                                                                                                                     |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -350,26 +438,84 @@ snapshots, so a silently evicted key is a lost match.
 | AWS      | **Pass**                                                                                                                            | `maxmemory-policy = noeviction` via a **custom** parameter group. The _default_ parameter group is immutable, so this is a required provisioning step, not a default. (`r6gd` data-tiering nodes restrict the allowed policies — not a node type we would use.)                             |
 | Fly.io   | **Conditional pass — and a disqualification inside it**                                                                             | See below.                                                                                                                                                                                                                                                                                  |
 
-**Upstash is disqualified as the production live-state store**, on Fly or anywhere else. It does
-not expose `maxmemory-policy`. It offers an eviction **on/off toggle** whose algorithm, when on,
-is a proprietary `optimistic-volatile` scheme (volatile-random, then allkeys-random). Its default
-is no eviction, so the _behaviour_ is correct today — but the guarantee is a vendor default we
-cannot pin in configuration, cannot assert in a test, and cannot notice changing. For a key whose
-loss is a lost match, "the vendor's current default happens to be right" is not a guarantee.
-**Fly therefore passes via a self-run Redis Machine with our own `redis.conf`** — the same file
-we already run locally — which is also $1.31/month cheaper than an Upstash fixed plan.
+**Upstash: rev 1 disqualified it, rev 2 re-admits it.** The evidence is unchanged — Upstash does
+not expose `maxmemory-policy`, offering instead an eviction **on/off toggle** whose algorithm,
+when on, is a proprietary `optimistic-volatile` scheme (volatile-random, then allkeys-random),
+and whose default is no eviction. Rev 1 rejected that because a vendor default cannot be pinned
+in config or asserted in a test. **That reasoning only held while an evicted key was a lost
+match. It no longer is.** An evicted key is now a cache miss that costs a rehydrate from the
+Postgres log — the same path a cold start already takes. **Upstash is therefore eligible
+everywhere, including production**, and it is the Redis in the $0 topology in §8.
 
-Two related notes that de-risk this constraint:
+What still rules Upstash out on Fly at scale is **price, not correctness**:
 
-- **Upstash's per-request pricing is a trap at our shape.** At the 450 ops/s of §2.1, pay-as-you-go
-  at $0.20 per 100k commands is **1.18 Bn commands/month = $2,366/month**. Anyone reaching for
-  Upstash must be on a fixed plan. Recorded so nobody discovers this from an invoice.
-- **Every provider's Redis risks ≤1 s of writes on failure** (`appendfsync everysec`). That is
-  acceptable for us and it is worth writing down why: Postgres holds the match log and is the
-  replay source ([ADR-0001](./0001-v1-stack.md) §6), so losing ≤1 s of Redis costs a replay, not
-  a match. _Eviction_ is unrecoverable because it is silent and selective; _crash loss_ is
-  recoverable because it is detectable and total. That asymmetry is the whole reason this
-  constraint is about `noeviction` specifically.
+- **Upstash's per-request pricing is a trap at our shape.** At the 450 ops/s of §2.1,
+  pay-as-you-go at $0.20 per 100k commands is **1.18 Bn commands/month = $2,366/month**, against
+  $8.69 for a self-run Fly Redis Machine — a 272× difference for the same 32 MB of data. Anyone
+  reaching for Upstash must be on a **fixed** plan ($10/month at the paid entry tier, which is
+  competitive). Recorded so nobody discovers this from an invoice. **This finding survives rev 2
+  intact and is now the only reason §3.1 prices a self-run Machine.**
+- **The same request accounting sets the free tier's ceiling** — 500K commands/month, which §8.2
+  works out to roughly 20 concurrent players for two hours a day. That is the binding quota in
+  the $0 topology.
+
+**Crash loss is now free, and that is worth stating precisely.** Rev 1 wrote that every
+provider's Redis risks ≤ 1 s of writes on failure under `appendfsync everysec`, and that losing
+≤ 1 s costs "a replay, not a match". [ADR-0001](./0001-v1-stack.md) rev 2 §6.1 goes one step
+further: the exposure is **not ≤ 1 s, it is nothing**. Every applied action is on the Postgres
+log before it is acknowledged (§5.1b), so a Redis instance that loses a second of writes, or
+its entire dataset, loses **no applied action at all**. `appendonly` and `noeviction` are
+therefore recommended where a provider offers them and are explicitly not a hosting constraint.
+
+### 5.1b The replacement constraint: **Postgres durability, and a ≤ 10 ms p95 log append**
+
+[ADR-0001](./0001-v1-stack.md) rev 2 §6.2 moved the durable append **onto the action hot path**
+and budgeted it at **≤ 10 ms p95**. This is the constraint that actually costs money now, and it
+has a shape rev 1 did not price: it is a **per-action synchronous write**, not a background
+snapshot, so it is sensitive to network distance and fsync latency rather than to IOPS ceilings.
+
+At 100 actions/s per U₂₄ (§2.1) the write volume is trivial for every candidate. **The budget is
+spent almost entirely on round trips**, which decomposes as:
+
+```
+append p95  =  app → PG network RTT  +  WAL fsync  +  driver/pool overhead
+same host / same region, provisioned    ≈ 0.3–1 ms  +  1–3 ms  +  ~1 ms   →  ~3–5 ms   PASS
+different provider, same metro          ≈ 5–15 ms   +  1–3 ms  +  ~1 ms   →  ~8–20 ms  MARGINAL
+different provider, different region    ≈ 20–80 ms                         →  FAIL
+serverless PG resuming from scale-to-zero  + 500 ms–several s on the first append → FAIL
+```
+
+| Candidate / topology                                | Same-region PG? | ≤ 10 ms p95 verdict                                                                                                                        |
+| --------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Fly.io + Fly Managed Postgres                       | Yes             | **Pass** — MPG runs in the same Fly region as the app                                                                                      |
+| AWS ECS + RDS                                       | Yes             | **Pass** — same VPC, same AZ                                                                                                               |
+| Render + Render Postgres                            | Yes             | **Pass**                                                                                                                                   |
+| Railway + Railway Postgres                          | Yes             | **Pass**                                                                                                                                   |
+| Hetzner H2 (PG on the same box)                     | Same host       | **Pass, best** — no network hop at all                                                                                                     |
+| Hetzner H1 (compute at Hetzner, PG at Neon)         | **No**          | **Marginal** — a cross-provider hop inside the same metro is 5–15 ms before fsync. **[unverified]** — must be measured before H1 is chosen |
+| **The $0 topology of §8** (Render free → Neon free) | **No**          | **Fails, twice** — cross-provider RTT, plus Neon free autosuspends after 5 min idle and the first append after a suspend pays a resume     |
+
+**Two consequences, and the second is a board decision.**
+
+1. **Co-location is now a hosting requirement, not a preference.** Any topology that puts
+   Postgres at a different provider from `apps/realtime` must measure the append p95 before it
+   is adopted. This is a new disqualifier that did not exist in rev 1, and it is the one that
+   the `noeviction` withdrawal traded itself for. It weakens **Hetzner H1** specifically — the
+   cheap-compute-plus-managed-data shape — because that shape is defined by the split.
+2. **At $0 the budget cannot be met, so the group-commit trade-off is forced.** Per Chief of
+   Staff's instruction on this issue, this is surfaced rather than absorbed: it is **Decision 4
+   in §10**. The options are (a) buy co-located Postgres — §11.1's $6–7/month topology
+   also fixes this, since a Fly app and Fly MPG are same-region; (b) group-commit the log,
+   batching appends over a ~10 ms window, which trades a bounded action-acknowledgement delay
+   for throughput and **changes the durability story** — board territory, not a tuning knob; or
+   (c) accept an unmeasured append p95 on free-tier staging and state that M0 evidences nothing
+   about it. **(a) is the recommendation and it is the cheapest of the three.**
+
+> **Redis is fungible, Postgres is not.** If a shortlist ever forces a trade-off between the two
+> tiers, **protect Postgres**: its backup and point-in-time-restore story, and its co-location
+> with the app. "Postgres dies" is the one failure [ADR-0001](./0001-v1-stack.md) cannot design
+> around; "Redis dies" is a rehydrate. Every free-tier Postgres in §8 has a restore window
+> measured in hours, not days, and that is the single largest unpriced risk in the $0 topology.
 
 ### 5.2 WebSockets must survive, with no idle timeout that kills a quiet game and no buffering proxy
 
@@ -465,19 +611,26 @@ see §8 — but it cannot be the platform.
 
 ### 5.7 Constraint summary
 
-| Constraint                       |                   Fly.io                   |   Railway   |              Render              |               Hetzner                |                AWS                 |
-| -------------------------------- | :----------------------------------------: | :---------: | :------------------------------: | :----------------------------------: | :--------------------------------: |
-| 1. Redis `noeviction`            |        ⚠ pass, **not via Upstash**         |     ✅      |           ✅ **best**            | ⚠ self-run or a tier that exposes it |       ✅ custom param group        |
-| 2. WebSocket survival            | ⚠ ~30 s idle, beaten by our 10 s heartbeat |     ✅      |                ✅                |                  ✅                  | ⚠ must raise ALB default from 60 s |
-| 3. Per-PR previews               |                     ✅                     | ✅ **best** |           ✅ paid only           |     ❌ **as bought**, ⚠ as built     |             ⚠ as built             |
-| 4. M6 fleet + room-level routing |           ✅ **only native one**           |   ⚠ built   | ⚠ weakest — random WS assignment |               ✅ built               |              ✅ built              |
-| 5. < 150 ms p95 in-region        |               ✅ 35+ regions               |    ✅ 4     |               ✅ 5               |                 ✅ 6                 |               ✅ 30+               |
-| Turn-based $/U₂₄                 |                  **100**                   |     149     |               225                |              **41–62**               |              208–336               |
-| Real-time $/U₂₄ (M6)             |                   1,853                    |    4,267    |    **12,022 — disqualifying**    |              **52–128**              |               6,617                |
+| Constraint                                        |                   Fly.io                   |     Railway     |              Render              |                        Hetzner                        |                AWS                 |
+| ------------------------------------------------- | :----------------------------------------: | :-------------: | :------------------------------: | :---------------------------------------------------: | :--------------------------------: |
+| 1. Redis eviction — **preference only** (rev 2)   |     ✅ self-run or Upstash fixed plan      |       ✅        |           ✅ **best**            |                      ✅ self-run                      |       ✅ custom param group        |
+| 1b. **Co-located PG, ≤ 10 ms p95 append** (rev 2) |            ✅ MPG, same region             | ✅ same project |          ✅ same region          | ✅ H2 same host / ⚠ **H1 cross-provider, unmeasured** |           ✅ same VPC/AZ           |
+| 2. WebSocket survival                             | ⚠ ~30 s idle, beaten by our 10 s heartbeat |       ✅        |                ✅                |                          ✅                           | ⚠ must raise ALB default from 60 s |
+| 3. Per-PR previews                                |                     ✅                     |   ✅ **best**   |           ✅ paid only           |             ❌ **as bought**, ⚠ as built              |             ⚠ as built             |
+| 4. M6 fleet + room-level routing                  |           ✅ **only native one**           |     ⚠ built     | ⚠ weakest — random WS assignment |                       ✅ built                        |              ✅ built              |
+| 5. < 150 ms p95 in-region                         |               ✅ 35+ regions               |      ✅ 4       |               ✅ 5               |                         ✅ 6                          |               ✅ 30+               |
+| Turn-based $/U₂₄                                  |                  **100**                   |       149       |               225                |                       **41–62**                       |              208–336               |
+| Real-time $/U₂₄ (M6)                              |                   1,853                    |      4,267      |    **12,022 — disqualifying**    |                      **52–128**                       |               6,617                |
 
 No candidate is disqualified outright for M0–M5. **Render is disqualified for M6 on egress
-(§4).** **Upstash is disqualified as the production live-state store (§5.1).** **Hetzner fails
-Constraint 3 as bought** and passes only at the cost of building a preview system.
+(§4).** **Hetzner fails Constraint 3 as bought** and passes only at the cost of building a
+preview system, and **Hetzner H1 is now marginal on Constraint 1b** because it splits compute
+and Postgres across providers (§5.1b).
+
+**Rev 2 withdrawal, stated plainly so the record is not ambiguous:** rev 1 disqualified
+**Upstash** as the production live-state store. **That disqualification is withdrawn** — it
+rested on an eviction being a lost match, which [ADR-0001](./0001-v1-stack.md) rev 2 §6.1 made
+untrue. Upstash competes on price like anything else, and it is the Redis in the $0 topology.
 
 ---
 
@@ -516,9 +669,23 @@ make the SDK contract Workers-shaped, the same **plugin boundary** objection tha
 Colyseus in [ADR-0001](./0001-v1-stack.md) §4.2. **Recorded as a live candidate for the M6 fleet**,
 to be evaluated alongside Hetzner and Colyseus in [PER-21](/PER/issues/PER-21) — not adopted now.
 
+> **Rev 2 promotes this from a footnote to a costed alternative.** Once the budget is $0, the
+> free Workers plan's WebSocket **Hibernation API** — where an idle object is evicted from memory
+> _without dropping its sockets_ — is the only candidate anywhere in this ADR for which idle is a
+> designed-for state rather than a failure mode. §8.3 works the free-plan ceiling to **~230
+> concurrent players at $0 with no payment card**, and §11.1 prices the port that would unlock it
+> at **5–8 engineer-days** against a $7/month alternative. Still not adopted; now refused with a
+> number instead of with a preference.
+
 ---
 
 ## 7. Recommendation (board decides, §10)
+
+> **Rev 2: this section is conditional on a budget existing.** The board has set the budget to
+> **$0**, so **§8 is the operative section today** and §7 is what to buy on the day the answer
+> changes — including for any of the three asks in §11, each of which lands on the provider
+> chosen here. §7 is kept rather than deleted because "which provider, when there is money"
+> is the question the board will ask next, and the analysis that answers it is already done.
 
 **Split the decision by workload and by time.**
 
@@ -538,19 +705,36 @@ Ranked reasons:
 4. **≈ $100/month per 1,000 concurrent turn-based players**, second-cheapest managed option and
    2.45× the bare-VM floor.
 
-**Two conditions attach to this recommendation and are not optional:**
+5. **Postgres is co-located** (§5.1b) — Fly Managed Postgres runs in the same region as the
+   app, which is what makes the ≤ 10 ms p95 log append reachable. Rev 2 promotes this from an
+   unstated convenience to a named reason.
 
-- **Redis is a self-run Fly Machine under our own `redis.conf`, not Upstash** (§5.1).
-- **The presence heartbeat is ≤10 s and is sent by the server as well as the client** (§5.2).
+**Conditions attaching to this recommendation** (rev 2 reduces three to two):
+
+- **The presence heartbeat is ≤ 10 s and is sent by the server as well as the client** (§5.2).
+  Not optional — it is what defeats Fly's ~30 s idle timeout.
+- **Postgres is Fly Managed Postgres in the same region as the app**, not an external managed
+  tier (§5.1b). Not optional — an off-Fly Postgres reintroduces the cross-provider hop.
+- ~~Redis must be a self-run Machine, not Upstash~~ — **withdrawn in rev 2.** Self-run is still
+  what §3.1 prices, because it is $1.31/month cheaper and we already own the `redis.conf`, but
+  an Upstash fixed plan is now an acceptable substitute and the choice is reversible in an hour.
+
+**This recommendation is conditional on Decision 3 (regions).** If v1 serves India, Fly's
+**$0.12/GB** egress there is 6× its NA/EU rate; the turn-based U₂₄ egress line goes from $10.52
+to $63, and reason 2 above — cheap egress — stops being true where it matters most. In that
+case the shortlist should reopen with **Akamai/Linode Mumbai** and **AWS ap-south-1** in it
+(§11.3). I am not pre-deciding that here because the region question is the board's.
 
 ### 7b. Runner-up: Render
 
-If the board weights "a managed Redis with an explicit `noeviction` setting and Journal+Snapshot
-persistence, configured in a dropdown rather than by us" above everything else, Render is the
-honest second. It is the cleanest pass on Constraint 1 and it is 2.25× the cost. It is the weakest
-on Constraint 4 and **it is disqualified for M6**, so choosing it is choosing to move providers
-before the real-time milestone. That is a legitimate trade — M6 is two board gates away — but it
-should be made knowingly.
+Rev 1 made Render the runner-up primarily because its Key Value product exposes `noeviction` in
+a dropdown. **Rev 2 removes that advantage** — §5.1 is no longer a gate, so the cleanest pass on
+it earns very little. Render's remaining case is a genuinely good managed developer experience
+and a same-region Postgres (§5.1b), at 2.25× the cost, and it is still the weakest on Constraint
+4 and **disqualified for M6** (§4). Choosing Render is choosing to move providers before the
+real-time milestone. With §5.1 withdrawn, **Hetzner H2 is the stronger runner-up on the numbers**
+— $41/month, co-located Postgres, effectively free egress — and it loses only on Constraint 3,
+per-PR previews, which is a real M0 blocker rather than a preference.
 
 Railway is the best per-PR preview product in the set and a reasonable M0-only choice; it loses on
 cost (1.5× Fly), on having no dedicated-vCPU product for a 30 Hz tick at all, and on $0.05/GB. AWS
@@ -567,29 +751,192 @@ Cloudflare Durable Objects (§6). **No M6 spend is being requested here.**
 
 ---
 
-## 8. The free-tier path for M0 — and what it does not prove
+## 8. The $0 topology — what free tiers buy, and where each one stops
 
-No paid tier has been signed up for and none is proposed until the board answers §10. This is what
-we can stand up on free tiers **today**, against M0 acceptance criteria 1, 2 and 5.
+**This is the operative section**, since the board has set the budget to $0. No paid tier has
+been signed up for, no payment method has been given to any vendor, and none is proposed
+outside the three discrete asks in §11.
 
-### What we can do for $0
+### 8.1 The v1 topology on free tiers, with every ceiling named
 
-| Component                 | Free option                                            | Notes                                                                                               |
-| ------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| CI                        | GitHub Actions                                         | Free on a public repo; 2,000 min/month private. Gated on [PER-35](/PER/issues/PER-35) (which repo). |
-| `apps/web` staging        | **Cloudflare Pages** (free, unlimited egress)          | Preferred over Vercel Hobby, which forbids commercial use (§5.6).                                   |
-| `apps/web` per-PR preview | Cloudflare Pages preview deployments                   | **Genuinely free and genuinely per-PR** — but web-only.                                             |
-| `apps/realtime` staging   | **Render free web service**                            | The only candidate whose free tier runs a long-lived Node WebSocket process.                        |
-| Redis                     | Upstash free (256 MB, 500k commands/month)             | Eviction off by default → correct behaviour for a demo. Not for production (§5.1).                  |
-| Postgres                  | Neon free (0.5 GB, 100 CU-h) or Supabase free (500 MB) | Supabase free projects pause after a week idle; Neon does not. Prefer Neon.                         |
-| Sentry / PostHog / uptime | Free tiers                                             | Already the plan in [ADR-0001](./0001-v1-stack.md) §8.                                              |
+Chief of Staff asked for a topology that works **through M4**, with the ceilings stated rather
+than discovered. Each row gives the ceiling and — the part that matters — **what failure looks
+like when we reach it.**
 
-**Fly and Railway cannot be the free path.** Fly removed its free allowance for new accounts in
-October 2024 (new signups get a trial only); Railway has no free tier, with Hobby at $5/month. This
-is worth stating because it means **the free-tier path and the recommended provider are different
-providers** — the free demo is throwaway, not a first step.
+| Component                   | Free option                 | Hard ceiling                                                                                        | What happens at the ceiling                                                                                                                                     |
+| --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CI                          | GitHub Actions              | Unlimited on a public repo; **2,000 min/month** private                                             | Jobs queue, then fail. Gated on [PER-35](/PER/issues/PER-35) (which repo). Public repo removes the ceiling entirely.                                            |
+| `apps/web` + per-PR preview | **Cloudflare Pages**        | **500 builds/month**; bandwidth and requests **unlimited** **[unverified]**                         | Builds blocked until the next month. 500 builds ≈ 16 pushes/day across the whole team — not binding through M4.                                                 |
+| `apps/realtime`             | **Render free web service** | **750 instance-hours/month across all free services**; **spin-down after 15 min idle**, ~1 min wake | **The correctness failure. See §8.2.** Sockets drop, live room state is lost, reconnects resume from the Postgres log — if it is awake.                         |
+| Redis                       | **Upstash free**            | **256 MB**, **500,000 commands/month**                                                              | Commands are rejected. The room-code registry is unavailable → **nobody can create or join a lobby.** A full outage, not a rehydrate.                           |
+| Postgres (tier of record)   | **Neon free**               | **0.5 GB storage**, **100 CU-h/month**, **autosuspend after ~5 min idle**                           | Writes that grow storage fail; compute suspends until the next billing period. **This is the tier of record — an outage here loses matches, not just latency.** |
+| Errors / analytics          | Sentry free, PostHog free   | 5k errors/month, 1M events/month **[unverified]**                                                   | Sampling drops events. Non-correctness. Already the plan in [ADR-0001](./0001-v1-stack.md) §8.                                                                  |
+| Static egress               | Cloudflare Pages            | **None** — this is the one genuinely uncapped line                                                  | n/a. Worth noting that the single largest cost item in §2.1 (I12, 876 GB/month per U₂₄) is the one free tiers give away.                                        |
 
-### What this demonstrates
+**Excluded on purpose, with the reason:**
+
+- **Vercel Hobby** — the Hobby plan is restricted to non-commercial, personal use (§5.6). Not a
+  valid target for something we intend to launch, even at $0.
+- **Fly.io and Railway** — neither has a free tier. Fly withdrew its free allowance for
+  organisations created after 2024-10-07 (new accounts get trial credit only); Railway starts at
+  Hobby $5/month. **So the free path and the recommended provider are different providers** — the
+  $0 demo is throwaway, not a first step.
+- **Oracle Cloud Always Free** — the only genuinely always-on $0 VM, and excluded on the board's
+  own instruction plus a technical fact. (a) Signup **requires a credit/debit card** for identity
+  verification; the board said no cards. (b) The Always Free Ampere allowance was **halved to 2
+  OCPU / 12 GB on 2026-06-15** with no announcement. (c) Oracle **reclaims idle instances** —
+  defined as 95th-percentile CPU _and_ network _and_ memory utilisation all below 20% over 7 days,
+  which is exactly the profile of a lightly loaded room server. A host that reclaims the box is
+  the same failure as one that sleeps it, only slower and less predictable.
+
+### 8.2 The ceiling that bites first — and it is not a quota
+
+Ranked by when it bites, not by size:
+
+1. **Render free spins `apps/realtime` down after 15 minutes without traffic. This bites on day
+   one and it is a correctness failure, not a latency one.** For a stateless web app a
+   spin-down is a cold start. For a room runner holding authoritative state over persistent
+   sockets it is: every socket dropped, every in-memory room gone, every chess clock stopped.
+   The player is then told something that is not true until a rehydrate completes. **Blast
+   radius lens:** a cold start we would happily tolerate on the web tier is disqualifying on the
+   game tier, and that asymmetry is the whole content of this row. Partially mitigated — a live
+   game's own WebSocket traffic counts as activity, so a game in progress keeps the service
+   awake; it is the _quiet_ periods, and the board's first click, that lose.
+2. **Render free's 750 instance-hours/month makes two environments arithmetically impossible.**
+   730 h/month × 2 environments = **1,460 h against a 750 h allowance**, before the spin-down
+   rule is even considered. This is the direct answer to "can staging share production's box":
+   **on Render free there is only one box, and it sleeps.**
+3. **Upstash free: 500,000 commands/month.** At the 10 s presence heartbeat of
+   [ADR-0001](./0001-v1-stack.md) §6, one player is 0.1 commands/s = 259,200/month. So:
+
+   ```
+   one 2-player lobby left open 24/7   0.2 cmd/s × 2,628,000 s  =  525,600/month  →  the entire quota
+   20 concurrent players, 2 h/day      20 × 0.1 × 7,200 × 30    =  432,000/month  →  86% of the quota
+   ```
+
+   **The free Redis supports roughly 20 concurrent players for two hours a day.** Mitigation that
+   costs nothing: raise the heartbeat to 25 s **on the free staging environment only** (2.5×
+   headroom). That is safe on Render, which has no fixed idle timeout — but it is _not_ safe on
+   Fly, whose ~30 s idle timeout the 10 s heartbeat exists to beat (§5.2). Environment-specific,
+   and it must be a config value, not a constant.
+
+4. **Neon free: 0.5 GB on the tier of record.** The match log grows ~120 B/row (§2.1). At 20
+   concurrent players (10 rooms, 2 actions/s) that is **~630 MB/month at 24/7, ~170 MB/month at
+   the I3 duty cycle** — so the storage ceiling arrives in **under one month of continuous demo
+   use, or about three months of realistic use.** It bites on the one tier we cannot lose, which
+   makes the match-log retention policy ([PER-15](/PER/issues/PER-15)) a $0-topology requirement
+   rather than an M3 nicety.
+5. **Neon free: 100 CU-h/month.** At the 0.25 CU floor that is ~400 active-hours/month, i.e.
+   ~13 h/day of non-suspended database. Generous for a demo, and it interacts badly with §5.1b:
+   keeping Neon awake to meet the append budget is what burns the CU-hours.
+
+**Answer to the board's question, in one line: the ceiling that bites first is Render's 15-minute
+spin-down, on day one, and it is the only one on this list that produces a wrong answer rather
+than an error.** Everything else fails loudly.
+
+**How far this topology carries us.** M0 (with the AC1 caveat in §8.4) and M1 comfortably; M2
+Chess comfortably, since chess is 2-seat and turn-based; **M3 is where it starts to lie**, because
+M3 is resilience and spectators and the free tier cannot demonstrate either honestly — a
+spectator is +1 fan-out recipient against a 500K command quota, and reconnection is being tested
+against a server that is itself the thing disappearing. M4 (SDK docs + real-time spike) is fine
+on free tiers because the spike is a measurement harness, not a deployment. **So: $0 carries us
+to the end of M2 and makes M3 evidence untrustworthy.**
+
+### 8.3 The always-on WebSocket process — the line item $0 cannot cover
+
+Routed in from [PER-7](/PER/issues/PER-7) at design time, credit to Platform Engineer for
+raising it before writing deploy config. Three questions were asked; each is answered with a
+number.
+
+**Q1 — cheapest always-on host for one small WebSocket process, per environment.**
+
+| Option                                     | $/month, one always-on process | Verdict                                                                                                                                    |
+| ------------------------------------------ | -----------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Cloudflare Workers + Durable Objects       |                         **$0** | **The only $0 option that is not a correctness failure** — and it costs a runtime port. See below.                                         |
+| Oracle Cloud Always Free                   |                             $0 | **Excluded** — card required, idle reclamation (§8.1)                                                                                      |
+| **Fly.io `shared-cpu-1x` / 512 MB, `iad`** |                      **$5.52** | **Recommended.** $1.97 vCPU + 0.5 GB × $6.09 = $5.02, × 1.1 regional = $5.52                                                               |
+| Fly.io `shared-cpu-1x` / 256 MB            |           ~$2.02 vendor-quoted | The published floor, and **too small for a room server** — 2,000 rooms × 64 KB (I9) is 128 MB before Node's own heap. Quoted, not planned. |
+| Railway Hobby                              |                          $5.00 | Includes $5 of usage; a 512 MB Node process meters at roughly $5–7                                                                         |
+| Render Starter                             |                          $7.00 | Per service, no spin-down. Simplest migration from the free tier.                                                                          |
+| Hetzner CPX22 (2 vCPU / 4 GB)              |                          $8.63 | Most capacity per dollar, and we own the OS, the TLS renewal and the absent preview system                                                 |
+
+**Q2 — can staging share production's box, or be spun up on demand?**
+
+- **Sharing one box: rejected on blast radius.** Two processes on one VM means a staging deploy
+  can OOM or restart production. It saves $5.52/month. That is not a price worth paying to make
+  a production outage possible, and it is exactly the trade this ADR exists to make visible.
+- **On demand: yes, and this is the answer.** Fly's autostop/autostart stops a Machine when
+  traffic drains and restarts it on the next request. **Stopped Machines are not billed for CPU
+  or RAM — only for rootfs, at $0.15/GB-month.** So a staging Machine with a 1 GB rootfs costs
+  **$0.15/month asleep**, plus per-second compute while awake:
+
+  ```
+  staging, awake ~2 h/day   (2 ÷ 24) × $5.52  =  $0.46   +  $0.15 rootfs  =  $0.61/month
+  production, always on                                                   =  $5.52/month
+                                                                            ───────────
+                                                                            $6.13/month
+  ```
+
+  **$6–7/month buys a correct always-on production WebSocket server and an on-demand staging
+  one.** That is the whole gap between the current $0 position and a topology with no known
+  correctness failure in it.
+
+**Q3 — can staging legitimately sleep while only production is always-on, and what does that
+cost in pre-production confidence?**
+
+Yes — with five things named, because a sleeping staging environment cannot evidence them:
+
+1. **Reconnect-and-resume after a long quiet period** — the core M3 surface
+   ([PER-29](/PER/issues/PER-29)).
+2. **Deploy drain** — whether a live match survives a rolling deploy. §5.2 establishes that
+   _every_ provider drops WebSockets on deploy, so this is the mechanism that makes deploys
+   invisible, and it is untestable where the server sleeps anyway.
+3. **Timer correctness across an idle window** — the sharp one. A chess clock must keep running
+   while nobody moves, which is precisely the condition that puts a free instance to sleep. The
+   timer service ([PER-17](/PER/issues/PER-17)) is a server-authoritative correctness surface and
+   **cannot be validated on sleeping compute.** Mitigation that costs $0: the local
+   `docker-compose` stack does not sleep, so timer tests run there and in CI, and staging is not
+   claimed as evidence for them.
+4. **Memory drift over days of uptime** — the real value of I9, hence rooms-per-instance.
+5. **Action round-trip p95** — per [ADR-0001](./0001-v1-stack.md) §11.2 item 3, a p95 measured
+   across a cold resume measures the vendor's idle policy, not our code.
+
+**The rule this produces: staging may sleep, production may not, and no non-functional target is
+ever evidenced from sleeping compute.** Items 1–4 move to the local stack and to CI; item 5 moves
+to §11.2's load-test window.
+
+**Q4 — the per-1,000-players number against the tier that clears Q1.** Fly.io: **$100/month per
+1,000 concurrent turn-based players** ($0.100 per concurrent player-month), derived in §3.1. Note
+what §2.1 established — that is a floor, not a rate. The same $100 serves 100 players or 1,000,
+and 2,000 costs $111.
+
+**The $0 alternative that is real: Cloudflare Durable Objects.** It deserves a number rather than
+a shrug, because it is the only always-on-at-$0 path that does not fail on correctness. Durable
+Objects are on the Workers **free** plan, need **no payment card**, and their WebSocket
+Hibernation API evicts an idle object from memory **without dropping its sockets** — so idle is a
+designed-for state rather than a failure mode, which is the exact property every other free tier
+lacks. Free-plan ceiling, worked through:
+
+```
+free requests            100,000/day
+inbound WS messages      billed at a 20:1 ratio → 20 messages = 1 billable request
+10 s heartbeat           8,640 messages/player-day ÷ 20   =  432 billable requests/player-day
+sustainable concurrency  100,000 ÷ 432                    ≈  231 concurrent players, 24/7
+free duration            13,000 GB-s/day, and hibernated time is not billed at all
+```
+
+**~230 concurrent players, always-on, $0, no card** — an order of magnitude more than the
+Upstash-bounded 20 the rest of the $0 topology supports. What it costs instead is a **runtime
+port**: the Workers runtime is not Node, so `ws`, `ioredis`, `pino` and the `pg`/Drizzle path in
+[ADR-0001](./0001-v1-stack.md) §§4–6 all need replacements, and per that ADR a change of major
+tech choice is itself board-gated. Estimate: **5–8 engineer-days**, plus an unmeasured risk
+against the 30 Hz tick budget in M6 (§6). At an internal cost of a single engineer-day that is
+strictly worse value than $6–7/month — **which is the argument for §11.1, and it is an argument
+from numbers rather than from taste.** The design constraints that keep this option open at zero
+cost (transport behind the `packages/netcode` adapter, no Node-only APIs in `packages/platform-core`,
+an injected logging sink) are already imposed on [PER-7](/PER/issues/PER-7).
+
+### 8.4 What this demonstrates, against M0 AC1, AC2 and AC5
 
 - **AC2 — a WebSocket round trip on staging: yes, fully.** A Render free web service running
   `apps/realtime`, hit from a Cloudflare Pages `apps/web`, is a real round trip over a real
@@ -607,25 +954,41 @@ providers** — the free demo is throwaway, not a first step.
   **requires spend on every candidate except a self-built Hetzner path.** AC1 as written on
   [PER-3](/PER/issues/PER-3) is therefore blocked on the board's answer to §10.
 
-### What it does not prove — stated plainly
+### 8.5 What it does not prove — stated plainly
 
-1. **Nothing about the < 150 ms p95 target.** Free instances are cold-start-prone and share CPU
-   with strangers. A p95 measured on a free tier is not evidence for or against the target.
-2. **Nothing about 2,000 rooms per instance.** Free instances are 512 MB. I9 stays unmeasured.
-3. **Nothing about Redis correctness under our control.** Upstash free exposes no `redis.conf`;
-   we would be relying on the same vendor default that §5.1 disqualifies for production.
-4. **Nothing about restart survival under load.** The mechanism in
+1. **Nothing about the < 150 ms p95 target, and this is now a recorded board consequence rather
+   than a caveat.** Free instances are cold-start-prone and share CPU with strangers; a cold
+   resume lands in the p95 and measures the vendor's idle policy, not our code
+   ([ADR-0001](./0001-v1-stack.md) §11.2 item 3, accepted by the board as a consequence of $0).
+   The number must come from local infrastructure or from the §11.2 window. **Nobody should read
+   a green free-tier staging demo as evidence for or against this target, in either direction.**
+2. **Nothing about the ≤ 10 ms p95 durable log append** (§5.1b). The $0 topology fails that
+   budget structurally — cross-provider hop plus Neon autosuspend — so M0 cannot evidence it and
+   Decision 4 in §10 cannot be resolved from staging data.
+3. **Nothing about 2,000 rooms per instance.** Free instances are 512 MB. I9 stays unmeasured.
+4. **Nothing about Redis behaviour under our own configuration.** Upstash free exposes no
+   `redis.conf`. Per §5.1 this is no longer a correctness problem — an evicted key is a rehydrate
+   — but it does mean the free tier evidences nothing about how the cache behaves under memory
+   pressure, and the rehydrate path itself therefore goes untested at scale.
+5. **Nothing about restart survival under load.** The mechanism in
    [ADR-0001](./0001-v1-stack.md) §6 can be unit-tested, but not exercised at 500 rooms on a free
    tier.
-5. **Nothing about real-time egress.** 500k Redis commands/month is ~0.19 ops/s. §4 stays a
-   projection.
-6. **Nothing about the deploy story**, because a shared staging service redeployed by hand is not
+6. **Nothing about real-time egress.** 500k Redis commands/month is ~0.19 ops/s sustained. §4
+   stays a projection.
+7. **Nothing about the deploy story**, because a shared staging service redeployed by hand is not
    the per-PR isolation AC1 asks for.
+8. **Nothing about timer correctness across an idle window** (§8.3 Q3 item 3) — the one place
+   where a sleeping environment does not merely fail to prove something, but would actively
+   produce a wrong result.
 
-**Recommendation for the interim:** stand the free path up now so
-[PER-6](/PER/issues/PER-6)/[PER-7](/PER/issues/PER-7) are not idle, mark M0 AC1 explicitly
-**partially met** rather than quietly met, and do not let a green free-tier demo be read as
-evidence for any non-functional target.
+### 8.6 Interim recommendation
+
+Stand the free path up now so [PER-6](/PER/issues/PER-6)/[PER-7](/PER/issues/PER-7) are not idle;
+mark M0 AC1 explicitly **partially met** rather than quietly met; test timers and reconnection
+against the local `docker-compose` stack rather than staging; and do not let a green free-tier
+demo be read as evidence for any non-functional target. **If the board approves §11.1's
+$6–7/month, replace the Render free service with a Fly Machine before M3** — that is the
+milestone where free-tier evidence stops being merely incomplete and starts being misleading.
 
 ---
 
@@ -635,6 +998,14 @@ Everything in §3 is arithmetic over published list prices checked on 2026-09-30
 inputs in §1. **List prices are quotes, not measurements**, and three of them are marked
 **[unverified]** and must be confirmed before any commitment: Render's ~4 GB Postgres tier, a
 managed Redis tier for Hetzner H1, and Render's compute pricing above the Standard instance.
+
+> **Rev 2 adds five more unverified lines**, none of which affects §3 or §4: Cloudflare Pages'
+> 500-builds/month limit (§8.1), Sentry and PostHog free quotas (§8.1), whether Fly Managed
+> Postgres prorates below a month (§11.2), Akamai/Linode and DigitalOcean Mumbai list prices
+> (§11.3), and AWS `ap-south-1` egress (§11.3). **One rev-2 number is a model, not a quote and
+> not a measurement: the cross-provider append p95 in §5.1b.** It is decomposed into its terms
+> so the reasoning can be attacked, but the only thing that settles it is a measurement, and
+> §11.2's Test A is the cheapest way to get one.
 
 > **Measurement owed.**
 >
@@ -670,32 +1041,185 @@ The board's two actionable levers are therefore: **for turn-based, nothing — i
 
 Escalated to Chief of Staff on [PER-2](/PER/issues/PER-2). Not decided here.
 
-**Decision 1 — provider for M0–M5.** Recommendation: **Fly.io**, with the two conditions in §7a.
-Alternatives on the table: Render (cleanest Redis, 2.25×, disqualified for M6), Railway (best
-previews, 1.5×, no dedicated CPU), Hetzner (cheapest, fails per-PR previews as bought), AWS (most
-capable, 2–3×, most of our attention).
+> **Rev 1's ask is withdrawn.** Rev 1 requested **$250/month with a $400 ceiling**, written
+> before the board answered. **The board has answered: $0.** That request is withdrawn in full
+> and replaced by the four decisions below, of which only Decision 2 involves money and it
+> involves **$6–7/month**, not $250. The $250 model remains valid and is preserved in §3.1 and
+> §7 as the answer to "what would it cost to run this properly", which is a different question
+> from "what should we spend now".
 
-**Decision 2 — monthly infrastructure budget through M5.** Requesting **$250/month**, with a hard
-ceiling of **$400/month** above which I return to the board.
+**Decision 1 — provider, for the day a budget exists.** Recommendation: **Fly.io**, with the
+conditions in §7a (server-side heartbeat; co-located Fly Managed Postgres). Alternatives:
+Hetzner H2 (cheapest at $41, co-located data, fails per-PR previews as bought), Render (simplest,
+2.25×, disqualified for M6), Railway (best previews, 1.5×, no dedicated CPU), AWS (most capable,
+2–3×, most of our attention). **Not urgent** — nothing is blocked on it while §11.1 is unanswered.
 
-| Line                                                                            | $/month |
-| ------------------------------------------------------------------------------- | ------: |
-| Production, up to 1,000 concurrent (§3.1)                                       |     100 |
-| Staging (1 app machine + Redis + MPG Basic)                                     |      60 |
-| Per-PR previews (ephemeral, ~30 PR-days/mo)                                     |      25 |
-| Sentry, PostHog, uptime monitor                                                 |       0 |
-| Subtotal                                                                        | **185** |
-| Requested, absorbing the three **[unverified]** lines and a duty cycle above I3 | **250** |
+**Decision 2 — the three discrete asks in §11.** Each is independent; approving one does not
+commit the board to the others.
+
+| Ask                                             | Shape            |                                     Number | Recommendation                                     |
+| ----------------------------------------------- | ---------------- | -----------------------------------------: | -------------------------------------------------- |
+| §11.1 Always-on `apps/realtime`, prod + staging | standing monthly |                             **$6–7/month** | **Approve.** Smallest and most urgent of the three |
+| §11.2 M5 load test window                       | one-off          | **$8** capacity / **$100 cap** for the p95 | Approve the $8 now; defer the $100 to M5           |
+| §11.3 Mumbai-region M6 fleet                    | standing monthly |              **$75/month** pilot (M6 only) | **Defer to the M6 gate.** Costed, not requested    |
 
 **Decision 3 — which regions v1 serves.** Raised in §5.5 as a question the board may not realise
-it is answering. It is a product decision with a cost, and it changes the weighting of Decision 1.
+it is answering, and reinforced by §11.3. It is a product decision with a cost: if the answer is
+India, **Fly's $0.12/GB India egress is 6× its NA/EU rate**, which adds $53/month per U₂₄
+turn-based and **$7,900/month** per U₂₄ real-time, and it changes the answer to Decision 1.
 
-**Not requested here:** any M6 spend, any signup, any domain purchase. M6 hosting is gated with M6
-itself.
+**Decision 4 — durability at $0: does the action hot path keep its ≤ 10 ms p95 log append?**
+New in rev 2, forced by [ADR-0001](./0001-v1-stack.md) rev 2 §6.2 landing a synchronous durable
+write on the action path while the budget is $0. §5.1b shows the free topology cannot meet it.
+Three options, and this is a durability decision rather than a tuning knob, so it is the board's:
+
+| Option                                            | Cost                           | Consequence                                                                                                                            |
+| ------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **(a) Buy co-located Postgres** — **recommended** | included in §11.1's $6–7/month | Budget met (~3–5 ms modelled). No design change. Cheapest of the three.                                                                |
+| (b) Group-commit the log over a ~10 ms window     | $0                             | Bounded added latency per action; **the durability story changes** — an acknowledged action may not yet be on disk. Needs its own ADR. |
+| (c) Accept an unmeasured append p95 through M0–M2 | $0                             | M0 evidences nothing about it and the debt lands in M3, the milestone that already cannot be evidenced at $0 (§8.2).                   |
+
+**Not requested here:** any M6 spend, any vendor signup, any domain purchase, any payment card on
+file beyond what Decision 2 explicitly authorises. M6 hosting stays gated with M6 itself.
 
 **Until the board answers**, [PER-6](/PER/issues/PER-6) (CI + preview deploys) and
-[PER-7](/PER/issues/PER-7) (environments) proceed only as far as the free-tier path in §8 allows,
-and M0 AC1 is marked **partially met**, not met.
+[PER-7](/PER/issues/PER-7) (environments) proceed as far as the $0 topology in §8 allows, and M0
+AC1 is marked **partially met**, not met.
+
+---
+
+## 11. What $0 cannot buy — three priced proposals
+
+Chief of Staff asked for these as **discrete proposals**, each one approvable on its own. They
+are ordered by urgency, not by size. Only §11.1 is being asked for now.
+
+### 11.1 An always-on process for `apps/realtime` — **$6–7/month, standing**
+
+**The problem, in one sentence:** every free compute tier sleeps on idle, and a room runner that
+sleeps drops its sockets and loses authoritative state, which is a correctness failure rather
+than a latency one (§8.2).
+
+| Line                                                    |  $/month |
+| ------------------------------------------------------- | -------: |
+| Production — Fly `shared-cpu-1x` / 512 MB, `iad` (§8.3) |     5.52 |
+| Staging — same Machine with autostop, ~2 h/day awake    |     0.61 |
+| Contingency (rootfs growth, a second small Machine)     |     0.87 |
+| **Requested**                                           | **7.00** |
+
+**What it buys, specifically:** a staging WebSocket server that does not drop connections when a
+game goes quiet; timer-service validation ([PER-17](/PER/issues/PER-17)) in a real environment
+rather than only in `docker-compose`; a board demo link whose first click does not wait ~50 s;
+and — via Fly Managed Postgres in the same region — the ≤ 10 ms p95 log append, which makes
+Decision 4 option (a) available for free inside this same ask.
+
+**What it does not buy:** anything about the < 150 ms p95 target at scale (that is §11.2), per-PR
+preview isolation for AC1 (that needs a preview environment per PR, ~$25/month on Fly, **not
+requested here**), or any M6 capability.
+
+**The $0 alternative, honestly stated:** port the room runner to Cloudflare Workers + Durable
+Objects — genuinely $0, genuinely always-on, no payment card, ~230 concurrent players on the free
+plan (§8.3). It costs **5–8 engineer-days**, a board-gated change of major tech choice
+([ADR-0001](./0001-v1-stack.md) §§4–6), and an unmeasured risk against the M6 tick budget. **At
+any plausible internal cost of an engineer-day, $7/month is the cheaper answer** — but the option
+is real, it is kept open at zero cost by constraints already placed on
+[PER-7](/PER/issues/PER-7), and the board may prefer it if the answer to spend is a permanent no.
+
+**If this is refused:** staging keeps the Render free service, M0 AC2 and AC5 still demonstrate,
+and the cost is paid in M3 — reconnection, spectators and timers cannot be evidenced on
+infrastructure that is itself the thing disappearing (§8.2). That is a deferral, not a blocker,
+and it is survivable; it should just be a choice rather than an accident.
+
+### 11.2 The M5 load test — **a one-off window, not a standing cost**
+
+The M5 acceptance criterion is **2,000 concurrent rooms at p95 < 150 ms**. That is 4,000
+WebSocket clients against one instance, and it cannot run on free tiers: Upstash free would be
+exhausted in **under 10 minutes** (500K commands against 1,800 ops/s), and a free 512 MB instance
+cannot hold 2,000 rooms at all. Per Chief of Staff's preference this is priced as a **time-boxed
+window**, and it splits into two tests that are worth buying separately.
+
+**Test A — capacity and determinism: does our code hold 2,000 rooms?** Runs on any hardware,
+because it measures our room runner rather than a vendor. Hetzner bills hourly, so:
+
+```
+system under test   1 × CPX32 (4 vCPU/8 GB, app + Redis + PG)  €13.49/mo ÷ 730  =  $0.020/h
+load generators     2 × CCX33 (8 dedicated vCPU each)          €48.49/mo ÷ 730  =  $0.144/h
+egress              within Hetzner's included traffic                            =  $0
+                                                                                   ─────────
+                                                                                   $0.164/h
+48-hour window (setup, dry runs, 3 measured runs, teardown)                      =  $7.87
+```
+
+**≈ $8 for a 48-hour window.** It answers **I7 and I9** — the two unmeasured turn-based inputs
+that §9 shows can move the whole model — and it de-risks §3 for the price of a coffee. **This is
+the one I would approve today**, independently of everything else in this ADR.
+
+**Test B — the acceptance criterion itself: p95 < 150 ms on production-shaped infrastructure.**
+Must run on whatever production actually is, because a p95 measured on different hardware is not
+evidence for the target. Priced on Fly (§3.1 rates):
+
+```
+SUT app         performance-2x (2 perf vCPU/4 GB) × 1.1 region                   =  $0.131/h
+Redis Machine   shared-cpu-1x / 1 GB × 1.1                                       =  $0.012/h
+load generators 2 × Hetzner CCX33, hourly                                        =  $0.144/h
+egress          2,000 rooms ≈ 800 KB/s = 2.81 GB/h × $0.02                       =  $0.056/h
+                                                                                   ─────────
+                                                                                   $0.343/h
+48-hour window                                                                   =  $16.46
+Fly Managed Postgres Basic — may not prorate below a month  [unverified]         =  $38.00
+                                                                                   ─────────
+                                                                                   $54.46
+```
+
+**Ask: a $100 one-off cap**, covering a managed-Postgres month, one re-run and one second region.
+**Defer it to M5** — it is worthless before I7 and I9 are measured, and Test A measures them.
+
+**The real gate is not the money, it is the payment instrument.** Fly has no free tier, so even a
+$17 window requires a card on file. That is the board's decision to take, and it is why this is
+here rather than in a purchase order. If the board prefers to avoid a card entirely, **Test A on
+Hetzner still runs** — Hetzner also requires a payment method, so the honest statement is: **no
+load test of any kind is possible without one vendor relationship somewhere.**
+
+### 11.3 A Mumbai-region game-server fleet for M6 — **$75/month pilot, costed not requested**
+
+M6 is board-gated and not open. This is costed now because §5.5's region question is live today
+and the answer changes Decision 1.
+
+**Hetzner, the cheapest provider in §4, has no India region** — its nearest is Singapore, roughly
+60–90 ms from Mumbai **[unverified]**, which is survivable for turn-based inside a 150 ms budget
+and wrong for a 30 Hz real-time room. So the India answer is a different provider from the EU
+answer, and the pattern from §4 repeats: **bundled-transfer VPS providers beat PaaS providers by
+an order of magnitude, because the bill is egress.**
+
+**Pilot — one dedicated-CPU node in Mumbai/Bangalore, ~100 concurrent players (≈ 8 rooms):**
+
+| Provider                              | Compute                                    | Egress @ 100 players                                   | **$/month** |
+| ------------------------------------- | ------------------------------------------ | ------------------------------------------------------ | ----------: |
+| **Akamai/Linode Mumbai, Dedicated**   | ~$36–72 **[unverified]**, bundled transfer | overage $0.005/GiB; **$0 at the 10 KB/s design point** |  **$36–72** |
+| DigitalOcean Bangalore, CPU-Optimised | ~$84 **[unverified]**                      | overage $0.01/GiB; $0 at the design point              |        ~$84 |
+| Fly.io `bom`                          | ~$28 (0.5 core equivalent)                 | 7.88 TB @ $0.12/GB = **$946** at the ceiling           |   **~$974** |
+| AWS `ap-south-1`                      | ~$29                                       | 7.88 TB @ ~$0.109/GB **[unverified]** = $862           |       ~$891 |
+
+**Ask, if and when M6 opens: $75/month.** Note the shape of that table — the PaaS options are
+**13× the VPS options for the same 100 players**, entirely on egress, and the gap widens linearly
+with players.
+
+**At full U₂₄ (1,000 concurrent players in Mumbai), for sizing only:**
+
+```
+Linode Mumbai   2 × Dedicated 4 vCPU $144  +  68.8 TB overage × $0.005/GiB  ≈  $488/mo  ($0.49/player-mo)
+  ... at the 10 KB/s design point and the I3 duty cycle, inside bundled transfer ≈  $144/mo  ($0.14)
+DigitalOcean    $168 compute  +  ~69 TB × $0.01/GiB                          ≈  $858/mo  ($0.86)
+AWS ap-south-1  $29 compute   +  78.8 TB × ~$0.109/GB                        ≈ $8,646/mo  ($8.65)
+Fly.io bom      $277 compute  +  78.8 TB × $0.12/GB                          ≈ $9,738/mo  ($9.74)
+```
+
+**The finding the board should take from this:** serving India real-time on a PaaS costs
+**~20× more** than on a bundled-transfer VPS, and the M6 fleet provider for India is
+**Akamai/Linode or DigitalOcean**, not Fly, not AWS, and not Hetzner — which has no region there.
+This does not change the M0–M5 recommendation (§7a), because the transport-adapter seam in
+[ADR-0001](./0001-v1-stack.md) §4.1 is exactly what lets the fleet live somewhere other than the
+lobby. **It does mean that if v1's market is India, the turn-based recommendation should be
+re-run with Fly's $0.12/GB India rate applied** — Decision 3.
 
 ---
 
@@ -711,21 +1235,33 @@ and M0 AC1 is marked **partially met**, not met.
   implementers will find them: a CDN in front of static assets, a match-log retention policy, and
   a server-side heartbeat.
 
+- **Rev 2:** the board can see the distance between $0 and correct, and it is **$7/month** — a
+  number small enough to decide without a model, backed by a model if it wants one.
+
 **Harder**
 
-- We are committed to a self-run Redis on Fly rather than a managed one — one more process we own,
-  chosen deliberately over a `noeviction` guarantee we cannot pin.
 - The free-tier path and the recommended provider are different providers, so the M0 demo is
   throwaway rather than a first step.
 - M0 AC1 cannot be fully met without spend. That has to be said to the board rather than papered
   over with a web-only preview.
+- **Rev 2:** at $0, M3 evidence is untrustworthy (§8.2) and the ≤ 10 ms p95 append budget is
+  unmeasurable (§5.1b). Both are stated rather than absorbed, which means they arrive as board
+  decisions instead of as milestone slippage.
+- **Rev 2:** co-location of Postgres with the app is now a hosting constraint. It costs nothing
+  on any single provider and it removes Hetzner H1 — the cheap-compute-plus-managed-data shape —
+  from serious contention unless someone measures the cross-provider hop.
 
 **Committed to**
 
 - Fronting `apps/web` static output with a free-egress CDN, or re-deriving §3.
-- A match-log retention policy before the log grows past one U₂₄-month.
-- A ≤10 s heartbeat in both directions on every WebSocket connection.
-- Not using Upstash for authoritative live room state, in any environment that matters.
+- A match-log retention policy before the log grows past one U₂₄-month — **and, at $0, before it
+  passes Neon free's 0.5 GB, which arrives sooner** (§8.2).
+- A ≤10 s heartbeat in both directions on every WebSocket connection, **as an environment config
+  value rather than a constant**, since the $0 topology wants 25 s on Render and Fly requires
+  ≤ 10 s (§8.2).
+- Keeping `packages/platform-core` and the room runner free of Node-only APIs, so the Durable
+  Objects escape hatch in §11.1 stays open at zero cost.
+- Not claiming any non-functional target from a free tier, in either direction.
 
 **Cost to reverse**
 
@@ -749,6 +1285,16 @@ and M0 AC1 is marked **partially met**, not met.
   another → re-run §3 and §4.
 - **We need a region Fly does not have**, or Fly's $0.12/GB Africa & India rate becomes material
   → reopen Decision 1.
-- **Upstash exposes a real `maxmemory-policy` control** → the §5.1 disqualification lifts.
 - **Render publishes egress pricing competitive with Fly's $0.02/GB** → the M6 disqualification in
   §4 lifts.
+- **The board changes the budget from $0** → §7 stops being hypothetical, §8 stops being
+  operative, and Decision 4 resolves to option (a) automatically.
+- **Any free tier in §8.1 changes its ceiling** — Render's spin-down window, Upstash's 500K
+  commands, Neon's 0.5 GB — → re-run §8.2's ranking; the ceiling that bites first can move.
+- **The durable-log-append budget is measured above 10 ms p95 on a provisioned tier** → Decision
+  4 reopens with option (b), group commit, and that needs its own ADR.
+- **[ADR-0001](./0001-v1-stack.md) §6 makes Redis authoritative again** → §5.1's withdrawn gate
+  comes back and Upstash is re-disqualified. Recorded so the reversal is a decision rather than a
+  rediscovery.
+- **v1's market is confirmed as India** → re-run §3 with Fly's $0.12/GB India egress, and reopen
+  Decision 1 with Akamai/Linode Mumbai in the shortlist (§11.3).
