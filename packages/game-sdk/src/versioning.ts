@@ -88,7 +88,11 @@ export type VersionPinFailure =
  */
 export function checkVersionPin(
   pin: VersionPin,
-  available: { readonly gameId: string; readonly version: string; readonly sdkContractVersion: number },
+  available: {
+    readonly gameId: string
+    readonly version: string
+    readonly sdkContractVersion: number
+  },
 ): Result<void, VersionPinFailure> {
   if (pin.gameId !== available.gameId) {
     return err({ code: 'game_mismatch', pinned: pin.gameId, available: available.gameId })

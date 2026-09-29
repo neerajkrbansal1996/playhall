@@ -15,6 +15,7 @@ import type {
   RealtimeClientModule,
   TurnBasedClientModule,
 } from './client.js'
+import type { DisconnectPolicy } from './disconnect.js'
 import type { GameEvent } from './events.js'
 import type { StandardActionErrorCode } from './errors.js'
 import { type GameManifest, validateManifest } from './manifest.js'
@@ -88,10 +89,23 @@ export class GameDefinitionError extends Error {
 
 function assertModule(
   manifest: GameManifest<never>,
+  server: { readonly disconnectPolicy: DisconnectPolicy },
   kind: 'turn-based' | 'realtime',
   expectedTurnModels: readonly string[],
 ): void {
   const problems: string[] = []
+
+  // Cross-checks that span manifest and server, so neither can validate alone.
+  // A policy of `substitute_bot` on a game with no bots strands the seat: the
+  // grace window expires and the platform has nothing to put in it.
+  if (server.disconnectPolicy.onGraceExpired === 'substitute_bot' && !manifest.supportsBots) {
+    problems.push(
+      "disconnectPolicy.onGraceExpired is 'substitute_bot' but the manifest does not set supportsBots",
+    )
+  }
+  if (server.disconnectPolicy.graceMs < 0) {
+    problems.push('disconnectPolicy.graceMs must not be negative')
+  }
 
   if (!isContractSupported(manifest.sdkContractVersion)) {
     problems.push(
@@ -129,12 +143,9 @@ export function defineTurnBasedGame<
   TEvent extends GameEvent = GameEvent,
   TErrorCode extends string = StandardActionErrorCode,
 >(
-  module: Omit<
-    TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode>,
-    'kind'
-  >,
+  module: Omit<TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode>, 'kind'>,
 ): TurnBasedGameModule<TState, TAction, TView, TSettings, TEvent, TErrorCode> {
-  assertModule(module.manifest as GameManifest<never>, 'turn-based', [
+  assertModule(module.manifest as GameManifest<never>, module.server, 'turn-based', [
     'sequential',
     'simultaneous',
   ])
@@ -154,6 +165,6 @@ export function defineRealtimeGame<
 >(
   module: Omit<RealtimeGameModule<TWorld, TInput, TSnapshot, TSettings, TEvent>, 'kind'>,
 ): RealtimeGameModule<TWorld, TInput, TSnapshot, TSettings, TEvent> {
-  assertModule(module.manifest as GameManifest<never>, 'realtime', ['realtime'])
+  assertModule(module.manifest as GameManifest<never>, module.server, 'realtime', ['realtime'])
   return { kind: 'realtime', ...module }
 }

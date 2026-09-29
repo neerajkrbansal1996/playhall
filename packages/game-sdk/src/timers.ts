@@ -57,22 +57,32 @@ export type TimerCommand =
   | { readonly op: 'pause'; readonly timerId: TimerId }
   | { readonly op: 'resume'; readonly timerId: TimerId }
 
+/**
+ * The helpers return their narrowed branch rather than the whole union, so a
+ * caller can read `setTimer(...).delayMs` without re-narrowing something it
+ * just built.
+ */
+export type SetTimerCommand = Extract<TimerCommand, { op: 'set' }>
+export type ClearTimerCommand = Extract<TimerCommand, { op: 'clear' }>
+export type PauseTimerCommand = Extract<TimerCommand, { op: 'pause' }>
+export type ResumeTimerCommand = Extract<TimerCommand, { op: 'resume' }>
+
 export function setTimer(
   timerId: TimerId,
   delayMs: number,
   seatId: SeatId | null = null,
-): TimerCommand {
+): SetTimerCommand {
   return { op: 'set', timerId, seatId, delayMs }
 }
 
-export function clearTimer(timerId: TimerId): TimerCommand {
+export function clearTimer(timerId: TimerId): ClearTimerCommand {
   return { op: 'clear', timerId }
 }
 
-export function pauseTimer(timerId: TimerId): TimerCommand {
+export function pauseTimer(timerId: TimerId): PauseTimerCommand {
   return { op: 'pause', timerId }
 }
 
-export function resumeTimer(timerId: TimerId): TimerCommand {
+export function resumeTimer(timerId: TimerId): ResumeTimerCommand {
   return { op: 'resume', timerId }
 }

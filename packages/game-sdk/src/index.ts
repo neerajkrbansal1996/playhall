@@ -34,11 +34,7 @@ export type { Rng } from './rng.js'
 export { createContextRng, createMatchSeed, createRng, deriveSeed } from './rng.js'
 
 export type { GameContext, GameContextInit, RealtimeContext } from './context.js'
-export {
-  FORBIDDEN_GLOBALS_IN_GAMES,
-  createGameContext,
-  createRealtimeContext,
-} from './context.js'
+export { FORBIDDEN_GLOBALS_IN_GAMES, createGameContext, createRealtimeContext } from './context.js'
 
 export type {
   ActionError,
@@ -69,7 +65,15 @@ export {
 export type { Seat, SeatOccupant, SeatRoster, TeamMode } from './seats.js'
 export { findSeat, seatIds, teamSeats } from './seats.js'
 
-export type { TimerCommand, TimerKind, TimerSpec } from './timers.js'
+export type {
+  ClearTimerCommand,
+  PauseTimerCommand,
+  ResumeTimerCommand,
+  SetTimerCommand,
+  TimerCommand,
+  TimerKind,
+  TimerSpec,
+} from './timers.js'
 export { clearTimer, pauseTimer, resumeTimer, setTimer } from './timers.js'
 
 export type { Viewer } from './viewer.js'
@@ -141,6 +145,7 @@ export type {
 export type {
   AnyRealtimeClientModule,
   AnyTurnBasedClientModule,
+  ErasedLazyComponent,
   GameComponent,
   GameSceneProps,
   GameViewProps,
