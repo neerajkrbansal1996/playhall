@@ -2,15 +2,23 @@
 /**
  * One deploy entry point for every environment and every target.
  *
- * The hosting provider is a board decision that is still open (PER-2), and this
- * issue is explicitly told not to sign up for anything. That is a constraint on
- * *which provider*, not on the pipeline — so the pipeline is built now against
- * a provider interface, and the provider is one `DEPLOY_PROVIDER` variable plus
- * its secrets away.
+ * The board chose **Fly.io** for M0–M5 with $120/month of spend authority
+ * (PER-2, detail on PER-38), and named **per-PR previews the top spend
+ * priority**. `fly` is therefore the provider to set; the others are kept
+ * because they are still the right answer for specific jobs — Cloudflare Pages
+ * for free-egress static hosting, Render for a free staging service.
+ *
+ * The indirection is not hedging. A provider is one `DEPLOY_PROVIDER` variable,
+ * so switching hosts is a settings change, and no workflow names a vendor. That
+ * matters at M5, when the region decision is revisited.
+ *
+ * Nothing here provisions infrastructure. Apps, `fly.toml`, Redis and Postgres
+ * belong to PER-7 — a deploy script that creates billable resources on demand
+ * is how a $120/month cap becomes a $400 one.
  *
  * Contract:
- *   in  — env DEPLOY_PROVIDER, DEPLOY_ENV (preview|production), DEPLOY_TARGET
- *         (web|realtime), plus whatever the chosen provider needs.
+ *   in  — env DEPLOY_PROVIDER, DEPLOY_ENV (preview|staging|production),
+ *         DEPLOY_TARGET (web|realtime), plus whatever the provider needs.
  *   out — `url` and `status` on $GITHUB_OUTPUT. `status` is one of
  *         `deployed` | `not_configured`. Exit code is non-zero only for a real
  *         deploy failure; "no provider configured" is a clean skip, because a
@@ -23,23 +31,85 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync } from 'node:fs'
 
 const provider = (process.env.DEPLOY_PROVIDER ?? 'none').trim().toLowerCase()
-const environment = requireOneOf('DEPLOY_ENV', ['preview', 'production'])
+const environment = requireOneOf('DEPLOY_ENV', ['preview', 'staging', 'production'])
 const target = requireOneOf('DEPLOY_TARGET', ['web', 'realtime'])
 
 const PROVIDERS = {
   /**
-   * The current, deliberate default. Keeps PRs and `main` merges green while
-   * the provider decision is open, and states the blocker in the run log rather
-   * than leaving a mystery skip.
+   * The default until the Fly apps and secrets exist. Keeps PRs and `main`
+   * green and states *why* in the run log, rather than leaving a mystery skip
+   * that everyone learns to scroll past.
    */
   none() {
     console.log(
       '::notice title=Deploy not configured::No hosting provider is configured, so the ' +
-        `${environment} deploy of "${target}" was skipped. The provider is a board decision ` +
-        'tracked on PER-2. To activate: set the repo variable DEPLOY_PROVIDER and the ' +
-        "provider's secrets (see docs/ci-cd.md, Activating deploys). No code change needed.",
+        `${environment} deploy of "${target}" was skipped. The board chose Fly.io with ` +
+        '$120/month of spend authority (PER-2, detail on PER-38); what is missing is the ' +
+        'provisioned apps and secrets, which are PER-7. To activate: set DEPLOY_PROVIDER=fly ' +
+        'plus FLY_API_TOKEN and the FLY_APP_* names (see docs/ci-cd.md, Activating deploys). ' +
+        'No code change needed.',
     )
     return { status: 'not_configured', url: '' }
+  },
+
+  /**
+   * Fly.io — **the board's choice** for M0–M5 ($120/month authorised on
+   * [PER-2], detail on PER-38). Region `bom` (Mumbai) as the interim placement;
+   * "which regions v1 serves" is deferred to M5 and moving a turn-based
+   * deployment is cheap.
+   *
+   * Handles both targets, which is the point: Fly runs persistent processes, so
+   * `apps/realtime` can hold WebSocket connections and later a 30 Hz tick loop
+   * on dedicated CPU. That is what Pages and serverless could not do.
+   *
+   * Two things this adapter does *not* do, deliberately:
+   *   * it does not create apps or write `fly.toml` — provisioning is PER-7's
+   *     staging/environment work, and a deploy script that silently creates
+   *     billable infrastructure is how a $120 cap becomes a $400 surprise;
+   *   * it does not front static assets with a CDN. Static egress is ~1.7× the
+   *     WebSocket egress (ADR-0003 §2.1) and must sit behind free-egress CDN.
+   *     Also PER-7.
+   */
+  fly() {
+    requireEnv(['FLY_API_TOKEN'])
+
+    const appVar = target === 'web' ? 'FLY_APP_WEB' : 'FLY_APP_REALTIME'
+    const app = process.env[appVar]
+    if (!app) {
+      throw new Error(
+        `DEPLOY_PROVIDER=fly needs ${appVar} (the Fly app name for "${target}" in the ` +
+          `${environment} environment). Apps are provisioned on PER-7, not created here — a ` +
+          'deploy script that creates billable infrastructure on demand is how a $120/month ' +
+          'cap becomes a surprise.',
+      )
+    }
+
+    const config = process.env.FLY_CONFIG ?? `apps/${target === 'web' ? 'web' : 'realtime'}/fly.toml`
+    if (!existsSync(config)) {
+      throw new Error(
+        `DEPLOY_PROVIDER=fly needs ${config}, which does not exist. The Fly app definition ` +
+          '(including the `bom` primary region and the health check) is provisioned on PER-7.',
+      )
+    }
+
+    run('flyctl', [
+      'deploy',
+      '--config',
+      config,
+      '--app',
+      app,
+      // Build on Fly's builders rather than the runner: no Docker layer cache
+      // to maintain in Actions, and it keeps the runner off the critical path.
+      '--remote-only',
+      // Fail rather than hang. The health probe is the readiness signal, but a
+      // deploy that never converges should not burn the whole job timeout.
+      '--wait-timeout',
+      '300',
+    ])
+
+    // Fly app hostnames are deterministic, so there is nothing to parse out of
+    // CLI output that could drift between flyctl versions.
+    return { status: 'deployed', url: `https://${app}.fly.dev` }
   },
 
   /**
@@ -65,7 +135,7 @@ const PROVIDERS = {
     requireEnv(['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'])
 
     const project = process.env.CLOUDFLARE_PAGES_PROJECT ?? 'playhall-web'
-    run('pnpm', ['--filter', '@atrium/web', 'build'])
+    run('pnpm', ['--filter', './apps/web', 'build'])
 
     // `--branch` is what makes Pages treat this as a preview rather than a
     // production deployment; its production branch is configured on the project.
@@ -104,9 +174,9 @@ const PROVIDERS = {
     if (environment === 'preview') {
       throw new Error(
         'DEPLOY_PROVIDER=render cannot make a per-PR preview on the free tier: preview ' +
-          'environments are a paid Render feature. ADR-0003 §8 records this — per-PR ' +
-          'previews are web-only until the board answers the budget question (PER-2), and ' +
-          'M0 AC1 is "partially met", not met.',
+          'environments are a paid Render feature. Since the board authorised $120/month on ' +
+          'Fly.io and named per-PR previews the top spend priority, use DEPLOY_PROVIDER=fly ' +
+          'for previews. Render stays available for a free staging service.',
       )
     }
 

@@ -203,8 +203,81 @@ jobs:
     needs: [pr-hygiene, lint, typecheck, boundaries, unit, testkit, integration, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Needed only to post the gate table on the PR (ADR-0004 Decision 2).
+      # `workflow_call` inherits the caller's permissions, so `main.yml` and
+      # `release.yml` must not narrow `pull-requests` below `write`.
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ADR-0004 Decision 2: make "green CI" observable in the PR itself. With
+      # no required checks, a reviewer has to *choose* to look — so the result
+      # goes where the review already is, not in the Actions tab.
+      - name: Post the gate table on the PR
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const marker = '<!-- playhall-ci-gate -->'
+            const needs = JSON.parse(process.env.GATE_RESULTS)
+            const skipAllowed = new Set(['pr-hygiene'])
+
+            const icon = { success: 'pass', failure: 'FAIL', cancelled: 'cancelled', skipped: 'skipped' }
+            const rows = Object.entries(needs)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([job, info]) => {
+                const result = info?.result ?? 'unknown'
+                const ok = result === 'success' || (result === 'skipped' && skipAllowed.has(job))
+                return `| \`${job}\` | ${ok ? '✅' : '❌'} ${icon[result] ?? result} |`
+              })
+
+            const failing = Object.entries(needs).filter(([job, info]) => {
+              const result = info?.result ?? 'unknown'
+              return !(result === 'success' || (result === 'skipped' && skipAllowed.has(job)))
+            })
+
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`
+
+            const body = [
+              marker,
+              `### CI gates — \`${context.sha.slice(0, 7)}\``,
+              '',
+              '| gate | result |',
+              '| --- | --- |',
+              ...rows,
+              '',
+              failing.length === 0
+                ? 'All gates passed.'
+                : `**${failing.length} gate(s) not passing.** Merging this PR is a visible choice, ` +
+                  'not a blocked one — `main` has no required checks (ADR-0004).',
+              '',
+              `[Full run](${runUrl}) · a gate marked \`skipped\` other than \`pr-hygiene\` counts as a failure.`,
+            ].join('\n')
+
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+            })
+            const mine = existing.find((comment) => comment.body?.includes(marker))
+
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body })
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              })
+            }
+
+      # Last step, so the comment above is posted even when the gates failed.
       - name: Assert every gate passed
         env:
           GATE_RESULTS: ${{ toJSON(needs) }}

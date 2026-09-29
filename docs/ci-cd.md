@@ -16,7 +16,7 @@ and the provider choice is board-gated on [PER-2](/PER/issues/PER-2).
 | ------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
 | `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The seven gates plus the `ci-gate` aggregate.                    |
 | `.github/workflows/preview.yml` | PR opened / pushed / reopened                         | Preview deploy per target, health-probed, URL posted on the PR.          |
-| `.github/workflows/main.yml`    | push to `main`                                        | Re-runs the gates on the merge commit **and** audits for a direct push.  |
+| `.github/workflows/main.yml`    | push to `main`                                        | Re-runs the gates, audits for a direct push, then deploys to **staging**. |
 | `.github/workflows/release.yml` | push of a `v*` tag, manual                            | Re-runs the gates, then deploys web and realtime to production.          |
 | `.github/workflows/uptime.yml`  | cron every ~10 min, manual                            | Probes production health; opens/closes one GitHub issue per outage.      |
 
@@ -29,17 +29,23 @@ the PR". Two PRs can each be green alone and red together, and with no branch pr
 nothing forces a rebase before merge. A tag can also point at any commit, including one
 that never saw `main`.
 
-### Deploys are tag-triggered, not `main`-triggered
+### `main` goes to staging; production comes from a tag
 
 PER-6 as originally written asked for "`main` merges deploy to production".
-[ADR-0004](adr/0004-pr-gate-without-branch-protection.md) §Decision 5 postdates it and
-names PER-6 as its implementation: **releases are cut from tags, never from "whatever is
-on `main`".**
+[ADR-0004](adr/0004-pr-gate-without-branch-protection.md) §Decision 5 postdates it and the
+CTO amended the scope on the issue: **`main` -> staging stays automatic, production is cut
+from a tag.**
 
-That is not bureaucracy, it is the containment for the whole ADR. `main` cannot be
-protected, so an unreviewed commit *can* land there. If `main` auto-deployed, the blast
-radius of one bad push would be production. With a tag in the way, a human has to cut
-`vX.Y.Z` first.
+That split is the containment for the whole ADR. `main` cannot be protected, so an
+unreviewed commit *can* land there. If `main` auto-deployed to production, one direct push
+— including an accidental one — would be live with no review and no gate. With a tag in
+the way, a human has to cut `vX.Y.Z` first.
+
+Staging deploys additionally wait on `push-audit`, not just the gates: an unreviewed commit
+should not reach the environment the board clicks on either.
+
+ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
+free, `main` -> production can come back.
 
 ## The gates
 
@@ -122,25 +128,37 @@ All provider logic is in `scripts/deploy/deploy.mjs`; no workflow names a provid
 nothing configured a deploy reports `not_configured` and passes — an undecided board
 question is not a build break.
 
-Providers implemented, following [ADR-0003](adr/0003-hosting-and-cost-model.md) §8:
+The board authorised **$120/month on Fly.io** for M0–M5 (region `bom`, interim), stepping to
+$250/month at M5 with a $400 hard ceiling. Spend priority, in order: **(1) per-PR preview
+environments, (2) a staging environment that holds a WebSocket, (3) minimum-size production
+until M5.** Previews and staging are the reason the board reversed $0, so production sizing
+must not crowd them out. Sentry, PostHog and the uptime monitor stay on free tiers.
 
-| Provider           | Target     | Notes                                                                   |
-| ------------------ | ---------- | ----------------------------------------------------------------------- |
-| `none` (default)   | both       | Clean skip with a notice naming the board gate.                         |
-| `cloudflare-pages` | web only   | Free, unlimited egress, genuinely per-PR previews. **Chosen over Vercel Hobby because Hobby forbids commercial use** — a licence problem, not a cost one, so no free tier makes it acceptable. |
-| `render`           | realtime, production only | The only free-tier candidate that runs a long-lived Node WebSocket process. Free-tier per-PR previews do not exist, so the provider refuses `preview` rather than pretending. |
-| `script`           | both       | Escape hatch: runs `scripts/deploy/custom.sh`, takes the last line of stdout as the URL. |
+| Provider           | Targets  | Notes                                                       |
+| ------------------ | -------- | ----------------------------------------------------------- |
+| `fly`              | both     | **The board's choice.** Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app — this script never creates billable infrastructure. |
+| `none` (default)   | both     | Clean skip with a notice naming what is missing.            |
+| `cloudflare-pages` | web only | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews. |
+| `script`           | both     | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL. |
 
 Set these in repository settings. No code change needed.
 
-| Kind     | Name                                              | Purpose                                              |
-| -------- | ------------------------------------------------- | ---------------------------------------------------- |
-| Variable | `DEPLOY_PROVIDER`                                 | `none` \| `cloudflare-pages` \| `render` \| `script`. |
+| Kind     | Name                                              | Purpose                                               |
+| -------- | ------------------------------------------------- | ----------------------------------------------------- |
+| Variable | `DEPLOY_PROVIDER`                                 | `none` \| `fly` \| `cloudflare-pages` \| `render` \| `script`. |
 | Variable | `REALTIME_DEPLOY_PROVIDER`                        | Provider for `apps/realtime`; falls back to `DEPLOY_PROVIDER`. |
-| Variable | `CLOUDFLARE_PAGES_PROJECT`                        | Pages project name. Defaults to `playhall-web`.      |
-| Variable | `PRODUCTION_WEB_URL`, `PRODUCTION_REALTIME_URL`   | Base URLs the uptime monitor probes.                 |
-| Secret   | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`   | For `cloudflare-pages`.                              |
-| Secret   | `RENDER_API_KEY`, `RENDER_SERVICE_ID`             | For `render`.                                        |
+| Variable | `FLY_APP_WEB_STAGING`, `FLY_APP_REALTIME_STAGING` | Fly app names for staging.                            |
+| Variable | `FLY_APP_WEB_PROD`, `FLY_APP_REALTIME_PROD`       | Fly app names for production.                         |
+| Variable | `PRODUCTION_WEB_URL`, `PRODUCTION_REALTIME_URL`   | Base URLs the uptime monitor probes.                  |
+| Secret   | `FLY_API_TOKEN`                                   | For `fly`.                                            |
+| Secret   | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`   | For `cloudflare-pages`.                               |
+| Secret   | `RENDER_API_KEY`, `RENDER_SERVICE_ID`             | For `render`.                                         |
+
+**Nothing in this pipeline provisions infrastructure.** Fly apps, `fly.toml`, Redis and
+Postgres belong to [PER-7](/PER/issues/PER-7). A deploy script that creates billable
+resources on demand is how a $120/month cap becomes a $400 one, so the `fly` provider fails
+with a readable error when the app or its config is missing rather than creating either.
 
 A provider must print a `https://` URL; a deploy that reports success with no URL is
 treated as a failure, because nothing downstream could smoke-test it.
@@ -150,40 +168,42 @@ gets no secrets and no preview. That is the correct trade: these workflows execu
 scripts, and `pull_request_target` would run them with this repo's secrets against a
 contributor's code.
 
-## What production still needs
+## What is still needed
 
-[ADR-0003](adr/0003-hosting-and-cost-model.md) discharges the cost question — it publishes
-a model and a cost per 1,000 concurrent players, and escalates the provider choice and the
-budget to the board on [PER-2](/PER/issues/PER-2). This section records only what the
-*pipeline* is still waiting on.
+The cost question is discharged: [ADR-0003](adr/0003-hosting-and-cost-model.md) published
+the model, and the board answered on [PER-2](/PER/issues/PER-2) — **Fly.io, $120/month**.
+What the *pipeline* is still waiting on:
 
-1. **Credentials for the free path.** `cloudflare-pages` and `render` are implemented;
-   neither has an account or a token yet. A Cloudflare connection has been requested
-   through Paperclip. Render needs the same.
-2. **The board's answer on §10 of ADR-0003** — provider and budget. Until then,
-   `DEPLOY_PROVIDER` stays unset and both deploy paths report `not_configured`.
-3. **M0 AC1 is "partially met", not met**, and should be reported that way. Per ADR-0003
-   §8, Cloudflare Pages gives a genuinely free per-PR preview of `apps/web`, but an
-   end-to-end isolated preview — its own realtime service, Redis and Postgres, so one PR's
-   schema change cannot break another's preview — **requires spend on every candidate
-   except a self-built Hetzner path.** The `render` provider refusing `preview` is that
-   fact made mechanical rather than left as a footnote.
-4. **A real uptime monitor for launch (M5).** `uptime.yml` is a real monitor, not a
-   placeholder, but its limits are worth stating rather than discovering during an outage:
-   ~5 min resolution at best and Actions cron is delayed under load; it probes from
-   GitHub's network only, so it cannot tell "our service is down" from "unreachable from
-   one region"; and it cannot page anyone — it opens and updates a GitHub issue. A hosted
-   multi-region monitor with paging is a paid service and therefore board-gated. What it
-   needs is already in place: a stable, cache-proof health contract on both services.
+1. **GitHub Actions cannot run at all.** Every push produces `startup_failure` with zero
+   jobs, including an 8-line control workflow on an untouched branch. Account/plan level,
+   not YAML — tracked on [PER-55](/PER/issues/PER-55). Until it clears, every gate here is
+   advisory and ADR-0004's push detector cannot fire, so `main` has neither prevention nor
+   detection. That is below the risk ADR-0004 accepted.
+2. **Provisioned Fly apps and a `FLY_API_TOKEN`.** [PER-7](/PER/issues/PER-7).
+3. **M0 AC1 stays "partially met"** until per-PR previews actually run.
 
-Two items from ADR-0003 land on me and are **not** in this issue:
+Two ADR-0003 items land on Platform Engineer but not on this issue:
 
-- **Fronting `apps/web` with a free CDN is a line item, not an optimisation** — static
-  egress is ~1.7× the WebSocket egress (ADR-0003 §2.1 note 2). Owner: Platform Engineer,
+- **Fronting `apps/web` with a free-egress CDN is a line item, not an optimisation** —
+  static egress is ~1.7× the WebSocket egress (ADR-0003 §2.1 note 2).
   [PER-7](/PER/issues/PER-7).
 - **The match log grows ~31.5 GB/month per 1,000 concurrent players and nothing deletes
-  it** — needs a retention policy. Owner: Platform Engineer,
+  it** — needs a retention policy.
   [PER-15](/PER/issues/PER-15)/[PER-29](/PER/issues/PER-29).
+
+**Measurement owed** (ADR-0001 §2): report CI wall-clock per PR once the pipeline is green,
+so the "add Turborepo above 5 minutes" trigger is checkable rather than decorative. Blocked
+on [PER-55](/PER/issues/PER-55).
+
+### A real uptime monitor for launch (M5)
+
+`uptime.yml` is a real monitor, not a placeholder, but its limits are worth stating rather
+than discovering during an outage: ~5 min resolution at best and Actions cron is delayed
+under load; it probes from GitHub's network only, so it cannot tell "our service is down"
+from "unreachable from one region"; and it cannot page anyone — it opens and updates a
+GitHub issue. The board kept the uptime monitor on a free tier, so this is the plan for now.
+What a hosted monitor would need is already in place: a stable, cache-proof health contract
+on both services.
 
 ## Things deliberately not done
 
@@ -202,3 +222,6 @@ Two items from ADR-0003 land on me and are **not** in this issue:
   `@v4` is a third party that can change what runs in CI after review.
 - **Secret scanning / CodeQL are not configured.** Both are worth having; neither is in
   this issue's scope.
+- **`actionlint` is not yet a CI step.** It was used to verify these workflows (1.7.12,
+  zero findings across all 7 files) and is worth wiring in, but it needs a binary download
+  and there is no point adding it while Actions cannot run — [PER-55](/PER/issues/PER-55).
