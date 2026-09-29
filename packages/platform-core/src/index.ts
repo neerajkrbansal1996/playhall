@@ -5,12 +5,12 @@
  * Hard rule: nothing here may know about a specific game. Games are loaded
  * through the registry; the platform never imports a game package.
  *
- * Implementation lands in M1. This skeleton only proves the workspace graph.
- * The `@playhall/game-sdk` dependency is declared (the registry will type game
- * modules against it) but not yet imported — the SDK contracts are the CTO's
- * and land under an ADR in `docs/adr`.
+ * Landing through M1, one concern at a time. Shipped so far: guest identity
+ * (M1.2). Rooms, seats, chat, presence and the timer service follow.
  */
 import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '@playhall/shared'
+
+export * from './identity/index.js'
 
 export const PLATFORM_CORE_VERSION = '0.0.0'
 
