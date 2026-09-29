@@ -43,13 +43,33 @@ describe('colour assignment', () => {
   })
 
   it('gives the host White on a low rng draw', () => {
-    expect(colorOf(start('random', () => 0.0), HOST)).toBe('w')
-    expect(colorOf(start('random', () => 0.499), HOST)).toBe('w')
+    expect(
+      colorOf(
+        start('random', () => 0.0),
+        HOST,
+      ),
+    ).toBe('w')
+    expect(
+      colorOf(
+        start('random', () => 0.499),
+        HOST,
+      ),
+    ).toBe('w')
   })
 
   it('gives the host Black on a high rng draw', () => {
-    expect(colorOf(start('random', () => 0.5), HOST)).toBe('b')
-    expect(colorOf(start('random', () => 0.999), HOST)).toBe('b')
+    expect(
+      colorOf(
+        start('random', () => 0.5),
+        HOST,
+      ),
+    ).toBe('b')
+    expect(
+      colorOf(
+        start('random', () => 0.999),
+        HOST,
+      ),
+    ).toBe('b')
   })
 
   it('is deterministic — the same seed sequence gives the same colours', () => {

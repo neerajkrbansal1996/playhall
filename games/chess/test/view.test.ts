@@ -57,10 +57,7 @@ describe('getViewFor — legal move hints', () => {
   })
 
   it('never offers a claim to the player who is not to move', () => {
-    const shuffled = playMoves(newGame(), [
-      'Nf3', 'Nf6', 'Ng1', 'Ng8',
-      'Nf3', 'Nf6', 'Ng1', 'Ng8',
-    ])
+    const shuffled = playMoves(newGame(), ['Nf3', 'Nf6', 'Ng1', 'Ng8', 'Nf3', 'Nf6', 'Ng1', 'Ng8'])
     expect(getViewFor(shuffled, asWhite).availableDrawClaims).toEqual(['threefold_repetition'])
     expect(getViewFor(shuffled, asBlack).availableDrawClaims).toEqual([])
     expect(getViewFor(shuffled, asSpectator).availableDrawClaims).toEqual([])

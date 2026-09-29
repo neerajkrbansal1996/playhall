@@ -19,10 +19,7 @@ export interface RecordOptions {
  * and the board can never disagree. An unfinished or aborted game exports with
  * `*`, which is exactly what PGN means by "no result".
  */
-export function exportRecord(
-  state: ChessMatchState,
-  options: RecordOptions = {},
-): MatchRecord {
+export function exportRecord(state: ChessMatchState, options: RecordOptions = {}): MatchRecord {
   const chess = replay(state.initialFen, state.moves)
   const result = scoreLine(state)
 

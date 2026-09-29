@@ -4,15 +4,15 @@ The chess game module. Rules are decided here, on the server; the client only hi
 
 ## Layout
 
-| Path                 | What it holds                                                     |
-| -------------------- | ----------------------------------------------------------------- |
-| `src/rules/`         | Pure chess: positions, material, end conditions. No match state.   |
-| `src/state.ts`       | The match reducer — the one place an action can change a game.     |
-| `src/result.ts`      | Endings → the platform's standings shape.                          |
-| `src/view.ts`        | `getViewFor`, including redaction.                                 |
-| `src/record.ts`      | PGN export.                                                        |
-| `src/settings/`      | Lobby settings: schema, presets, form descriptor.                  |
-| `src/sdk/`           | **Temporary** shims for `packages/game-sdk` (see below).           |
+| Path            | What it holds                                                    |
+| --------------- | ---------------------------------------------------------------- |
+| `src/rules/`    | Pure chess: positions, material, end conditions. No match state. |
+| `src/state.ts`  | The match reducer — the one place an action can change a game.   |
+| `src/result.ts` | Endings → the platform's standings shape.                        |
+| `src/view.ts`   | `getViewFor`, including redaction.                               |
+| `src/record.ts` | PGN export.                                                      |
+| `src/settings/` | Lobby settings: schema, presets, form descriptor.                |
+| `src/sdk/`      | **Temporary** shims for `packages/game-sdk` (see below).         |
 
 ## Design rules this package holds itself to
 
@@ -28,7 +28,7 @@ named is rejected: `autoQueen` decides whether the UI shows the picker, never wh
 server accepts.
 
 **Claimable draws stay claimable.** Threefold repetition and the fifty-move rule are
-*offered*, not applied. Auto-drawing on the third repetition robs a player who is
+_offered_, not applied. Auto-drawing on the third repetition robs a player who is
 repeating to gain time on the clock. Fivefold and seventy-five-move are automatic, per
 FIDE 9.6.
 
@@ -40,7 +40,7 @@ also asserts it at runtime.
 ## Two rules worth spelling out
 
 **Timeout against insufficient material (FIDE 6.9).** When a player's clock runs out they
-lose — *unless* the opponent cannot checkmate, in which case it is a draw. `canPossiblyMate`
+lose — _unless_ the opponent cannot checkmate, in which case it is a draw. `canPossiblyMate`
 decides that: a bare king, king + one knight, or king + bishops all on one square colour
 cannot mate. Two knights **can** (mate is reachable even though it cannot be forced), so
 that side wins on the flag.

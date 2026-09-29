@@ -18,9 +18,24 @@ describe('canPossiblyMate — the material test behind FIDE 6.9', () => {
     ['king and one knight cannot mate', '4k3/8/8/8/8/8/8/3NK3 w - - 0 1', 'w', false],
     ['king and one bishop cannot mate', '4k3/8/8/8/8/8/8/3BK3 w - - 0 1', 'w', false],
     // c1 and g1 are both dark squares; c1 and f1 are opposite colours.
-    ['king and two same-colour bishops cannot mate', '4k3/8/8/8/8/8/8/2B1K1B1 w - - 0 1', 'w', false],
-    ['king and two opposite-colour bishops CAN mate', '4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1', 'w', true],
-    ['king and two knights CAN mate (it just cannot be forced)', '4k3/8/8/8/8/8/8/1N1NK3 w - - 0 1', 'w', true],
+    [
+      'king and two same-colour bishops cannot mate',
+      '4k3/8/8/8/8/8/8/2B1K1B1 w - - 0 1',
+      'w',
+      false,
+    ],
+    [
+      'king and two opposite-colour bishops CAN mate',
+      '4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1',
+      'w',
+      true,
+    ],
+    [
+      'king and two knights CAN mate (it just cannot be forced)',
+      '4k3/8/8/8/8/8/8/1N1NK3 w - - 0 1',
+      'w',
+      true,
+    ],
     ['king, bishop and knight CAN mate', '4k3/8/8/8/8/8/8/2BNK3 w - - 0 1', 'w', true],
     ['king and a pawn CAN mate', '4k3/8/8/8/8/8/P7/4K3 w - - 0 1', 'w', true],
     ['king and a rook CAN mate', '4k3/8/8/8/8/8/8/R3K3 w - - 0 1', 'w', true],

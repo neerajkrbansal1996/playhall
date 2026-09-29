@@ -113,9 +113,7 @@ export function setup(input: SetupInput, ctx: GameContext): ChessMatchState {
     moves: [],
     // `ctx.rng` is an SDK stream object, not a bare function; adapt it rather
     // than widening the settings layer's `Rng` type.
-    colors: assignColors(settings.color, input.hostSeatId, input.guestSeatId, () =>
-      ctx.rng.next(),
-    ),
+    colors: assignColors(settings.color, input.hostSeatId, input.guestSeatId, () => ctx.rng.next()),
     settings,
     drawOffer: null,
     lastDrawOfferPly: { w: null, b: null },

@@ -165,12 +165,7 @@ describe('threefold repetition', () => {
 
 describe('fivefold repetition', () => {
   it('ends the game automatically, with no claim required', () => {
-    const after = playMoves(newGame(), [
-      ...SHUFFLE,
-      ...SHUFFLE,
-      ...SHUFFLE,
-      ...SHUFFLE,
-    ])
+    const after = playMoves(newGame(), [...SHUFFLE, ...SHUFFLE, ...SHUFFLE, ...SHUFFLE])
     expect(after.ending).toEqual({ reason: 'fivefold_repetition' })
     expect(after.phase).toBe('finished')
     expect(getResult(after)?.standings.every((s) => s.outcome === 'draw')).toBe(true)

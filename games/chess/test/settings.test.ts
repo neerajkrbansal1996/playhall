@@ -276,15 +276,21 @@ describe('colour assignment', () => {
   })
 
   it('seats the host and guest on opposite colours', () => {
-    expect(assignColors('white', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng)).toEqual({
+    expect(
+      assignColors('white', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng),
+    ).toEqual({
       w: asSeatId('seat-host'),
       b: asSeatId('seat-guest'),
     })
-    expect(assignColors('black', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng)).toEqual({
+    expect(
+      assignColors('black', asSeatId('seat-host'), asSeatId('seat-guest'), explodingRng),
+    ).toEqual({
       w: asSeatId('seat-guest'),
       b: asSeatId('seat-host'),
     })
-    expect(assignColors('random', asSeatId('seat-host'), asSeatId('seat-guest'), () => 0.9)).toEqual({
+    expect(
+      assignColors('random', asSeatId('seat-host'), asSeatId('seat-guest'), () => 0.9),
+    ).toEqual({
       w: asSeatId('seat-guest'),
       b: asSeatId('seat-host'),
     })

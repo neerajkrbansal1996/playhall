@@ -130,9 +130,10 @@ describe('draw by agreement', () => {
     if (!declined.ok) throw new Error(declined.error)
 
     // Immediately re-offering is refused.
-    expect(
-      applyAction(declined.state, { type: 'offer_draw' }, seatOf(state, 'w'), ctx()),
-    ).toEqual({ ok: false, error: 'draw_offer_cooldown' })
+    expect(applyAction(declined.state, { type: 'offer_draw' }, seatOf(state, 'w'), ctx())).toEqual({
+      ok: false,
+      error: 'draw_offer_cooldown',
+    })
 
     // After both sides move, the offer is allowed again.
     const later = playMoves(declined.state, ['Nf3', 'Nc6'])
@@ -191,9 +192,10 @@ describe('the 30-second first move', () => {
 
   it('refuses to abort before the deadline', () => {
     const game = newGame({ now: 0 })
-    expect(
-      applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 29_999 })),
-    ).toEqual({ ok: false, error: 'first_move_deadline_not_reached' })
+    expect(applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 29_999 }))).toEqual({
+      ok: false,
+      error: 'first_move_deadline_not_reached',
+    })
   })
 
   it('aborts once the deadline passes', () => {
@@ -217,9 +219,10 @@ describe('the 30-second first move', () => {
   it('restarts the window for Black once White has moved', () => {
     const game = playMoves(newGame({ now: 0 }), ['e4'], 5_000)
     expect(firstMoveDeadline(game)).toBe(5_000 + FIRST_MOVE_TIMEOUT_MS)
-    expect(
-      applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 34_999 })),
-    ).toEqual({ ok: false, error: 'first_move_deadline_not_reached' })
+    expect(applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 34_999 }))).toEqual({
+      ok: false,
+      error: 'first_move_deadline_not_reached',
+    })
     expect(applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 35_000 })).ok).toBe(
       true,
     )
@@ -228,9 +231,10 @@ describe('the 30-second first move', () => {
   it('stops applying once both players have moved', () => {
     const game = playMoves(newGame({ now: 0 }), ['e4', 'e5'], 5_000)
     expect(firstMoveDeadline(game)).toBeNull()
-    expect(
-      applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 999_999 })),
-    ).toEqual({ ok: false, error: 'abort_not_allowed' })
+    expect(applyAction(game, { type: 'first_move_timeout' }, null, ctx({ now: 999_999 }))).toEqual({
+      ok: false,
+      error: 'abort_not_allowed',
+    })
   })
 })
 
@@ -313,7 +317,12 @@ describe('illegal input is rejected server-side', () => {
   it('rejects any action from a non-player seat', () => {
     const game = newGame()
     expect(
-      applyAction(game, { type: 'move', move: { from: 'e2', to: 'e4' } }, asSeatId('seat-spectator'), ctx()),
+      applyAction(
+        game,
+        { type: 'move', move: { from: 'e2', to: 'e4' } },
+        asSeatId('seat-spectator'),
+        ctx(),
+      ),
     ).toEqual({ ok: false, error: 'not_a_player' })
   })
 })
