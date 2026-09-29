@@ -14,7 +14,8 @@
 import type { JsonObject } from './json.js'
 
 export type Result<T, E> =
-  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: E }
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: E }
 
 export function ok<T>(value: T): { readonly ok: true; readonly value: T } {
   return { ok: true, value }
@@ -63,13 +64,18 @@ export interface ActionError<TCode extends string = StandardActionErrorCode> {
  * every call site than `{ ok: true, value: undefined }`.
  */
 export type ValidationResult<TCode extends string = StandardActionErrorCode> =
-  { readonly ok: true } | { readonly ok: false; readonly error: ActionError<TCode> }
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: ActionError<TCode> }
 
 /**
  * The single shared "this action is legal" value.
  *
- * Typed as the bare success branch rather than `ValidationResult<string>` so
- * that returning it does not widen a game's own error-code union to `string`.
+ * Typed as the success arm rather than as `ValidationResult<string>`: the union
+ * carries `ActionError<TCode>` in its error arm, so a `ValidationResult<string>`
+ * is not assignable to a `ValidationResult<StandardActionErrorCode>` and every
+ * game returning `VALID` from a strictly-typed `validateAction` failed to
+ * compile. The success arm has no `TCode` in it, so this widens cleanly to every
+ * instantiation. Runtime value is unchanged.
  */
 export const VALID: { readonly ok: true } = Object.freeze({ ok: true })
 
