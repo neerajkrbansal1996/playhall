@@ -1,0 +1,5 @@
+{
+  "//": "Type-checks the test sources without emitting.",
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*", "test/**/*"]
+}

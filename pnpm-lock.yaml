@@ -54,12 +54,18 @@ importers:
       '@types/node':
         specifier: ^22.10.6
         version: 22.20.4
+      '@vitest/coverage-v8':
+        specifier: ^2.1.8
+        version: 2.1.9(vitest@2.1.9(@types/node@22.20.4)(lightningcss@1.32.0))
       tsx:
         specifier: ^4.19.2
         version: 4.23.15
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.4)(lightningcss@1.32.0)
 
   apps/web:
     dependencies:
@@ -172,7 +178,17 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/shared: {}
+  packages/shared:
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^2.1.8
+        version: 2.1.9(vitest@2.1.9(@types/node@22.20.4)(lightningcss@1.32.0))
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.4)(lightningcss@1.32.0)
 
   packages/ui:
     dependencies:
