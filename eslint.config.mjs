@@ -2,6 +2,7 @@
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import prettier from 'eslint-config-prettier'
+import globals from 'globals'
 
 export default tseslint.config(
   {
@@ -48,11 +49,81 @@ export default tseslint.config(
           property: 'random',
           message: 'Use ctx.rng (seeded, stored on the match), not Math.random().',
         },
+        {
+          object: 'performance',
+          property: 'now',
+          message:
+            'Use ctx.now (server-authoritative clock), not performance.now(). A monotonic clock ' +
+            'is still an ambient clock: two replays of the same seed would diverge.',
+        },
+      ],
+      // `no-restricted-properties` only sees a property access, so `new Date()` — which reads
+      // the same ambient clock without touching `Date.now` — slips past it (ADR-0002 §4).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'NewExpression[callee.name="Date"][arguments.length=0]',
+          message:
+            'Use ctx.now (server-authoritative clock), not new Date(). `new Date(ctx.now)` is ' +
+            'fine — it is the zero-argument form that reads the ambient clock.',
+        },
       ],
     },
   },
   {
-    files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}'],
+    /**
+     * Editor-time half of ADR-0002. `pnpm boundaries` (dependency-cruiser) is the gate; this
+     * layer exists because a violation caught while typing is worth more than one caught in CI,
+     * and it is deliberately narrow — only the game-package rules, only what ESLint can express
+     * without duplicating the rule set. If these two ever disagree, the rule set in
+     * `.dependency-cruiser.cjs` is the contract and this is the stale copy.
+     *
+     * One known divergence, stated rather than hidden: this layer forbids `@atrium/shared`
+     * outright, matching ADR-0002 rule 8 ("a game package may declare only @atrium/game-sdk"),
+     * whereas the §2 import table forbids only deep imports into shared. Raised with the CTO on
+     * PER-5; if index-level `@atrium/shared` is meant to be legal for games, this narrows to
+     * `@atrium/shared/*` and rule 8 needs to say so.
+     */
+    files: ['games/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@atrium/*', '!@atrium/game-sdk', '!@atrium/game-sdk/*', '@atrium/shared/*'],
+              message:
+                'A game may import @atrium/game-sdk and third-party libraries, nothing else. ' +
+                'Enforced for real by `pnpm boundaries` (ADR-0002); this is the editor warning.',
+            },
+            {
+              group: ['**/packages/**', '**/apps/**', '**/games/**'],
+              message:
+                'Relative path out of your own game package. Games are independent plugins — ' +
+                'enforced by `pnpm boundaries` (ADR-0002).',
+            },
+          ],
+          paths: [],
+        },
+      ],
+    },
+  },
+  {
+    /**
+     * Build/CI/tooling code runs on Node, not in a browser, so it needs the Node globals —
+     * without this, every `process` and `console` in `scripts/`, `tools/` and the root configs
+     * is a `no-undef` error and `pnpm lint` can never go green.
+     */
+    files: [
+      '**/*.{js,mjs,cjs}',
+      'scripts/**/*.{js,mjs,cjs,ts,mts}',
+      'tools/**/*.{js,mjs,cjs,ts,mts}',
+      'apps/realtime/**/*.ts',
+    ],
+    languageOptions: { globals: { ...globals.node } },
+  },
+  {
+    files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}', '**/*.cjs'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   prettier,

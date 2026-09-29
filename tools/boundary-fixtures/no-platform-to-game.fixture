@@ -1,0 +1,8 @@
+# expect: no-platform-to-game
+# why: platform-core referencing a game directly instead of going through the registry
+=== file: packages/platform-core/src/bad-registry.ts ===
+// ADR-0002 §3: platform-core gets no exception at all, not even a dynamic one. Composition
+// happens at the app root, in the generated registry.
+import { id } from '@atrium/fx-b'
+
+export const loaded = id

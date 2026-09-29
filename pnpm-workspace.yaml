@@ -3,6 +3,7 @@ packages:
   - 'packages/*'
   - 'games/*'
   - 'games/_examples/*'
+  - 'tools/*'
 
 # Postinstall scripts are opt-in under pnpm 10. Only the native-binary packages
 # our toolchain actually needs are allowed to run one.
