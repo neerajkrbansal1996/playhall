@@ -21,7 +21,6 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 const RULE = 'no-illegal-declared-dep'
-const ALLOWED = new Set(['@atrium/game-sdk'])
 const MANIFEST_SECTIONS = [
   'dependencies',
   'devDependencies',
@@ -29,8 +28,25 @@ const MANIFEST_SECTIONS = [
   'optionalDependencies',
 ]
 
+/**
+ * The npm scope is read from the SDK's own manifest, never hard-coded. The scope is a brand
+ * string and the brand is a board decision that is still open — a literal here would make this
+ * check silently pass the day the scope is renamed, which is the worst failure mode a gate has:
+ * green and doing nothing.
+ */
+const SDK_MANIFEST = 'packages/game-sdk/package.json'
+const sdkName = JSON.parse(readFileSync(SDK_MANIFEST, 'utf8')).name
+const scope = sdkName.startsWith('@') ? sdkName.split('/')[0] : null
+
+if (scope === null) {
+  console.error(`${RULE}: cannot run — ${SDK_MANIFEST} name "${sdkName}" is not scoped.`)
+  process.exit(2)
+}
+
+const ALLOWED = new Set([sdkName])
+
 const COMMENT =
-  'A game package may declare exactly one @atrium dependency: @atrium/game-sdk. A declared ' +
+  `A game package may declare exactly one ${scope} dependency: ${sdkName}. A declared ` +
   'dependency is as much a boundary violation as an import — it is a stated intent to cross ' +
   'the boundary. Remove it; if the capability is genuinely needed, it belongs in the SDK and ' +
   'that needs a CTO ADR first.'
@@ -65,7 +81,7 @@ for (const dir of gamePackageDirs()) {
   }
   for (const section of MANIFEST_SECTIONS) {
     for (const name of Object.keys(manifest[section] ?? {})) {
-      if (name.startsWith('@atrium/') && !ALLOWED.has(name)) {
+      if (name.startsWith(`${scope}/`) && !ALLOWED.has(name)) {
         violations.push({ manifestPath, detail: `declares "${name}" in ${section}` })
       }
     }
@@ -73,7 +89,7 @@ for (const dir of gamePackageDirs()) {
 }
 
 if (violations.length === 0) {
-  console.log(`${RULE}: ok — no game package declares a forbidden @atrium dependency.`)
+  console.log(`${RULE}: ok — no game package declares a forbidden ${scope} dependency.`)
   process.exit(0)
 }
 

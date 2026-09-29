@@ -3,6 +3,6 @@
 === file: games/fx-a/src/index.ts ===
 // Games are independent plugins. Sharing logic between two games means it is general, which
 // means it belongs in the SDK — decided by ADR, not by an import.
-import { id as other } from '@atrium/fx-b'
+import { id as other } from '@scope/fx-b'
 
 export const id = other
