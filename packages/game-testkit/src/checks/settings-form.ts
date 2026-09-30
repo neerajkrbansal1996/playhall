@@ -107,10 +107,6 @@ export function checkSettingsFormContract<
   }
 
   const form = manifest.settingsForm
-  const fieldsByKey = new Map<string, SettingsField>()
-  for (const field of form.fields) {
-    if (!fieldsByKey.has(field.key)) fieldsByKey.set(field.key, field)
-  }
 
   // A conditional field must be reachable under the SDK's own visibility
   // implementation, from the defaults, by changing only its target field.
@@ -153,18 +149,11 @@ export function checkSettingsFormContract<
     }
   }
 
-  // Not a failure: a game may deliberately keep a setting out of the lobby
-  // (a flag the host cannot change, a value only a preset sets). But an
-  // unreachable setting is far more often a field someone forgot to add, so
-  // it is worth saying out loud.
-  const uncovered = Object.keys(defaults)
-    .filter((key) => !fieldsByKey.has(key))
-    .sort()
-  if (uncovered.length > 0) {
-    recorder.note(
-      `no form field binds ${uncovered.map((key) => `'${key}'`).join(', ')}; ${uncovered.length === 1 ? 'that setting' : 'those settings'} cannot be changed in the lobby`,
-    )
-  }
+  // Deliberately not checked here: a settings key that no field binds. That
+  // rule belongs to `checkSettingsForm` — PER-110 adds it as
+  // `setting_without_field` — and it arrives through the loop above the moment
+  // that lands. Asserting it here too would mean two call sites disagreeing
+  // about whether it is a note or a failure.
 
   return recorder
 }

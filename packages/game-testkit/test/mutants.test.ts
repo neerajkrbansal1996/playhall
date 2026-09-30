@@ -495,14 +495,21 @@ describe('settings form descriptor', () => {
     expect(failedChecks(report)).toEqual(['manifest-valid', 'settings-form-contract'])
   })
 
-  it('notes a setting no control binds, without failing the check', () => {
-    const report = mutateForm({
+  it('defers "a setting no control binds" to the SDK checker', () => {
+    // PER-110 adds `setting_without_field` to `checkSettingsForm`. Until it
+    // lands this is silent, and when it lands the verdict arrives through the
+    // checker rather than from a second opinion in the testkit.
+    const form = {
       version: 1,
       fields: baseFields.filter((field) => field.key !== 'firstMove'),
-    })
+    } as const
+    const report = mutateForm(form)
     const check = report.checks.find((candidate) => candidate.id === 'settings-form-contract')
-    expect(check?.status).toBe('passed')
-    expect(check?.notes.join(' ')).toContain("'firstMove'")
-    expect(report.passed).toBe(true)
+    const fromSdk = checkSettingsForm({
+      settingsForm: form,
+      settingsSchema: ticTacToeSubject.manifest.settingsSchema,
+      defaultSettings: ticTacToeSubject.manifest.defaultSettings,
+    })
+    expect(check?.status).toBe(fromSdk.length === 0 ? 'passed' : 'failed')
   })
 })
