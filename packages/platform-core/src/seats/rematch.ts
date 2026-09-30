@@ -12,12 +12,7 @@
  * Pure. `seats/service.ts` owns the writes and the vote bookkeeping.
  */
 
-import {
-  type Room,
-  type RoomRevision,
-  occupiedSeats,
-  seatIndexOf,
-} from '../rooms/types.js'
+import { type Room, type RoomRevision, occupiedSeats, seatIndexOf } from '../rooms/types.js'
 import type { SeatingPolicy } from './policy.js'
 import { readyAll } from './seating.js'
 import { assignTeams, rotateOccupants } from './teams.js'
@@ -102,9 +97,14 @@ export function resolveRematch(
  *
  * What changes, and why each one has to:
  *
- * - **Rotation.** `matchesPlayed` is the offset, so the shift advances by one
- *   per match rather than depending on how many times anyone clicked. Two
- *   players alternate who goes first; four players get a new partner each round.
+ * - **Rotation.** The offset is a constant one seat, because it is applied to
+ *   the seats as they are *now* — already carrying every previous rematch's
+ *   shift. Each match therefore advances the arrangement by exactly one, which
+ *   is what cycles a room through every seating in turn: two players alternate
+ *   who goes first, and three players see all three orders before repeating.
+ *   Passing `matchesPlayed` here would compound instead of advance, shifting by
+ *   1, then 3, then 6 seats cumulatively, so a three-player room would land
+ *   back on its original seating twice in a row.
  * - **Absent players lose their seats.** They are not in the electorate, so
  *   keeping their seats would leave a room that voted unanimously for a rematch
  *   unable to reach `minPlayers`, or starting a match with a seat nobody is
@@ -123,11 +123,7 @@ export function resolveRematch(
  *
  * `version` and `updatedAt` are not set here — `reviseRoom` owns those.
  */
-export function rematchRevision(
-  room: Room,
-  policy: SeatingPolicy,
-  now: number,
-): RoomRevision {
+export function rematchRevision(room: Room, policy: SeatingPolicy, now: number): RoomRevision {
   const present = new Set(room.presentPlayerIds)
 
   const crewed = room.seats.map((seat) =>
@@ -136,8 +132,7 @@ export function rematchRevision(
       : seat,
   )
 
-  const rotated =
-    policy.rematchRotation === 'seats' ? rotateOccupants(crewed, room.matchesPlayed + 1) : crewed
+  const rotated = policy.rematchRotation === 'seats' ? rotateOccupants(crewed, 1) : crewed
 
   // Teams are re-derived either way, because seats may have emptied. `teams`
   // rotation additionally drops the current draw so `assignTeams` re-forms the
