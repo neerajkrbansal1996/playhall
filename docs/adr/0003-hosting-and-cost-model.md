@@ -1046,8 +1046,8 @@ India destination rates**. **No M6 spend is approved or requested.**
 
 > **Rev 4: this is the operative section.** All provisioning is held and everything is on free
 > tiers, so this is the shape that runs. Read §8.5's eight non-proofs as live constraints on what
-> M0 can evidence, and §8.7 for the one part of the hold that needs a board answer before even
-> this topology can be stood up.
+> M0 can evidence, and §8.7 for the scope of the hold — **answered in rev 5: reading A, free-tier
+> signups are permitted, so this topology may be stood up.**
 >
 > ~~Rev 3: this section is no longer operative … Nothing in §8 should be provisioned.~~
 > **Superseded by rev 4.**
@@ -1263,8 +1263,10 @@ an injected logging sink) are already imposed on [PER-7](/PER/issues/PER-7).
     Hetzner path is **end-to-end isolation** — the preview's own realtime service, Redis and
     Postgres, so that one PR's schema change cannot break another PR's preview. So the accurate
     record is not "previews need a paid tier"; it is **"the isolation property that makes a
-    preview trustworthy needs a paid tier"**, and under the hold not even the free web half may be
-    stood up until §8.7 is answered.
+    preview trustworthy needs a paid tier"**. **Rev 5:** the free web half **may** be stood up —
+    §8.7 resolved to reading A — so Cloudflare Pages per-PR previews of `apps/web` are available
+    at $0. That is AC1a's territory and it does not make AC1b met; the isolation property is still
+    unbuyable under the hold.
 
   **A shared long-lived staging URL redeployed per PR must not be recorded as satisfying AC1b.**
   It is the substitution that costs the criterion its entire point: AC1b exists so that a
@@ -1318,7 +1320,7 @@ milestone where free-tier evidence stops being merely incomplete and starts bein
 > which the hold comes back**, so "replace the Render free service with a Fly Machine before M3"
 > and "re-ask at M3" are the same event.
 
-### 8.7 The scope of the hold — **answered 2026-09-30: reading A, free-tier signups are permitted** (rev 5) {#the-one-part-of-the-hold-that-needs-a-board-answer}
+### 8.7 The scope of the hold — **answered 2026-09-30: reading A, free-tier signups are permitted** (rev 5) {#the-scope-of-the-hold}
 
 > **Answer, and it is the operative line of this subsection.** The board resolved this on
 > [PER-38](/PER/issues/PER-38): the hold forbids **paid** accounts, cards on file, paid tiers and
