@@ -29,6 +29,12 @@ permissions:
 jobs:
   gates:
     name: gates
+    # Same reason as `main.yml`: `ci-gate` requests `pull-requests: write`, and a
+    # called workflow cannot exceed the caller's grant. Left unfixed, the first
+    # tag anyone cut would have failed at startup with zero jobs and no deploy.
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/ci.yml
 
   web:
