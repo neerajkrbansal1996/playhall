@@ -8,7 +8,10 @@
   held all provisioning and put everything back on free tiers** — the authority in §12 is
   ratified but **may not be exercised**, and **§8 is the operative topology again** (rev 4,
   §13). **The hold permits free-tier signups** that need no payment card, and **returns to the
-  board at M3** (rev 5, §8.7, §13.5).
+  board at M3** (rev 5, §8.7, §13.5). **The hold has exactly one carved exception**: a
+  pre-existing, board-created **Cloudflare** connection may be used for a **free Cloudflare Pages
+  staging deploy of `apps/web` only** — every other clause and every other provider is unchanged
+  (rev 6, §13.7).
 - **Date:** 2026-09-30
 - **Amended:** 2026-09-30 (**rev 2**) — the board set the infrastructure budget to **$0**, and
   [ADR-0001](./0001-v1-stack.md) rev 2 withdrew the `noeviction` disqualifier. **§5.1, §7, §8
@@ -38,6 +41,17 @@
   ~$25/month and §12.2's costed $8.78/month — and the wrong one reached the board's M0 sign-off
   minute. **$8.78 is correct**, and the cheaper design still satisfies AC1b. No board action
   changes.
+- **Amended:** 2026-09-30 (**rev 6**) — **this ADR asserted something factually untrue, and the
+  untrue sentence was the premise the hold was justified on.** §12.3 and the hold's summary said
+  there is "no vendor account … on any provider". There is: the board connected **Cloudflare on
+  29 Sep**, the morning before it set the hold on 30 Sep. Rather than correct it silently — the
+  sentence carries a decision, and narrowing or widening the hold is not mine to do — it went back
+  to the board, which answered at **07:32Z: verify the connection is live, then use it for a free
+  web staging link.** So the hold now has **exactly one carved exception**, recorded in new
+  **§13.7**. §8.7, §12.3 and §9's owed-measurement note changed; the Status line, §7's rev-4 note
+  and §13.1's timeline were corrected. **Nothing about the provider, the envelope, the arithmetic
+  or the dormancy of §12 moved, and this is not a provider change.** See
+  [What changed in rev 6](#what-changed-in-rev-6).
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -115,6 +129,12 @@ same day. The board's answer to the payment-instrument question was **"hold all 
 now — keep everything on free tiers"**, relayed on [PER-38](/PER/issues/PER-38) as: _"No vendor
 account, no card on file, no paid tier, no trial, on any provider — Fly and Hetzner included."_
 
+> **Rev 6: the relayed sentence's "no vendor account … on any provider" clause was a claim of fact,
+> and it was false.** A Cloudflare connection already existed, created by the board on 29 Sep. Rev 4
+> and rev 5 repeated it as though it described our state. See
+> [What changed in rev 6](#what-changed-in-rev-6) and §13.7 — the sentence is kept verbatim here
+> because it is a quotation of the instruction, not a statement of our inventory.
+
 **The distinction that keeps this ADR honest is between authority and permission.** The board
 ratified the envelope — Fly.io, $120/month stepping to $250 at M5, $400 ceiling, plus the ~$8
 capacity test — and separately withheld permission to exercise any of it. Rev 4 does not
@@ -177,6 +197,60 @@ Upstash free's 500,000 commands/month is roughly 20 concurrent players for two h
 A lets us stand up an environment that is honest about M0. It does not make that environment a
 place where any non-functional target, any timer behaviour, or any restart-recovery claim can be
 evidenced.
+
+### What changed in rev 6 {#what-changed-in-rev-6}
+
+**Rev 6 exists because this ADR stated a falsehood, and the falsehood was load-bearing.** Rev 4
+and rev 5 both restated the hold in the board's own words — _"no vendor account, no card on file,
+no paid tier, no trial, on any provider"_ — and §12.3 restated it as a finding of fact about our
+current state. It was not a finding of fact. **A Cloudflare connection was created by the board on
+29 Sep**, the morning before the hold was set on 30 Sep. That connection existed the whole time
+rev 4, rev 5 and `docs/ci-cd.md` were asserting it did not.
+
+This is not a cosmetic error. The hold's entire justification is "we have nothing, so nothing can
+be spent by accident". A document that misdescribes what we already have cannot be relied on to
+tell anyone what is safe to touch, which is the only job it has.
+
+**Why it went to the board instead of being fixed in place.** The sentence carries a decision, not
+just a fact. Three readings were all defensible from the text, and they differ in what an engineer
+may do this week:
+
+| Reading                                                               | Consequence                                                                   |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The Cloudflare connection is **covered** by the hold and dormant      | Nothing changes; the sentence is just imprecise about history.                |
+| The Cloudflare connection is **usable**, because no card is involved  | A free `apps/web` staging link becomes available at $0.                       |
+| The Cloudflare connection should be **disconnected** to match the doc | The doc becomes true by removing the thing, and M0 loses a $0 staging option. |
+
+Picking one myself would have narrowed or widened the hold on my own reading, which is the board's
+call. **The board answered at 2026-09-30 07:32Z: "Verify it is live, then use it for a free web
+staging link."** That is the middle reading, and §13.7 records it.
+
+**What rev 6 changes**
+
+| Where           | Change                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status line     | Names the one carved exception so a reader of the first paragraph is not misled.                                                                        |
+| §7 rev-4 note   | "no Fly account, no card, no trial" — scoped to Fly, which is what it always meant and is still true.                                                   |
+| **§8.7**        | The relayed sentence's "no vendor account … on any provider" clause is marked as **already factually untrue when it was relayed**, with the correction. |
+| §9              | The owed-measurement note gains the provider-labelling rule: a Cloudflare-edge number is not a Fly number, and the Fly figures stay **owed**.           |
+| **§12.3**       | The blanket "No Fly account, no card, no trial, on any provider" is replaced by the accurate statement plus the exception.                              |
+| §13.1           | The timeline gains the 29 Sep row it was missing — the reason the sentence was wrong is visible in the chronology.                                      |
+| **§13.7 (new)** | The exception itself: what it permits, what it does not, and why `apps/realtime` cannot be in it.                                                       |
+
+**What rev 6 does not change, stated because "we may use Cloudflare now" reads more broadly than
+it is.** The hold stands in full for every other provider and every other clause: **no new vendor
+account, no card, no paid tier, no trial.** **Fly.io remains the ratified M0–M5 provider and is
+not provisioned.** §12 stays dormant, §8 stays the operative topology, the M3 revisit
+([PER-29](/PER/issues/PER-29)) is unmoved, and **AC1b and AC2b are unchanged**. Execution of the
+staging deploy — including verifying the connection is actually live before anything is deployed —
+is [PER-111](/PER/issues/PER-111), and the written record is
+[PER-112](/PER/issues/PER-112).
+
+> **Rev numbering, so the sequence is not a puzzle later.** A separate rev — the
+> [PER-84](/PER/issues/PER-84) review fixes — was drafted before this one and is still open on its
+> own branch at the time of writing. It renumbers on rebase. Rev 6 is this correction, because a
+> false premise about what the company has provisioned should not wait behind a review-fix
+> revision.
 
 ---
 
@@ -926,8 +1000,11 @@ to be evaluated alongside Hetzner and Colyseus in [PER-21](/PER/issues/PER-21) �
 
 > **Rev 4: approved, and not exercisable.** The provider choice stands — this is still the right
 > answer and no further board input is needed to act on it the moment provisioning resumes. But
-> **nothing here may be provisioned today**: no Fly account, no card, no trial. **§8 is the
-> operative section again.** Treat §7 and §12 as a signed purchase order with no released funds.
+> **nothing here may be provisioned today**: **no Fly account, no card, no trial — and rev 6
+> confirms that all three are still true of Fly specifically.** The one carved exception to the
+> hold (§13.7) is a pre-existing Cloudflare connection, which is not a Fly account and provisions
+> nothing in this section. **§8 is the operative section again.** Treat §7 and §12 as a signed
+> purchase order with no released funds.
 >
 > ~~Rev 3: this section is now operative and the board has approved it … §8 is no longer the
 > operative section.~~ **Half-superseded 2026-09-30** — the approval is real, the operativeness
@@ -1246,6 +1323,18 @@ an injected logging sink) are already imposed on [PER-7](/PER/issues/PER-7).
   visible violation of the "< 10 s to playable" product principle in the one demo whose job is to
   show the product principle. Mitigate with a cron ping before a board session, and say plainly in
   the link that it is a free-tier artefact.
+
+  > **Rev 6 — AC5's staging-link half is reachable at $0, and its gate is no longer purely the
+  > payment instrument.** §13.7's carve-out lets the board's pre-existing Cloudflare connection host
+  > `apps/web` on Pages for free; [PER-111](/PER/issues/PER-111) executes it. Two things follow.
+  > **First, the caveat above changes shape rather than disappearing:** Pages serves static assets
+  > from the edge, so there is no 15-minute spin-down and no ~50 s cold start on the web half — but
+  > `apps/realtime` is not in the exception, so a link that serves `apps/web` alone shows a shell
+  > with no live game behind it. **Second, and this is the binding one
+  > ([ADR-0009](./0009-m0-websocket-transport-probe.md) §4): the AC5 caption must not imply the link
+  > is playable.** `apps/web` is not a playable game. AC5's other two halves — the video/GIF and the
+  > written status report — remain CTO's.
+
 - **AC1 — a preview deploy per PR: this is the sharp edge, and rev 4 splits it in two, because the
   two halves have different gates and reporting one verdict hides that.** AC1 as written on
   [PER-3](/PER/issues/PER-3) is a conjunction: _"a pull request runs full CI **and** produces a
@@ -1333,12 +1422,26 @@ milestone where free-tier evidence stops being merely incomplete and starts bein
 > completes with no card and no trial clock. A free tier that demands a card "for verification",
 > or that auto-converts to paid, is **not** permitted and comes back to the board instead. None of
 > the four accounts in §8.1 requires one — that is why they are the four.
+>
+> **Rev 6: one of the four already exists, and this ADR was wrong to imply otherwise.** The
+> Cloudflare connection was created **by the board on 29 Sep**, the day before the hold. It is not
+> a signup we need permission for; it is an account we already had while this document was asserting
+> we had none. The board has ruled on what may be done with it — §13.7 — and the ruling is narrower
+> than "Cloudflare is open": **free Cloudflare Pages hosting of `apps/web` only.**
 
 The hold was relayed in two sentences that cannot both be complied with literally:
 
 1. _"No vendor account, no card on file, no paid tier, no trial, on any provider — Fly and
    Hetzner included."_
 2. _"Everything stays on the free topology you costed in ADR-0003 rev 2 §8.1."_
+
+> **Rev 6 corrects a third problem with sentence 1 that revs 4 and 5 missed.** The conflict above
+> is about what sentence 1 _permits_. But sentence 1 also makes a **claim of fact** — "no vendor
+> account … on any provider" — and that claim was **already false when it was relayed**, because
+> the Cloudflare connection had been created the previous morning. Revs 4 and 5 repeated the claim
+> as though it described our state. It never did. Sentence 1 is retained verbatim above because it
+> is a quotation of the instruction and quotations are not edited; **it is not evidence about what
+> accounts exist**, and nothing downstream should treat it as such.
 
 **§8.1's topology is four vendor accounts** — Cloudflare Pages, Render, Upstash, Neon — all on
 free tiers, none requiring a card. So the two readings are:
@@ -1392,6 +1495,20 @@ managed Redis tier for Hetzner H1, and Render's compute pricing above the Standa
 > Until I7 and I9 land, §3 rests on the capacity model in
 > [ADR-0001](./0001-v1-stack.md) §6. Until I10 and I11 land, **§4 is a projection against a budget
 > we set**, and it is labelled as such everywhere it appears.
+>
+> **Rev 6 — the labelling rule, promoted here because it has now been needed three times.** Every
+> row in this table is owed **against Fly.io**, which is the ratified provider (§7a). A number
+> measured anywhere else does not discharge the row. Specifically:
+>
+> - A figure from the Cloudflare Pages staging link permitted by §13.7 measures **Cloudflare's edge
+>   on a free tier**. It is a real number and it may be published — **labelled with the provider and
+>   the tier it was measured on** — but it **does not** close the "action round-trip p95 from a real
+>   staging deploy" row, or any other row here.
+> - The same applies to every free-tier figure under §8: Render free, Upstash free, Neon free.
+> - **A substituted number is worse than a missing one**, because a missing number is visibly owed
+>   and a mislabelled one looks discharged. The Fly equivalents stay **owed**, due at the M3 revisit
+>   (§13.5). The guard has already been posted on [PER-7](/PER/issues/PER-7) and
+>   [PER-15](/PER/issues/PER-15).
 
 **Sensitivity — which inputs actually move the answer.** This is what makes §3 and §4 a model
 rather than a quote:
@@ -1787,11 +1904,28 @@ database costs a re-seed.
 
 > **Rev 4: the answer to "what may be provisioned now" is nothing.** All provisioning is held.
 > [PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are **back under the free-tier cap**,
-> and the release below is revoked. No Fly account, no card, no trial, on any provider. The table
-> is retained as the ordered plan for the moment the hold lifts — it is a queue, not a permission.
+> and the release below is revoked. ~~No Fly account, no card, no trial, on any provider.~~ The
+> table is retained as the ordered plan for the moment the hold lifts — it is a queue, not a
+> permission.
 >
 > The one row that still binds today is the last one: **anything not on this list is still back to
 > CTO**, and under the hold that now includes every row above it.
+>
+> **Rev 6 corrects the struck sentence, which was the plainest statement of the falsehood in this
+> ADR.** The accurate statement is:
+>
+> - **No Fly account, no card on file, no paid tier, no trial — true, and unchanged.** Fly.io is
+>   the ratified M0–M5 provider and **is not provisioned**. Nothing in the table below may be
+>   created.
+> - **"On any provider" was false.** One pre-existing vendor connection exists: **Cloudflare**,
+>   created by the board on 29 Sep, before the hold. No card is attached because the account
+>   already existed.
+> - **The single carved exception (§13.7):** that connection may be used for a **free Cloudflare
+>   Pages staging deploy of `apps/web`**. That is the `apps/web` row below, and it is the only row
+>   whose status changes — from "⏸ required when funded, **held**" to **available at $0 via the
+>   existing Cloudflare connection**, per [PER-111](/PER/issues/PER-111).
+> - **`apps/realtime` is not in the exception**, on any row, for the reason in §13.7: Pages cannot
+>   hold a WebSocket connection. Rows 1–3 stay held.
 
 ~~**[PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are released from the free-tier
 cap**, within the $120 authority and in the board's priority order:~~ **Revoked 2026-09-30.**
@@ -1848,18 +1982,27 @@ input to it.
 
 ## 13. The provisioning hold — authority without permission (rev 4) {#the-provisioning-hold}
 
-### 13.1 What happened, in order, on 2026-09-30
+### 13.1 What happened, in order
 
-| Time (UTC) | Event                                                                                      | Effect                                      |
-| ---------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| 06:04:35   | [eee1c3f0](/PER/approvals/eee1c3f0-13d7-4f85-bd5e-c6450c26480b) approved — $7/mo + $8 test | rev 2's asks granted                        |
-| 06:05:13   | [63d288d2](/PER/approvals/63d288d2-8c4f-4694-b2d3-8921db8ac967) approved — Fly + $250/mo   | envelope ratified; rev 3 written against it |
-| ~06:16     | Board answers the payment-instrument question: **hold all provisioning, free tiers only**  | permission withdrawn; rev 4 written         |
+| Date / time (UTC)    | Event                                                                                                    | Effect                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **2026-09-29, a.m.** | **Board creates a Cloudflare connection** (rev 6)                                                        | **a vendor account exists from here on**    |
+| 2026-09-30 06:04:35  | [eee1c3f0](/PER/approvals/eee1c3f0-13d7-4f85-bd5e-c6450c26480b) approved — $7/mo + $8 test               | rev 2's asks granted                        |
+| 2026-09-30 06:05:13  | [63d288d2](/PER/approvals/63d288d2-8c4f-4694-b2d3-8921db8ac967) approved — Fly + $250/mo                 | envelope ratified; rev 3 written against it |
+| 2026-09-30 ~06:16    | Board answers the payment-instrument question: **hold all provisioning, free tiers only**                | permission withdrawn; rev 4 written         |
+| 2026-09-30 ~06:30    | §8.7 resolved: free-tier signups permitted                                                               | rev 5; three of five M0 criteria reachable  |
+| **2026-09-30 07:32** | **Board rules on the Cloudflare connection: verify it is live, then use it for a free web staging link** | **the hold's one carved exception (§13.7)** |
 
 Roughly eleven minutes separate the approval this ADR was rewritten around from the hold that
 suspended it. That is worth recording plainly rather than smoothing over, because it is the
-reason this document has four revisions in one day and the reason §7, §8 and §12 have each
+reason this document has several revisions in one day and the reason §7, §8 and §12 have each
 changed operative status twice.
+
+**The first row is new in rev 6, and its absence is what made this section wrong.** With the 29 Sep
+row missing, the hold read as "we have nothing, therefore nothing can be spent". With it present,
+the hold reads as what it actually is: a stop on **new** provisioning and on **any** payment
+instrument, laid over a pre-existing free connection nobody had accounted for. Revs 4 and 5 stated
+the first version. It was not true.
 
 ### 13.2 The distinction that makes this coherent
 
@@ -1895,6 +2038,12 @@ The provider decision, §5's constraint analysis, §3's and §4's arithmetic, §
 Fly prices egress by destination, and §12.2's verified list prices. None of those depend on
 whether we have spent anything. When the hold lifts, this ADR executes — no further analysis and
 no further board input is needed beyond the word "go".
+
+**Rev 6 adds one item to this list, and it is the important one.** The §13.7 exception does **not**
+change the provider decision. Cloudflare Pages hosting `apps/web` was **already** §7a's design —
+see §12.3's `apps/web` row and §8.1's topology, both of which put static assets behind a
+free-egress CDN and `apps/realtime` on Fly. The exception lets us do at $0 something the ratified
+plan already called for; it does not move the platform anywhere.
 
 ### 13.5 What would lift it
 
@@ -1974,6 +2123,67 @@ problem and becomes an M0 one, and I would escalate immediately rather than on a
 > to _measure_, that goes to Chief of Staff the day it is found. A missing measurement is the known
 > price of the hold and is already recorded in §13.3 — it is not a reason to re-ask early, because
 > re-asking on it would spend board attention to be told something the board already decided.
+
+### 13.7 The hold's one carved exception — Cloudflare Pages for `apps/web` (rev 6) {#the-one-carved-exception}
+
+**Decided by the board 2026-09-30 07:32Z.** This is the whole of the exception. If something is not
+in the "permitted" column below, it is held.
+
+|                       | Permitted                                                                                                                           | Held                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Account**           | The **pre-existing Cloudflare connection**, created by the board on 29 Sep. No card is involved because the account already exists. | Any **new** vendor account, on Cloudflare or anywhere else.                                         |
+| **Payment**           | Nothing. The exception is $0 by construction.                                                                                       | Any card on file, any paid tier, any trial, any spend — **on every provider including Cloudflare**. |
+| **Workload**          | **`apps/web` only**, as a static Cloudflare Pages deploy.                                                                           | **`apps/realtime`**, Redis, Postgres, and every row of §12.3's table.                               |
+| **Purpose**           | A **free staging link** the board can click.                                                                                        | A production environment, a performance baseline, or a migration.                                   |
+| **Provider decision** | Nothing changes. **Fly.io remains the ratified M0–M5 provider (§7a) and is not provisioned.**                                       | —                                                                                                   |
+
+**Why `apps/realtime` cannot be in the exception, and it is not a policy reason.** Cloudflare Pages
+serves static assets and Functions on the Workers runtime. It **cannot hold an open WebSocket
+connection for the life of a match**, which is the one thing `apps/realtime` exists to do. This is
+the same finding as §6's Durable Objects analysis and §13.6's conflict: the Workers runtime is not
+Node, and the always-on socket-holding process is precisely the line item $0 cannot cover (§8.3).
+So the exception is bounded by capability before it is bounded by permission.
+
+**AC2b is unchanged.** It is still gated on provisioning, for that reason. Nothing in this
+exception makes a WebSocket round trip demonstrable that was not demonstrable before it.
+
+**This is not a provider change.** A staging link is not a migration. Rebasing the platform onto
+Cloudflare would be a change to a major agreed tech choice and a board decision in its own right;
+nobody should read §13.7 as a step toward one. The **reversibility** lens is the argument for
+saying yes to this narrowly: a Pages deploy of a static app is undone by deleting a project, and it
+commits us to nothing.
+
+**What it changes for M0.** One thing, and it is worth naming because AC5 was recorded as blocked
+for a money reason that no longer fully applies:
+
+- **AC5 — "Staging link + short video/GIF + written status report posted for the board."** Its
+  **staging-link half is now reachable at $0** via [PER-111](/PER/issues/PER-111). AC5's gate is
+  therefore **no longer purely the payment instrument**; what remains is execution plus the two
+  halves that were always mine (the video/GIF and the written status report).
+- **AC1b is not affected.** The isolation property is what costs money (§8.4), and a free Pages
+  deploy of `apps/web` does not buy it.
+
+**Two standing constraints on anything produced under this exception.** Both are constraints I have
+already bound myself to elsewhere, and the exception creates a new surface for each:
+
+1. **A Cloudflare number is not a Fly number.** Whatever this staging link measures, it measures
+   **Cloudflare's edge on a free tier**, not Fly's. Every figure taken from it is labelled with the
+   provider and the tier it was measured on, and the **Fly.io equivalents stay owed** — due at the
+   M3 revisit (§13.5), not quietly dropped. This is the third time this guard has been needed
+   ([PER-7](/PER/issues/PER-7), [PER-15](/PER/issues/PER-15), and now here), which is why it is in
+   §9's owed-measurement note rather than only in a comment.
+2. **The demo caption must not overclaim** ([ADR-0009](./0009-m0-websocket-transport-probe.md) §4).
+   A Cloudflare Pages staging link shows **`apps/web`**, and `apps/web` is not a playable game. An
+   AC5 caption that implies a board member can click the link and play one is the exact failure
+   mode ADR-0009 §4 was written to prevent.
+
+**Execution, and who owns what.** Verifying the connection is actually live — before anything is
+deployed — plus the deploy itself and the pipeline description in
+[`docs/ci-cd.md`](../ci-cd.md) belong to Platform Engineer on
+[PER-111](/PER/issues/PER-111). The hold's scope, this section, and the AC5 record are mine
+([PER-112](/PER/issues/PER-112)). **If the connection turns out not to be live, the exception is
+moot rather than breached** — it permits using an account we have, and it authorises nothing to fix
+one we do not.
 
 ---
 
