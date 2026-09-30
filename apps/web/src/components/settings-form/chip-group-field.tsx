@@ -54,6 +54,7 @@ export function ChipGroupField({
     <FieldShell
       idPrefix={idPrefix}
       fieldKey={field.key}
+      value={value}
       label={field.label}
       help={field.help}
       error={error}
