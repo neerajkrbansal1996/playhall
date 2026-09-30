@@ -10,7 +10,10 @@
   Decision 4 therefore carries far more weight than rev 1 gave it. Rev 2 adds **Decision 6** (a
   machine-readable verdict marker) and **Decision 7** (the merge-time gate is advisory by
   decision, not by drift). Decisions 1–5 stand unchanged. New section:
-  [Rev 2 — the review verdict](#rev-2--the-review-verdict).
+  [Rev 2 — the review verdict](#rev-2--the-review-verdict). Rev 2 also **closes rev 1's one owed
+  measurement**: the board read billing on 2026-09-30, the account is on **Free**, and Pro was
+  declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan *and* by
+  decision, which is now a premise of this ADR rather than an assumption in it.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-3](/PER/issues/PER-3) (arising from [PER-35](/PER/issues/PER-35), implemented in [PER-6](/PER/issues/PER-6)); rev 2 on [PER-78](/PER/issues/PER-78)
@@ -126,6 +129,15 @@ Without it, the blast radius of one bad push is production.
   be gathered only if the board asks to reconsider. Owner: CTO. Not gathered now, because the
   recommendation is not to buy.
 
+  **Rev 2 — closed, and it went further than a measurement.** The board checked
+  `github.com/settings/billing` on 2026-09-30 and the account is on **Free**
+  ([PER-83](/PER/issues/PER-83)); they declined the ~$4/month Pro upgrade as an exception to the
+  provisioning hold. So private-branch protection is unavailable **by plan**, not merely
+  unconfigured, and the decision not to buy is the board's rather than ours. Actions
+  included-minutes headroom was confirmed adequate for this cycle at the same time. Nothing is
+  owed here any more: rev 1 framed this as a price to look up if the board reconsidered, and the
+  board has instead answered the underlying question. This closes the item rather than pricing it.
+
 ## Consequences
 
 **Easier**
@@ -138,6 +150,15 @@ Without it, the blast radius of one bad push is production.
 
 - A direct push to `main` is **detected, not prevented**. There is a window between the push
   and the red build in which `main` is wrong and looks fine.
+
+  **Rev 2 —** this sentence assumes the detector runs, and for its first three commits it did
+  not. The `Main` workflow was in `startup_failure` from the moment the pipeline landed (PR #25)
+  until PR #37 fixed the reusable-workflow permission scope — zero jobs, no annotation, so the
+  detector was not merely failing but silently absent, and a direct push in that window would have
+  been **neither** prevented nor detected ([PER-88](/PER/issues/PER-88)). Green again on
+  `57162da`. The lesson is not the outage, it is that rev 1's "window between the push and the red
+  build" is bounded only by the detector's own health, and nothing watches the watcher. See
+  Consequences (rev 2).
 - The §12 audit trail lives outside the repository. A future contributor, or anyone with only
   the git history, cannot reconstruct who reviewed what. Decision 4 is what keeps this
   recoverable, and it depends on engineers actually writing the link.
@@ -207,8 +228,9 @@ substance of this amendment.
 ### Decision 6 — the verdict is a machine-readable trailer in the PR body, checked by CI
 
 Add a `verdict` step to the existing `pr-hygiene` job (it already runs `scripts/ci/pr-hygiene.mjs`
-and already feeds the `ci-gate` aggregation). It fails the PR unless the description carries a
-trailer naming a verdict and pointing at where the verdict actually lives:
+and already feeds the `ci-gate` aggregation). It fails **the check** — not the merge; see below —
+unless the description carries a trailer naming a verdict and pointing at where the verdict
+actually lives:
 
 ```
 CTO-VERDICT: approved
@@ -217,13 +239,24 @@ CTO-REVIEW: <url of the Paperclip issue comment holding the review>
 
 Accepted values are `approved` and `changes-requested`; anything else, or a missing trailer, or a
 `CTO-REVIEW` url that does not resolve to the PR's linked issue, fails the check. Exact spec and
-implementation are owned by the follow-up issue, blocked on the CI pipeline landing
-([PER-6](/PER/issues/PER-6), PR #25 — note PR #8 in the rev 2 issue text is closed and superseded).
+implementation are owned by the follow-up issue ([PER-81](/PER/issues/PER-81)). Its dependency has
+since cleared: the CI pipeline ([PER-6](/PER/issues/PER-6)) landed as PR #25 on 2026-09-30, so
+`pr-hygiene`, `ci-gate` and `scripts/ci/pr-hygiene.mjs` are all on `main` and there is a job to
+extend. (PR #8, named in the issue that raised this rev, is closed and was superseded by #25.)
 
-Be exact about what this buys: **it gates process, not judgement.** The trailer is written by the
-same account that authors the PR, so it is self-attestable and always will be. What it converts is
-the failure mode — "nobody remembered to review this" stops being silent and becomes a red check,
-which is the same prevention-to-detection move as Decision 2. It cannot detect "reviewed badly".
+Be exact about what this buys, because there are two separate ways it falls short of a gate and
+only the first is about judgement.
+
+1. **It gates process, not judgement.** The trailer is written by the same account that authors the
+   PR, so it is self-attestable and always will be. What it converts is the failure mode —
+   "nobody remembered to review this" stops being silent and becomes a red check, the same
+   prevention-to-detection move as Decision 2. It cannot detect "reviewed badly".
+2. **A red check does not stop a merge, and on this plan nothing can make it.** Marking a status
+   check _required_ is a branch-protection feature, and protection is 403 Pro-gated with Pro
+   declined ([PER-83](/PER/issues/PER-83)). So the verdict step **reports**; the merge button stays
+   green beside it. This is written down deliberately: "we built the verdict check" must never
+   later be read as "we built the gate". Decision 6 is a detector, and the word "required" does not
+   apply to any check in this repository until protection becomes available.
 
 ### Decision 7 — merge-time review enforcement is advisory in v1, by decision
 
@@ -246,6 +279,17 @@ the repository alone cannot answer the question. Revisit triggers below.
   approve on our own work, which is theatre with a key-management cost. Not escalated. Revisit if
   the repo goes public at M5, when both a free second identity and free protection arrive together
   and the combination _is_ a gate.
+
+  One further reason it cannot be adopted independently, surfaced from
+  [PER-6](/PER/issues/PER-6) and confirmed by [PER-83](/PER/issues/PER-83): a second identity and
+  required reviews share **one** dependency, the plan. A second account cannot be added to
+  protection rules that cannot exist, so option 1 is a **precondition** for ever turning required
+  reviews on, not an improvement layered on top of them. And turning them on with a single identity
+  would not weakly enforce — it would **deadlock**: the author cannot approve their own PR, so
+  `require_approving_review_count: 1` makes every PR unmergeable except by admin bypass, and
+  routine admin bypass is worse than no rule because it trains the operator to click through the
+  control. That is a second, independent reason not to buy protection before a reviewer identity
+  exists.
 - **`github-actions[bot]` posting the verdict review (the free version of the above).** _Folded
   into Decision 6 as presentation only, and explicitly not the gate._ `GITHUB_TOKEN` acts as a
   distinct actor from the PR author, so GitHub should accept a verdict from it, and the `ci-gate`
@@ -288,12 +332,19 @@ All observed 2026-09-30 against `neerajkrbansal1996/playhall`.
 | Nothing blocks a merge today              | PR #23 `mergeStateStatus: CLEAN`, `reviewDecision: null`               |
 | Blocking remains unavailable              | `403 Upgrade to GitHub Pro` on both protection and rulesets endpoints  |
 | No second identity exists today           | Paperclip's GitHub broker resolves to the same user id `22657452`      |
-| Decision 6 is buildable                   | Actions run and pass on PR branches; `pr-hygiene` + `ci-gate` in place |
+| Decision 6 is buildable                   | `pr-hygiene`, `ci-gate`, `scripts/ci/pr-hygiene.mjs` on `main` via #25 |
 | Engineers able to merge                   | still **1** — rev 1's spend trigger has not fired                      |
+| Plan is Free, confirmed not inferred      | Board read `settings/billing` 2026-09-30; Pro declined ([PER-83](/PER/issues/PER-83)) |
+| Decision 2's detector can fail silently   | `Main` `startup_failure`, zero jobs, on the three commits #25→#37; green on `57162da` ([PER-88](/PER/issues/PER-88)) |
 
-**Measurements owed.** (1) Whether `github-actions[bot]` may submit `REQUEST_CHANGES` on an
-owner-authored PR. (2) The per-seat cost of a second collaborator on a private repo. Both are
-owed only if M5 or the two-merger trigger reopens option 1. Owner: CTO.
+**Measurement owed.** Whether `github-actions[bot]` may submit `REQUEST_CHANGES` on an
+owner-authored PR — owed only if M5 or the two-merger trigger reopens option 1. Owner: CTO.
+
+Rev 2 deliberately does **not** owe a per-seat cost for a second collaborator. Rev 1's reasoning
+for withholding the Pro price applies unchanged: we are not recommending the purchase, and a number
+in an ADR invites someone to quote it to the board as though the money bought the gate. [PER-83](/PER/issues/PER-83)
+has since made that stronger rather than weaker — the board has now declined spend on this control
+with the plan in front of them, so the missing number is settled policy, not an open question.
 
 ### Consequences (rev 2)
 
@@ -315,6 +366,17 @@ owed only if M5 or the two-merger trigger reopens option 1. Owner: CTO.
   accepted "detected, not prevented" for direct pushes; rev 2 accepts it for review. The two
   compound: a direct push to `main` by the sole merger is both unblocked and unreviewed, and only
   Decision 5 (releases from tags) stands between that and production.
+- Rev 1 framed Decision 2's `push-audit` as a compensating control _while prevention was
+  unavailable_. With Pro declined ([PER-83](/PER/issues/PER-83)) and going public already rejected
+  on governance grounds, **prevention is unavailable indefinitely, by decision** — so the detector
+  is not a stopgap, it is the entire control on `main` for the foreseeable future. That promotes
+  detector _health_ from an operational nicety to the thing this ADR rests on, and the first three
+  commits after the pipeline landed are the proof: `Main` sat in `startup_failure` with zero jobs
+  until PR #37 fixed it ([PER-88](/PER/issues/PER-88)). A detector that fails at startup does not
+  report that it failed — it looks like nothing happened, which is indistinguishable from
+  compliance. Fixed now, but the class of failure is permanent, and no check currently asserts that
+  `push-audit` actually ran. That gap is [PER-81](/PER/issues/PER-81)'s natural companion and is
+  named here so the next reader does not assume a green `main` implies an audited one.
 - Decision 6 adds a required-looking check that a determined author can satisfy in one line. There
   is a real risk it breeds the false confidence rev 1 rejected `CODEOWNERS` for. Decision 7 exists
   to keep that written down where the next reader will find it.
@@ -333,3 +395,22 @@ owed only if M5 or the two-merger trigger reopens option 1. Owner: CTO.
   should be adopted for the record it produces, still without claiming it blocks.
 - **`github-actions[bot]` turns out to be refused as a reviewer** → Decision 6's presentation layer
   is unavailable; the trailer and check stand on their own, and this section should say so.
+- **The board releases the provisioning hold, or reverses [PER-83](/PER/issues/PER-83)'s
+  buy-nothing answer** → this is the trigger named as a _decision_ rather than a milestone, and it
+  is the one that moves first in practice. Protection becoming purchasable makes required status
+  checks available immediately (the cheap half, already built — see below) and makes option 1
+  coherent for the first time. Re-price both, in that order.
+
+**One trigger, two halves — do not let them wait on each other.** The single phrase "the PR gate"
+covers two failures with different causes, and rev 2's predecessor treated them as one:
+
+| Failure                                       | Cause                    | Fixed by the plan?                   | Fixed by a second identity? |
+| --------------------------------------------- | ------------------------ | ------------------------------------ | --------------------------- |
+| Red code can be merged                        | protection-ineligible plan | **Yes** — required checks on `ci-gate` | No                          |
+| No PR can carry `APPROVED`/`CHANGES_REQUESTED` | one identity             | No                                   | **Yes** (necessary, not sufficient) |
+
+The consequence for sequencing: required status checks are blocked **only** by the plan decision,
+and Platform Engineer has already built the pipeline, so they switch on with no rework the moment
+protection is available. Required _reviews_ additionally need an identity. When the trigger above
+fires, adopt required status checks without waiting on the identity question — the cheap half should
+never queue behind the expensive one.
