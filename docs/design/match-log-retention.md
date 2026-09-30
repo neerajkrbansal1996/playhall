@@ -5,8 +5,12 @@
 - **Owner:** Platform Engineer
 - **Status:** Specified, not yet implemented
 - **Amended:** 2026-09-30 — **§7 is new**: the policy sized against the $0 tier's 0.5 GB ceiling,
-  after the CTO's costing input on [PER-51](/PER/issues/PER-51). §§1–4 and §6 are unchanged; §5
-  gains two items that §7 shows cannot be retrofitted.
+  after the CTO's costing input on [PER-51](/PER/issues/PER-51). §§1–4 are unchanged in substance;
+  §5 gains two items that §7 shows cannot be retrofitted, and §6 gains their tests.
+- **Amended:** 2026-09-30 (second pass) — the two questions §7 left open are **decided** on
+  PER-51: §7.4 the 30-day floor becomes a **tier-scoped exception** rather than a global
+  relaxation, and §7.5 `match_events_overflow` **ships in PER-15's migration**. Both are now
+  stated as decisions; §2 and §4 carry pointers to them.
 - **Sources:** [ADR-0001](../adr/0001-v1-stack.md) §§5, 6.1, 6.2; ADR-0003 §2.1 and rev 2 §8.2
 
 ## 1. The problem, with the numbers restated
@@ -36,6 +40,10 @@ precondition rather than hygiene.
 
 **Retain the full event log for at least 30 days; then compact a finished match to its exported
 record.** Adopted as proposed by the CTO on PER-15. Compaction is a delete, never a rewrite.
+
+This is the policy, and it stays the policy. A deployment whose storage cap cannot afford 30 days
+does not get to reinterpret it — it runs under a **declared, alerting, tier-scoped exception**
+with a shorter window, defined in §7.4. The $0 tier is the only such deployment today.
 
 ### What survives compaction
 
@@ -135,10 +143,15 @@ rooms that are _abandoned_.
 **Precondition on every drop:** a partition may be dropped only if it contains no row belonging to
 a match with `finished_at IS NULL`. If it does, skip the drop this cycle and re-check next cycle;
 alert if a partition has been undroppable for more than 7 days. Skipping costs at most one extra
-partition (~10 GB) and requires no data movement, which is why it beats migrating the stragglers'
-rows forward. If it ever fires often enough to matter, the alternatives are forward-migration of
-those few rows, or a product rule that adjudicates an abandoned unlimited game — the second is a
-product decision, not mine to take.
+partition (~10 GB) and requires no data movement, which is why it beats moving the stragglers'
+rows.
+
+That holds at the target load, where one extra partition is 20% slack. It does **not** hold on a
+byte-bounded tier, where the same skip can cross the storage cap and stop writes altogether — see
+§7.5, which is why `match_events_overflow` exists and why "migrate the rows forward" turns out not
+to be literally available under RANGE partitioning on `created_at`. The remaining alternative, a
+product rule that adjudicates an abandoned unlimited game, is a product decision and not mine to
+take.
 
 ## 5. Split of work
 
@@ -151,11 +164,15 @@ product decision, not mine to take.
    absence of event rows is ambiguous with a match that produced no actions.
 3. The §4 invariant and its two tests.
 4. `MATCH_LOG_PARTITION_PERIOD` (`daily` | `weekly`, default `weekly`) read by the migration, and
-   the `match_events_overflow` table — both from §7, both fixed at migration time.
+   the `match_events_overflow` table of §7.5 with its `UNION ALL` in the recovery query — both
+   decided on PER-51, both fixed at migration time and expensive to retrofit into a running
+   recovery path.
 
-**In the follow-up under PER-29** (the enforcement job): weekly partition maintenance (pre-create
-next, drop the sixth), the §4 precondition check, dry-run mode reporting rows and bytes it _would_
-reclaim, a feature flag defaulting to off, and reclaimed-bytes metrics.
+**In the follow-up under PER-29** (the enforcement job): partition maintenance at the configured
+period (pre-create a month ahead, drop the oldest beyond the retained count), the §4 precondition
+check, the §7.4 byte bound and window-exception handling, the §7.5 overflow copy, dry-run mode
+reporting rows and bytes it _would_ reclaim and which bound would have fired, a feature flag
+defaulting to off, and reclaimed-bytes metrics.
 
 **Board gate.** Arming the job in production permanently deletes production rows, which is
 board-gated. It ships disabled, with dry-run evidence, and enabling it needs board approval on
@@ -166,9 +183,13 @@ job is ready to arm, not while it is dark.
 
 - PER-15: a test that deletes every `match_events` row for a finished match and asserts the record
   still replays to the same final state and result; a test that a live match's recovery is
-  unaffected by compaction of neighbouring matches; the migration shown to be non-destructive.
+  unaffected by compaction of neighbouring matches; a test that recovery of a live match returns
+  the same ordered event list whether its rows sit in `match_events`, in
+  `match_events_overflow`, or split across both; the migration shown to be non-destructive.
 - Follow-up: dry-run output on a seeded table reporting the measured bytes reclaimed by one
-  partition drop, and a test that a partition containing a live match's events is **not** dropped.
+  partition drop; a test that a partition containing a live match's events is **not** dropped; a
+  test that a projected window below `MATCH_LOG_MIN_WINDOW_DAYS` with no declared exception raises
+  `retention_window_below_policy` in dry run, before any eviction.
 
 ## 7. Sizing the policy against the $0 tier
 
@@ -244,8 +265,38 @@ always subject to the §4 live-match precondition
 
 The time bound is §2's policy floor; the byte bound is the $0 ceiling. They point in opposite
 directions, and on the free tier the byte bound wins — which means **the free tier does not satisfy
-the 30-day policy.** That is a policy exception for the CTO to accept, not something to configure
-quietly; asked on [PER-51](/PER/issues/PER-51).
+the 30-day policy.**
+
+**Decided on [PER-51](/PER/issues/PER-51): a tier-scoped exception, not a global relaxation.**
+§2 still reads "at least 30 days". A deployment that cannot afford it declares an exception
+instead of quietly retaining less:
+
+```
+MATCH_LOG_MIN_WINDOW_DAYS        default 30          the §2 floor
+MATCH_LOG_BYTES_BUDGET           unset by default    the tier ceiling; unset = time bound only
+MATCH_LOG_WINDOW_EXCEPTION       unset by default    e.g. "neon-free-0.5gb: 9d"
+```
+
+Three rules make the exception a decision rather than a drift:
+
+1. **The byte bound still wins at runtime.** If the budget would force a window shorter than
+   `MATCH_LOG_MIN_WINDOW_DAYS`, the job evicts anyway. The alternative is crossing the cap, and
+   past the cap writes fail on the tier of record — a shorter audit window beats matches that stop
+   being recorded. Correctness never depends on the window: replayability lives in
+   `match_records`, which is never compacted (§2). What shrinks is the per-event metadata window
+   of §2's "what is lost".
+2. **Evicting below the floor without a declared exception is an alert, not a silent success.**
+   `retention_window_below_policy` fires on the first such cycle, and the dry run reports the
+   projected window so it fires before the eviction, not after. With
+   `MATCH_LOG_WINDOW_EXCEPTION` set and the projected window at or above the exception's own
+   figure, it is a recorded operating mode and does not alert; go below the _exception_ and it
+   alerts again.
+3. **The exception names the tier and the number.** "neon-free-0.5gb: 9d" is auditable; "the free
+   tier retains less" is not. A tier without an entry runs to the 30-day floor.
+
+So the $0 topology runs `daily` partitions, a ~250 MB budget, and a declared 9-day window
+(§7.3 arithmetic at 24/7 demo load; the I3 duty cycle needs no exception at all — it fits 30 days
+at 52% of the cap). The target load of ADR-0003 §2.1 runs `weekly`, no budget, no exception.
 
 ### 7.5 At 0.5 GB, "skip the drop" is itself an outage path
 
@@ -270,9 +321,37 @@ partitioning on `created_at`: a row can only live in the partition whose range c
 3. **A product rule that adjudicates an abandoned unlimited game.** Product's call, already named
    in §4.
 
-Recommended: ship (1)'s table in PER-15 — one unpartitioned table, no hot-path cost — leave the job
-skipping by default, and use the overflow path only when a blocked partition and the byte bound
-coincide. That is the case the free tier creates and the paid tier does not.
+**Decided on [PER-51](/PER/issues/PER-51): ship (1) — `match_events_overflow` goes into PER-15's
+migration.** One unpartitioned table, nothing on the hot path, and it is the class of thing §3 says
+cannot be retrofitted: adding it later means adding a `UNION ALL` to the recovery path of a running
+system. The job still **skips by default**; the overflow path is used only when a blocked partition
+and the byte bound fire in the same cycle — the case the free tier creates and the paid tier does
+not.
+
+Shape and rules, so PER-15 can write the migration without re-deriving them:
+
+```sql
+CREATE TABLE match_events_overflow (
+  -- same columns as match_events
+  PRIMARY KEY (match_id, seq)   -- a real unique constraint: unpartitioned, so §3's
+);                              -- three-column-PK compromise does not apply here
+```
+
+- **Only a live match's rows may enter it.** The copy is `INSERT ... SELECT` from the blocked
+  partition `WHERE match_id IN (SELECT id FROM matches WHERE finished_at IS NULL)`, inside the
+  same transaction as the `DETACH`, so a crash mid-compaction cannot lose rows or double them.
+- **Rows leave at `game:over`**, in the same transaction that writes `exportRecord` to
+  `match_records`. That is what bounds the table: its size is at most the event count of the
+  currently-live matches that outlived a partition, and it drains to empty whenever no such match
+  exists.
+- **Recovery reads `match_events` `UNION ALL match_events_overflow`, for `finished_at IS NULL`
+  only** — unchanged from §4's invariant, and the `created_at >= matches.started_at` bound of §3
+  still prunes the partitioned side. The overflow side is small enough to scan.
+- **A row in the overflow table is not compacted state.** `matches.log_compacted_at` stays `NULL`
+  for a match whose rows were moved, because its events still exist. It is set only when the
+  events are actually gone.
+- **Gauge it.** `match_log_overflow_rows` alerts on non-zero for more than 7 days — the same alert
+  class as an undroppable partition, since both mean one straggler match is holding the log open.
 
 ### 7.6 What the job therefore has to add
 
@@ -285,8 +364,12 @@ coincide. That is the case the free tier creates and the paid tier does not.
 - **Dry run reports both bounds**: which bound would have fired, bytes reclaimed, and any partition
   blocked by §4. The board's dry-run evidence has to show the byte bound working, not just the time
   bound.
-- Storage-cap and undroppable-partition alerts are one alert class: both mean the log has stopped
-  being reclaimed.
+- **The projected retention window as a reported number**, not an implied one — `retention_window_days`
+  alongside `match_log_bytes`, checked against `MATCH_LOG_MIN_WINDOW_DAYS` and
+  `MATCH_LOG_WINDOW_EXCEPTION` per §7.4. An operator should be able to read the current window off
+  a dashboard rather than infer it from partition boundaries.
+- Storage-cap, undroppable-partition, non-empty-overflow and window-below-policy alerts are one
+  alert class: all four mean the log has stopped being reclaimed on schedule.
 
 ### 7.7 What does not change
 
