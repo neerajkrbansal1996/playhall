@@ -77,6 +77,20 @@ if (!isDefined) {
   const strict = process.env.CI_STRICT_GATES === '1'
   const detail = `gate "${gateName}" has no root script "${gate.script}" yet — owner: ${gate.pendingOwner ?? 'unassigned'}`
 
+  // A gate declared live (`pendingOwner: null`) whose script has gone missing is
+  // a demotion, not an unwritten implementation. Rename the root `lint` script
+  // and this would otherwise report PENDING with owner `unassigned` and exit 0,
+  // leaving `ci-gate` green while lint no longer ran. `CI_STRICT_GATES` does not
+  // get a say in that one: the gate's own registry entry says it is live.
+  if (gate.pendingOwner === null) {
+    console.error(
+      `::error title=CI gate demoted::${detail}. This gate is declared live, so a missing ` +
+        'script means it was renamed or deleted rather than not written yet. Restore the ' +
+        'script, or move the gate back to PENDING with an owning issue in scripts/ci/gate.mjs.',
+    )
+    process.exit(1)
+  }
+
   if (strict) {
     console.error(`::error title=CI gate missing::${detail} (CI_STRICT_GATES=1)`)
     process.exit(1)

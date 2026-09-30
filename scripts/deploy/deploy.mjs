@@ -146,6 +146,16 @@ const PROVIDERS = {
    *
    * Web only: Pages has no persistent-process runtime, so it cannot hold the
    * WebSocket connections `apps/realtime` needs.
+   *
+   * **Untested, and known incomplete.** No Cloudflare account exists, so nothing
+   * here has ever run. Two things to fix before it does, stated here rather than
+   * left looking configured:
+   *   * it uploads `apps/web/.next` raw, which is not a deployable Pages
+   *     artifact for an App Router app — that needs `@cloudflare/next-on-pages`,
+   *     and `apps/web/src/app/api/health/route.ts` is `runtime = 'nodejs'` plus
+   *     `force-dynamic`, which Pages cannot serve without it;
+   *   * `wrangler@latest` below is unpinned, in a repo where every GitHub action
+   *     is SHA-pinned. Pin it the day this adapter is first exercised.
    */
   'cloudflare-pages'() {
     if (target !== 'web') {

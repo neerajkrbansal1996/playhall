@@ -106,6 +106,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs unit
+
+  # The repo-wide >= 80% rule (AGENTS.md) is currently enforced only *inside*
+  # `pnpm test`, by each package's own vitest thresholds — so a package that
+  # never configures a threshold is exempt by accident, which is how
+  # `game-sdk` sat at 0% and `games/chess` at 41% while `unit` stayed green.
+  # This gate is the aggregate check that closes that hole. PENDING until its
+  # owning issue (PER-89) lands the root script; see scripts/ci/gate.mjs.
+  #
+  # The coverage artifact belongs here rather than on `unit`, where it used to
+  # sit: `unit` runs vitest with no `--coverage`, so the upload had
+  # `if-no-files-found: ignore` and published an empty archive on every run that
+  # read, to anyone glancing at it, as coverage enforcement. On this job it is
+  # empty for the same reason until PER-89 lands — but at least it is attached to
+  # the job whose name says it is pending.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs coverage
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -117,21 +139,6 @@ jobs:
             games/_examples/*/coverage/**
           if-no-files-found: ignore
           retention-days: 7
-
-  # The repo-wide >= 80% rule (AGENTS.md) is currently enforced only *inside*
-  # `pnpm test`, by each package's own vitest thresholds — so a package that
-  # never configures a threshold is exempt by accident, which is how
-  # `game-sdk` sat at 0% and `games/chess` at 41% while `unit` stayed green.
-  # This gate is the aggregate check that closes that hole. PENDING until its
-  # owning issue (PER-89) lands the root script; see scripts/ci/gate.mjs.
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
-      - run: node scripts/ci/gate.mjs coverage
 
   # The conformance suite. This is the gate that blocks a game from merging if
   # it leaks hidden information, is non-deterministic, or accepts an illegal

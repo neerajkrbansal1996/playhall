@@ -105,7 +105,13 @@ that same job becomes a hard gate with **no workflow edit**.
 
 To close the loophole once M1 lands, set `CI_STRICT_GATES=1` in the gate jobs' `env`. A
 pending gate then fails instead of passing, so a gate cannot silently regress to "not
-implemented".
+implemented". Owner and trigger: [PER-98](/PER/issues/PER-98) at M1 close — "set it once M1
+closes" in a code comment is not a commitment anything honours.
+
+A gate declared **live** (`pendingOwner: null`) whose root script is missing is a different
+case — a demotion, not an unwritten implementation — and it fails hard regardless of
+`CI_STRICT_GATES`. Rename the root `lint` script and CI says so, instead of reporting PENDING
+with owner `unassigned` and leaving `ci-gate` green while lint no longer runs.
 
 A gate name that is not in the registry exits `2`. That check uses `Object.hasOwn`, not a
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
@@ -117,9 +123,13 @@ The `>= 80%` rule is enforced today only _inside_ `pnpm test`, by each package's
 thresholds. A package that never configures one is therefore exempt by accident while
 `unit` stays green — which is exactly how `packages/game-sdk` sat at 0%
 ([PER-53](/PER/issues/PER-53)) and `games/chess` at 41%
-([PER-82](/PER/issues/PER-82)). The `unit` job already uploads a `coverage` artifact, which
-implied a check that did not exist. [PER-89](/PER/issues/PER-89) lands the root script that
+([PER-82](/PER/issues/PER-82)). [PER-89](/PER/issues/PER-89) lands the root script that
 fails on a missing threshold, not just a low one.
+
+The `coverage` artifact upload lives on this job, not on `unit`. On `unit` it had
+`if-no-files-found: ignore` next to a vitest run with no `--coverage`, so it published an
+empty archive on every run that implied a check which did not exist. It is still empty until
+PER-89 lands — but it now hangs off the job whose name says PENDING.
 
 ### Why one aggregate check
 
@@ -276,9 +286,10 @@ so every gate here executes and ADR-0004's push detector can fire.
 **Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
-not a verdict. Four of eight gates are PENDING stubs, `integration` boots Redis and Postgres
-service containers with no tests in them, and there is no build caching. Re-measure when M1
-closes before concluding Turborepo is unnecessary.
+not a verdict. **Five of nine gates are PENDING stubs**, `integration` boots Redis and
+Postgres service containers with no tests in them, and there is no build caching. Re-measure
+when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
+the `coverage` job, so it is a nine-job number for a ten-job pipeline.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 
@@ -302,10 +313,14 @@ on both services.
 ## Things deliberately not done
 
 - **`prettier --check` is not a CI gate.** PER-6 lists lint, typecheck, boundaries, unit,
-  testkit, integration and E2E; formatting is not among them, and the repo currently has
-  ~24 unformatted files. A gate that is red the day it lands teaches people to ignore CI.
-  Adding it needs a one-time repo-wide `prettier --write`, which is a large mechanical
-  diff and belongs in its own PR.
+  testkit, integration and E2E; formatting is not among them. The figure previously given
+  here — "~24 unformatted files" — is stale: measured at this head, `prettier --check .`
+  reports **two**, `docs/adr/0004-pr-gate-without-branch-protection.md` and
+  `docs/adr/README.md`. So the "large mechanical diff" argument is mostly spent, and what is
+  left is one registry line, one job, and two documents to reformat.
+  [PER-98](/PER/issues/PER-98) owns it and must re-measure immediately before landing —
+  "clean" is a property of a head, not of the repo, and this number moves every time a
+  document lands.
 - **No `CODEOWNERS`.** Rejected by ADR-0004, and the reasoning is right: without branch
   protection it enforces nothing, and a file that looks like a control but is not one is
   worse than no file, because it invites the belief that the gate exists.
