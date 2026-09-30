@@ -125,10 +125,12 @@ jobs:
               anyDeployed
                 ? 'Each deployed URL above passed a health probe (HTTP 2xx **and** `ok: true`) before this comment was written.'
                 : [
-                    'Nothing was deployed: no hosting provider is configured. The provider choice',
-                    'and its budget are board decisions still open on PER-2. The pipeline itself is',
-                    'in place — setting the `DEPLOY_PROVIDER` repo variable and its secrets',
-                    'activates previews with no code change. See `docs/ci-cd.md`.',
+                    'Nothing was deployed, and **this is expected — not a failure.** No hosting',
+                    'provider is configured yet. The board has chosen Fly.io with $120/month of',
+                    'spend authority (PER-2, detail on PER-38); what is still missing is the',
+                    'provisioned apps and secrets, which are PER-7. The pipeline itself is in',
+                    'place — setting the `DEPLOY_PROVIDER` repo variable and its secrets activates',
+                    'previews with no code change. See `docs/ci-cd.md`.',
                   ].join('\n'),
             ].join('\n')
 
