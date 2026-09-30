@@ -11,6 +11,7 @@
 import {
   DEFAULT_DISCONNECT_POLICY,
   SDK_CONTRACT_VERSION,
+  SETTINGS_FORM_VERSION,
   type AnyGameModule,
   type GameManifest,
   type GameStatus,
@@ -59,6 +60,16 @@ export function makeGame(options: FakeGameOptions): AnyGameModule {
     supportsSpectators: options.supportsSpectators ?? true,
     supportsBots: false,
     settingsSchema,
+    // Mandatory since ADR-0007: every manifest describes its own settings form.
+    // Mirrors `settingsSchema` exactly, because `checkSettingsForm` validates
+    // the two against each other — bounds included.
+    settingsForm: {
+      version: SETTINGS_FORM_VERSION,
+      fields: [
+        { kind: 'number', key: 'boardSize', label: 'Board size', min: 3, max: 5, step: 1 },
+        { kind: 'toggle', key: 'timed', label: 'Timed' },
+      ],
+    },
     defaultSettings: { boardSize: 3, timed: false },
     presets: [
       {
