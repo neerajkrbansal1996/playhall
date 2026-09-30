@@ -14,8 +14,12 @@
  * workflow edit. The job names never change, which is what lets required status
  * checks be switched on (see `docs/ci-cd.md`) without rework.
  *
- * That has now happened once for real: PER-5 added the root `boundaries` script
- * and the gate went live on the next run with no edit to this file.
+ * That has now happened for real three times: PER-5 added the root `boundaries`
+ * script, `format` went live the same way, and PER-131 added `test:e2e` — each
+ * time the gate went live on the next run with no edit to the workflow. `e2e`
+ * did need one workflow step, but not to become a gate: the browsers have to be
+ * downloaded, and `playwright install --with-deps` runs `apt-get`, which has no
+ * business inside a pnpm script a developer might run.
  *
  * `CI_STRICT_GATES=1` turns PENDING into a failure. Set it once M1 closes so a
  * gate can never silently regress back to "not implemented".
@@ -57,10 +61,13 @@ const GATES = {
     script: 'test:integration',
     pendingOwner: 'M1 — realtime service integration tests (need Redis + Postgres)',
   },
-  e2e: {
-    script: 'test:e2e',
-    pendingOwner: 'M1/M3 — QA Engineer, multi-browser Playwright suite',
-  },
+  // Live since PER-131: the root `test:e2e` script and `playwright.config.ts`
+  // landed, so this gate stopped printing `::notice title=CI gate pending` and
+  // started running Playwright on Chromium and WebKit. `pendingOwner: null` is
+  // now load-bearing — delete the root script and the "gate demoted" branch
+  // below fails the job instead of reporting PENDING and exiting 0.
+  // Coverage and its explicit non-coverage: `docs/testing/e2e.md`.
+  e2e: { script: 'test:e2e', pendingOwner: null },
 }
 
 const gateName = process.argv[2]
