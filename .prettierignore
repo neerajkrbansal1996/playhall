@@ -10,3 +10,6 @@ CHANGELOG.md
 
 # Boundary fixtures are deliberate violations kept out of every normal tool pass.
 *.fixture
+playwright-report
+test-results
+blob-report

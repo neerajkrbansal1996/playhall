@@ -68,9 +68,20 @@ export function CreateLobbyPreview({
         onApplyPreset={settings.applyPreset}
       />
 
+      {/*
+        The two `data-testid`s below are the only hooks the E2E overflow gate
+        uses to reach this page's interactive states ([PER-131](/PER/issues/PER-131)).
+        They exist because the alternative is selecting by the label text, and
+        this copy is Product Designer's to change — an English string in a
+        selector breaks on the first rename and on the first locale. Keep the
+        attributes if you reword the buttons.
+      */}
       <div className="flex flex-col gap-2">
-        <Button onClick={() => setSubmitted(settings.values)}>Create lobby</Button>
+        <Button data-testid="create-lobby-submit" onClick={() => setSubmitted(settings.values)}>
+          Create lobby
+        </Button>
         <Button
+          data-testid="toggle-server-error"
           variant="outline"
           onClick={() =>
             setErrors((current): SettingsFieldErrors =>
@@ -85,7 +96,10 @@ export function CreateLobbyPreview({
       </div>
 
       {submitted === null ? null : (
-        <pre className="bg-muted overflow-x-auto rounded-md p-3 text-xs">
+        <pre
+          data-testid="submitted-settings"
+          className="bg-muted overflow-x-auto rounded-md p-3 text-xs"
+        >
           {JSON.stringify(submitted, null, 2)}
         </pre>
       )}
