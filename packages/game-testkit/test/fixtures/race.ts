@@ -88,10 +88,26 @@ export interface RaceBreakage {
   readonly abortDoesNothing?: boolean
   /** The game throws while the abort is applied. */
   readonly abortThrows?: boolean
+  /** The game's own `validateAction` rejects the abort it declared a scenario for. */
+  readonly abortNotAllowed?: boolean
+  /** `validateAction` throws on the abort instead of returning a rejection. */
+  readonly abortValidateThrows?: boolean
   /** The game throws on the second move, so `prepare` records a crashed run. */
   readonly crashOnMove?: boolean
   /** Override the abort scenario's `afterSteps`; `'omit'` leaves it unset. */
   readonly abortAfterSteps?: number | 'omit'
+  /**
+   * Drop `getLegalActions`, which is optional on `TurnBasedGameServer`. The
+   * abort driver then has no moves to play, so `afterSteps` cannot be reached.
+   */
+  readonly omitGetLegalActions?: boolean
+  /** A `chooseAction` that declines every move, the other way to reach no moves. */
+  readonly declineMoves?: boolean
+  /**
+   * `RESULT_REASONS` membership: a JavaScript game returns a reason that is not
+   * in the enum at all. Unreachable through the types, which is the point.
+   */
+  readonly bogusReason?: string
 }
 
 const GHOST = asSeatId('seat-from-another-match')
@@ -194,7 +210,12 @@ export function makeRace(
     validateAction(_ctx, state, seatId, action) {
       if (!state.seatIds.includes(seatId)) return invalid('not_seated')
       if (server.getResult(state) !== null) return invalid('match_over')
-      if (action.type === 'abort') return VALID
+      if (action.type === 'abort') {
+        if (breakage.abortValidateThrows === true) {
+          throw new Error('race: validateAction blew up on the abort')
+        }
+        return breakage.abortNotAllowed === true ? invalid('not_allowed') : VALID
+      }
       if (state.seatIds[state.turn] !== seatId) return invalid('not_your_turn')
       return VALID
     },
@@ -223,10 +244,14 @@ export function makeRace(
       return { scores: state.scores, turn: state.turn, target: state.target }
     },
 
-    getLegalActions(state, seatId) {
-      if (server.getResult(state) !== null) return []
-      return state.seatIds[state.turn] === seatId ? [{ type: 'score' }] : []
-    },
+    ...(breakage.omitGetLegalActions === true
+      ? {}
+      : {
+          getLegalActions(state: RaceState, seatId: SeatId): readonly RaceAction[] {
+            if (server.getResult(state) !== null) return []
+            return state.seatIds[state.turn] === seatId ? [{ type: 'score' }] : []
+          },
+        }),
 
     getResult(state): MatchResult | null {
       if (state.aborted) {
@@ -236,13 +261,18 @@ export function makeRace(
         }
       }
       if (!state.scores.some((score) => score >= state.target)) return null
-      return { reason: 'completed', standings: rank(state, breakage) }
+      return {
+        // `as` because the whole point of this mutant is a value the type bans.
+        reason: (breakage.bogusReason ?? 'completed') as ResultReason,
+        standings: rank(state, breakage),
+      }
     },
   }
 
   return {
     manifest,
     server,
+    ...(breakage.declineMoves === true ? { chooseAction: () => null } : {}),
     ...(breakage.omitAbortScenarios === true
       ? {}
       : {
