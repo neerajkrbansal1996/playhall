@@ -81,6 +81,13 @@ const timerRecordSchema = z.object({
   turnElapsedMs: z.number().int().nonnegative(),
   clock: playerClockConfigSchema.nullable(),
   expired: z.boolean(),
+  /**
+   * Outstanding holds. Optional with an empty default so a snapshot written by
+   * a pre-hold build still restores — a live match must survive the deploy that
+   * introduces the field, and an unheld timer is the correct reading of a
+   * snapshot that had no concept of holds.
+   */
+  holds: z.array(z.enum(['room', 'seat-disconnect', 'timer'])).default([]),
   version: z.number().int().positive(),
 })
 

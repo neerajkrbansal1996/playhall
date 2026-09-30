@@ -10,18 +10,21 @@
 export type { Clock, ManualClock } from './clock.js'
 export { createFixedClock, createManualClock, createSystemClock } from './clock.js'
 
-export type { DelayMode, PlayerClockConfig, TimerRecord } from './record.js'
+export type { DelayMode, PlayerClockConfig, TimerHold, TimerRecord } from './record.js'
 export {
   DEFAULT_PLAYER_CLOCK,
+  applyHold,
   chargeableElapsedMs,
   createTimerRecord,
   deadlineMsAt,
   delayRemainingMsAt,
   endTurnRecord,
   expireRecord,
+  isHeld as isTimerHeld,
   isRunning as isTimerRunning,
   pauseRecord,
   rawElapsedMs,
+  releaseHold,
   remainingMsAt,
   resetRecord,
   resumeRecord,

@@ -64,6 +64,38 @@ export const DEFAULT_PLAYER_CLOCK: PlayerClockConfig = {
 }
 
 /**
+ * Who is holding a timer stopped from *outside* the game's own state.
+ *
+ * ## Why a set of reasons and not a boolean
+ *
+ * A stopped timer has two completely different meanings and conflating them is
+ * how a reconnect starts the clock of the player who is not to move. Black's
+ * clock is stopped because it is White's move — that is the *game state*
+ * speaking, and no resume should ever override it. Black's clock is also stopped
+ * when Black drops — that is a *hold*, and the matching resume must lift it.
+ *
+ * So a hold records **responsibility for having stopped this timer**. The rule
+ * that makes it compose is in `applyHold`: a hold is only taken on a timer that
+ * was actually running, or that is already held by someone else. A pause that
+ * finds a timer already stopped for a game-state reason takes no hold, so its
+ * resume correctly does nothing.
+ *
+ * Because it is a set, overlapping holds nest properly: a host pauses the room,
+ * then a player drops, then the host unpauses — and that player's clock stays
+ * stopped, because their own hold is still outstanding.
+ *
+ * - `room` — a whole-room freeze: host pause, or a rematch vote.
+ * - `seat-disconnect` — one seat is not there and its manifest says the clock
+ *   pauses for that.
+ * - `timer` — an explicit `pause` command from a game reducer.
+ *
+ * The values are duplicated in `timerRecordSchema`, which is what makes a new
+ * hold reach Redis safely: the snapshot round-trip tests parse a real snapshot,
+ * so a hold added here and not there fails immediately rather than in a restart.
+ */
+export type TimerHold = 'room' | 'seat-disconnect' | 'timer'
+
+/**
  * One timer instance.
  *
  * Deliberately a flat, JSON-safe record: this is what goes into Redis, so a
@@ -88,8 +120,18 @@ export interface TimerRecord {
   /** True once the budget reached zero. Terminal until the timer is re-set. */
   readonly expired: boolean
   /**
-   * Bumped on every mutation. The client uses it to drop a `timer:sync` that
-   * overtook a newer one on a different socket frame.
+   * Outstanding holds keeping this timer stopped. Empty for a timer that is
+   * running, or that is stopped because the game state says so. See
+   * `TimerHold`.
+   */
+  readonly holds: readonly TimerHold[]
+  /**
+   * Bumped on every mutation of this record, so a reader can tell two otherwise
+   * identical snapshots apart. It rides on `timer:sync` for debugging and for a
+   * future per-record ordering check; the client does **not** use it to order
+   * frames today — `TimerSyncTracker.applySync` orders whole frames on
+   * `serverTime`, because a sync frame is a complete picture and a per-record
+   * counter cannot tell you that a timer was deleted.
    */
   readonly version: number
 }
@@ -116,6 +158,7 @@ export function createTimerRecord(input: CreateTimerRecordInput): TimerRecord {
     turnElapsedMs: 0,
     clock,
     expired: false,
+    holds: [],
     version: 1,
   }
 }
@@ -177,9 +220,20 @@ export function deadlineMsAt(record: TimerRecord): number | null {
   return record.startedAtMs + free + record.remainingMs
 }
 
-/** Starts (or restarts) the timer running from `nowMs`. */
+/** True while at least one hold is keeping this timer stopped. */
+export function isHeld(record: TimerRecord): boolean {
+  return record.holds.length > 0
+}
+
+/**
+ * Starts (or restarts) the timer running from `nowMs`.
+ *
+ * Refuses while any hold is outstanding. That is deliberate: a hold outranks a
+ * start, so a game reducer's `resume` can never un-pause a clock the platform is
+ * holding because the player is not there. Lift the hold with `releaseHold`.
+ */
 export function startRecord(record: TimerRecord, nowMs: number): TimerRecord {
-  if (record.expired || isRunning(record)) return record
+  if (record.expired || isRunning(record) || isHeld(record)) return record
   return bump(record, { startedAtMs: nowMs })
 }
 
@@ -187,6 +241,10 @@ export function startRecord(record: TimerRecord, nowMs: number): TimerRecord {
  * Freezes the timer, committing everything spent so far. Idempotent, so the
  * disconnect path can pause a timer that is already paused without corrupting
  * it.
+ *
+ * Takes no hold. This is the raw freeze used by `switchTurnTo` and the restart
+ * path, where the timer is stopped because the *game state* changed. Use
+ * `applyHold` for a pause that something outside the game must later lift.
  */
 export function pauseRecord(record: TimerRecord, nowMs: number): TimerRecord {
   if (!isRunning(record)) return record
@@ -199,15 +257,56 @@ export function pauseRecord(record: TimerRecord, nowMs: number): TimerRecord {
   })
 }
 
-/** Re-anchors a paused timer to `nowMs`. */
+/** Re-anchors a paused, unheld timer to `nowMs`. */
 export function resumeRecord(record: TimerRecord, nowMs: number): TimerRecord {
   return startRecord(record, nowMs)
 }
 
-/** Marks the timer fired. The budget is spent; `onTimer` is the runner's job. */
+/**
+ * Freezes the timer and records that `hold` is why.
+ *
+ * The guard is the whole point. A hold is taken only when this call is what
+ * stopped the timer (it was running) or when someone else already holds it (so
+ * the timer is in the held state and this hold nests inside it). A pause that
+ * finds a timer already stopped for a game-state reason — Black's clock while
+ * White is to move — takes no hold, so the matching `releaseHold` correctly
+ * leaves it stopped instead of starting a clock nobody is on.
+ *
+ * Idempotent per hold: taking the same hold twice is the first one.
+ */
+export function applyHold(record: TimerRecord, hold: TimerHold, nowMs: number): TimerRecord {
+  if (record.expired || record.holds.includes(hold)) return record
+  if (!isRunning(record) && !isHeld(record)) return record
+  return bump(pauseRecord(record, nowMs), { holds: [...record.holds, hold] })
+}
+
+/**
+ * Lifts `hold` and starts the timer again if that was the last one outstanding.
+ * A no-op when this hold was never taken — which is exactly how a reconnect
+ * leaves the non-mover's clock alone.
+ */
+export function releaseHold(record: TimerRecord, hold: TimerHold, nowMs: number): TimerRecord {
+  if (!record.holds.includes(hold)) return record
+  const holds = record.holds.filter((candidate) => candidate !== hold)
+  return startRecord(bump(record, { holds }), nowMs)
+}
+
+/**
+ * Marks the timer fired. The budget is spent; `onTimer` is the runner's job.
+ *
+ * Holds and the turn's unspent delay go with it: an expired clock is terminal
+ * until `resetRecord`, and leaving a hold on it would mean a `releaseHold`
+ * after a flag-fall tried to start a dead clock.
+ */
 export function expireRecord(record: TimerRecord): TimerRecord {
   if (record.expired) return record
-  return bump(record, { expired: true, remainingMs: 0, startedAtMs: null })
+  return bump(record, {
+    expired: true,
+    remainingMs: 0,
+    startedAtMs: null,
+    delayRemainingMs: 0,
+    holds: [],
+  })
 }
 
 /**
@@ -218,15 +317,22 @@ export function expireRecord(record: TimerRecord): TimerRecord {
  * Order matters and is the FIDE order: the increment is credited *after* the
  * move, so a player who flags mid-move does not get it. `endTurn` on an
  * already-expired clock is therefore a no-op.
+ *
+ * A budget that has reached zero is **expired**, never merely paused. The
+ * invariant is that a record cannot reach `remainingMs === 0` and stay
+ * un-expired: a record in that state is unrunnable, invisible to
+ * `deadlineMsAt`, and would never produce a `TimerExpiry` — so the game would
+ * never learn the player flagged. `TimerService` drains due expiries before
+ * every mutation, so in practice a flag-fall is delivered by `poll()` and this
+ * branch is the belt to that braces.
  */
 export function endTurnRecord(record: TimerRecord, nowMs: number): TimerRecord {
   const config = record.clock
   if (config === null) return pauseRecord(record, nowMs)
 
   const paused = pauseRecord(record, nowMs)
-  if (paused.expired || paused.remainingMs <= 0) {
-    return paused
-  }
+  if (paused.expired) return paused
+  if (paused.remainingMs <= 0) return expireRecord(paused)
 
   const refundMs =
     config.delayMode === 'bronstein' ? Math.min(config.delayMs, paused.turnElapsedMs) : 0
@@ -243,6 +349,12 @@ export function endTurnRecord(record: TimerRecord, nowMs: number): TimerRecord {
 /**
  * Replaces the budget without touching identity or configuration. Used by the
  * SDK `set` command when a game re-arms a timer it already owns.
+ *
+ * A re-armed timer starts from a clean slate: the turn's delay and elapsed time
+ * reset, `expired` clears, and so do any holds. A hold refers to a timer the
+ * holder stopped; once the game has replaced that timer the reference is stale,
+ * and keeping it would leave the new timer stopped by a pause nobody remembers
+ * issuing.
  */
 export function resetRecord(
   record: TimerRecord,
@@ -255,5 +367,6 @@ export function resetRecord(
     delayRemainingMs: record.clock?.delayMode === 'simple' ? record.clock.delayMs : 0,
     turnElapsedMs: 0,
     expired: false,
+    holds: [],
   })
 }
