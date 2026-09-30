@@ -379,11 +379,11 @@ survive a free-tier Redis that drops its keyspace. `packages/platform-core` owns
 
 **Blast radius, stated rather than hidden.**
 
-- *An app instance dies mid-match.* The room lock expires, another instance rehydrates from
+- _An app instance dies mid-match._ The room lock expires, another instance rehydrates from
   the last snapshot plus the match log, and play resumes at the correct state. During that
   window the player sees "reconnecting" — never a stale board presented as live. Showing a
   correct state late beats showing a wrong state now.
-- *Redis dies hard.* With `appendonly yes` and the default `appendfsync everysec`, an
+- _Redis dies hard._ With `appendonly yes` and the default `appendfsync everysec`, an
   in-flight match can lose **up to 1 second** of applied actions. We are accepting that for
   v1 and writing it down. Completed matches are already in Postgres and are unaffected. If
   it proves unacceptable, the mitigations are `appendfsync always` (paid for in write

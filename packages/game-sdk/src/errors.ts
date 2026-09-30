@@ -65,8 +65,13 @@ export interface ActionError<TCode extends string = StandardActionErrorCode> {
 export type ValidationResult<TCode extends string = StandardActionErrorCode> =
   { readonly ok: true } | { readonly ok: false; readonly error: ActionError<TCode> }
 
-/** The single shared "this action is legal" value. */
-export const VALID: ValidationResult<string> = Object.freeze({ ok: true })
+/**
+ * The single shared "this action is legal" value.
+ *
+ * Typed as the bare success branch rather than `ValidationResult<string>` so
+ * that returning it does not widen a game's own error-code union to `string`.
+ */
+export const VALID: { readonly ok: true } = Object.freeze({ ok: true })
 
 /** Builds a rejection. `invalid('not_your_turn')` is the common case. */
 export function invalid<TCode extends string>(

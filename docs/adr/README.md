@@ -47,6 +47,9 @@ so per decision rather than downgrading the whole document.
 | 0003                                                | Hosting + cost per 1,000 concurrent players     | Reserved — drafting on [PER-38](/PER/issues/PER-38) |
 | [0004](./0004-pr-gate-without-branch-protection.md) | Enforcing the PR gate without branch protection | Accepted                                            |
 | [0005](./0005-the-real-time-path.md)                | The real-time path (design only, M6)            | Mixed — see its own status table; §9 board-gated    |
+| 0006                                                | Empty standings for a match that did not count  | Reserved — drafting on [PER-42](/PER/issues/PER-42) |
+| 0007                                                | Settings-form descriptor contract               | Reserved — drafting on [PER-43](/PER/issues/PER-43) |
+| [0008](./0008-game-sdk-contract-v1.md)              | Fix the Game SDK contract at v1                 | Accepted                                            |
 
 Numbers are reserved as soon as an ADR is assigned, so two people drafting concurrently cannot
 collide on one. A reserved row with no file means someone is writing it.
