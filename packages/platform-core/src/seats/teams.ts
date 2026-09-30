@@ -53,11 +53,15 @@ export function isBalanced(seats: readonly RoomSeatSlot[], policy: SeatingPolicy
 }
 
 /**
- * The target size for each team, in canonical team order.
+ * The multiset of team sizes a balanced roster of `occupied` players across
+ * `teamCount` teams must have, largest first.
  *
- * `n % k` teams get one extra, and they are the *earliest* teams, which is what
- * makes the whole assignment deterministic: the same roster always produces the
- * same sides, on any server, on a replay, and after a restart.
+ * Sizes only — *which* team gets which size is `assignTeams`' business, and it
+ * hands the larger shares to the teams more players asked for. Fixing the
+ * remainder to the earliest teams here would be a second, conflicting balance
+ * rule: it would refuse to let anybody move onto the smaller side of a
+ * five-player room, because `[3, 2]` and `[2, 3]` are equally balanced and only
+ * the first would ever be reachable.
  */
 export function targetTeamSizes(occupied: number, teamCount: number): readonly number[] {
   const base = Math.floor(occupied / teamCount)
@@ -71,13 +75,28 @@ export function targetTeamSizes(occupied: number, teamCount: number): readonly n
  * `fixed`: seat index decides, occupied or not, so the lobby can show the sides
  * before anyone has arrived.
  *
- * `auto-balanced`: **stability first**. A seat whose current team still has
- * room keeps it; only the seats left over are placed, into the teams with
- * capacity remaining, in seat order. The alternative — recomputing round-robin
- * from scratch — is a correct balance that reshuffles bystanders every time
- * somebody joins, so a player who deliberately picked a side loses it because
- * a stranger walked in. Empty seats carry the team of whichever slot has
- * capacity left, so the lobby can still render the shape of the sides.
+ * `auto-balanced`: **demand first, then balance, and stability throughout.**
+ *
+ * 1. Count how many players are currently claiming each team.
+ * 2. Hand out the balanced share sizes — `targetTeamSizes` — largest share to
+ *    the team with the most claimants, ties broken by canonical team order.
+ * 3. In seat order, every player whose claimed team still has share left keeps
+ *    it.
+ * 4. Whoever is left over goes to the team with the most share remaining.
+ *
+ * Steps 1 and 2 are what make the result *reachable*: a five-player room
+ * balances as three-and-two either way round, so a player moving to the smaller
+ * side must be able to make it the bigger one. Allocating the extra share to the
+ * earliest team instead would silently bounce them back, and the move would look
+ * like it had failed.
+ *
+ * Step 3 is what makes it stable. Recomputing round-robin from scratch is a
+ * correct balance that reshuffles bystanders every time somebody joins, so a
+ * player who deliberately picked a side loses it because a stranger walked in.
+ * Exactly the players who cannot be accommodated are moved, and no others.
+ *
+ * Empty seats take whatever share is left over, so the lobby can render the
+ * shape of the sides before they fill.
  *
  * `none`: every team is cleared, including stale values left behind if a room
  * somehow outlived a policy change.
@@ -99,14 +118,31 @@ export function assignTeams(
   }
 
   const occupied = seats.filter((seat) => seat.occupantPlayerId !== null)
-  const capacity = new Map<string, number>()
-  targetTeamSizes(occupied.length, teamIds.length).forEach((size, index) => {
-    capacity.set(teamIds[index] as string, size)
+
+  // Step 1: demand.
+  const claims = new Map<string, number>(teamIds.map((teamId) => [teamId, 0]))
+  for (const seat of occupied) {
+    if (seat.teamId === null) continue
+    const current = claims.get(seat.teamId)
+    // A team id that is not in the policy is stale — a room that outlived a
+    // policy change — and counts as no claim at all.
+    if (current !== undefined) claims.set(seat.teamId, current + 1)
+  }
+
+  // Step 2: the balanced shares, largest to the most-wanted team. Canonical
+  // order breaks ties, so the whole assignment stays deterministic — the same
+  // roster produces the same sides on any server, on a replay, after a restart.
+  const shares = targetTeamSizes(occupied.length, teamIds.length)
+  const byDemand = [...teamIds].sort((a, b) => {
+    const difference = (claims.get(b) as number) - (claims.get(a) as number)
+    return difference !== 0 ? difference : teamIds.indexOf(a) - teamIds.indexOf(b)
   })
+  const capacity = new Map<string, number>()
+  byDemand.forEach((teamId, index) => capacity.set(teamId, shares[index] as number))
 
-  const next = new Map<number, string | null>()
+  const next = new Map<number, string>()
 
-  // Pass one: honour the choices that still fit.
+  // Step 3: honour the claims that still fit.
   for (const seat of occupied) {
     const current = seat.teamId
     if (current === null) continue
@@ -116,29 +152,44 @@ export function assignTeams(
     next.set(seat.index, current)
   }
 
-  // Pass two: place everyone else where there is room.
+  /** The team with the most share left. Canonical order breaks ties. */
+  function emptiest(): string | undefined {
+    let best: string | undefined
+    let bestRoom = 0
+    for (const teamId of teamIds) {
+      const room = capacity.get(teamId) ?? 0
+      if (room > bestRoom) {
+        best = teamId
+        bestRoom = room
+      }
+    }
+    return best
+  }
+
+  // Step 4: place everyone else. Taking the *emptiest* team rather than the
+  // first with any room is what guarantees the shares are consumed exactly, and
+  // so that the result is balanced for any number of teams.
   for (const seat of occupied) {
     if (next.has(seat.index)) continue
-    const teamId = teamIds.find((candidate) => (capacity.get(candidate) ?? 0) > 0)
-    // Unreachable: the targets sum to exactly `occupied.length` and pass one
+    const teamId = emptiest()
+    // Unreachable: the shares sum to exactly `occupied.length` and step 3
     // consumed at most that many. Guarded rather than asserted so a future
-    // change to the target maths degrades to "unassigned" instead of a crash.
+    // change to the share maths degrades to "unassigned" instead of a crash.
     if (teamId === undefined) continue
     capacity.set(teamId, (capacity.get(teamId) as number) - 1)
     next.set(seat.index, teamId)
   }
-
-  // Empty seats show where the next arrival would land.
-  const spare = [...capacity.entries()].filter(([, room]) => room > 0).map(([teamId]) => teamId)
-  let spareCursor = 0
 
   return seats.map((seat) => {
     let teamId: string | null
     if (seat.occupantPlayerId !== null) {
       teamId = next.get(seat.index) ?? null
     } else {
-      teamId = spare[spareCursor] ?? teamIds[seat.index % teamIds.length] ?? null
-      spareCursor += 1
+      // Empty seats show where the next arrival would land.
+      teamId = emptiest() ?? teamIds[seat.index % teamIds.length] ?? null
+      if (teamId !== null && (capacity.get(teamId) ?? 0) > 0) {
+        capacity.set(teamId, (capacity.get(teamId) as number) - 1)
+      }
     }
     return seat.teamId === teamId ? seat : { ...seat, teamId }
   })
@@ -164,24 +215,14 @@ export function moveToTeam(
   const seat = seats.find((candidate) => candidate.index === seatIndex)
   if (seat === undefined || seat.occupantPlayerId === null) return null
 
-  const teamIds = teamIdsFor(policy)
-  const occupied = seats.filter((candidate) => candidate.occupantPlayerId !== null)
-  const share = targetTeamSizes(occupied.length, teamIds.length)[teamIds.indexOf(teamId)] ?? 0
-  const others = occupied.filter(
-    (candidate) => candidate.index !== seatIndex && candidate.teamId === teamId,
+  // Pinning the mover is the whole implementation: `assignTeams` allocates the
+  // larger share to the team with the most claimants, so the mover's new team
+  // grows to fit them and exactly the players who no longer fit are re-placed.
+  // An explicit displacement step here would be a second balance rule competing
+  // with that one.
+  const pinned = seats.map((candidate) =>
+    candidate.index === seatIndex ? { ...candidate, teamId } : candidate,
   )
-
-  // Somebody has to leave only when the mover would push the team past its
-  // share, and then it is exactly one somebody: the highest-indexed current
-  // member. Clearing the whole team instead would be a correct balance that
-  // reshuffles bystanders, which is the churn `assignTeams` exists to avoid.
-  const displaced = others.length + 1 > share ? others.at(-1)?.index : undefined
-
-  const pinned = seats.map((candidate) => {
-    if (candidate.index === seatIndex) return { ...candidate, teamId }
-    if (candidate.index === displaced) return { ...candidate, teamId: null }
-    return candidate
-  })
   return assignTeams(pinned, policy)
 }
 
