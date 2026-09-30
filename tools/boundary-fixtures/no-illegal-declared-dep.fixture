@@ -1,0 +1,16 @@
+# expect: no-illegal-declared-dep
+# tool: declared-deps
+# why: a game's manifest declaring a platform package, before any import exists to catch
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@scope/game-sdk": "workspace:*",
+    "@scope/platform-core": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

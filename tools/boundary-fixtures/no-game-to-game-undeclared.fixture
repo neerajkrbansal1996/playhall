@@ -1,0 +1,11 @@
+# expect: no-game-to-game
+# why: one game importing another by package name without declaring it, so the specifier never resolves to a games/ path
+# unlink: fx-b
+=== file: games/fx-a/src/index.ts ===
+// `no-game-to-game` matches `^games/` with the importing game's own directory exempted via `$1`.
+// That only works on a resolved path. A game that reaches for a neighbour by package name and
+// does not declare it — the natural way to write this mistake — produces an unresolved bare
+// specifier, which no `^games/` pattern can match.
+import { id as other } from '@scope/fx-b'
+
+export const id = other

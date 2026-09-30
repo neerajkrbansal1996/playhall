@@ -1,0 +1,11 @@
+# expect: no-game-to-shared-internals
+# why: a deep import written as a package subpath, which the exports map never resolves, so the path-only rule could not fire at all
+=== file: games/fx-a/src/index.ts ===
+// The sibling fixture reaches into `packages/shared/src/room-code.ts` by relative path, which
+// resolves and so matches `^packages/shared/src/(?!index)`. This is the same violation written
+// the way an engineer actually writes it — as a subpath of the package. `shared`'s `exports` map
+// publishes only `.`, so this never resolves, which means before the bare-specifier alternation
+// was added this rule could not fire on the subpath form at all.
+import { ALPHABET } from '@scope/shared/room-code'
+
+export const alphabet = ALPHABET

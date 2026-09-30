@@ -2,6 +2,18 @@
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import prettier from 'eslint-config-prettier'
+import globals from 'globals'
+import { readFileSync } from 'node:fs'
+
+/**
+ * The npm scope, read from the SDK's own manifest rather than written out. The scope is a brand
+ * string and the brand is still a board decision — a literal here would turn the game-import
+ * rule below into a no-op the day the scope is renamed, which is worse than not having it.
+ */
+const SDK_NAME = JSON.parse(
+  readFileSync(new URL('./packages/game-sdk/package.json', import.meta.url), 'utf8'),
+).name
+const SCOPE = SDK_NAME.split('/')[0]
 
 export default tseslint.config(
   {
@@ -48,11 +60,92 @@ export default tseslint.config(
           property: 'random',
           message: 'Use ctx.rng (seeded, stored on the match), not Math.random().',
         },
+        {
+          object: 'performance',
+          property: 'now',
+          message:
+            'Use ctx.now (server-authoritative clock), not performance.now(). A monotonic clock ' +
+            'is still an ambient clock: two replays of the same seed would diverge.',
+        },
+      ],
+      // `no-restricted-properties` only sees a property access, so `new Date()` — which reads
+      // the same ambient clock without touching `Date.now` — slips past it (ADR-0002 §4).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'NewExpression[callee.name="Date"][arguments.length=0]',
+          message:
+            'Use ctx.now (server-authoritative clock), not new Date(). `new Date(ctx.now)` is ' +
+            'fine — it is the zero-argument form that reads the ambient clock.',
+        },
       ],
     },
   },
   {
-    files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}'],
+    /**
+     * Editor-time half of ADR-0002. `pnpm boundaries` (dependency-cruiser) is the gate; this
+     * layer exists because a violation caught while typing is worth more than one caught in CI,
+     * and it is deliberately narrow — only the game-package rules, only what ESLint can express
+     * without duplicating the rule set. If these two ever disagree, the rule set in
+     * `.dependency-cruiser.cjs` is the contract and this is the stale copy.
+     *
+     * One known divergence, stated rather than hidden: this layer forbids `@playhall/shared`
+     * outright, matching ADR-0002 rule 8 ("a game package may declare only @playhall/game-sdk"),
+     * whereas the §2 import table forbids only deep imports into shared. Raised with the CTO on
+     * PER-5; if index-level `@playhall/shared` is meant to be legal for games, this narrows to
+     * `@playhall/shared/*` and rule 8 needs to say so.
+     */
+    files: ['games/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [`${SCOPE}/*`, `!${SDK_NAME}`, `!${SDK_NAME}/*`, `${SCOPE}/shared/*`],
+              message:
+                `A game may import ${SDK_NAME} and third-party libraries, nothing else. ` +
+                'Enforced for real by `pnpm boundaries` (ADR-0002); this is the editor warning.',
+            },
+            {
+              group: ['**/packages/**', '**/apps/**', '**/games/**'],
+              message:
+                'Relative path out of your own game package. Games are independent plugins — ' +
+                'enforced by `pnpm boundaries` (ADR-0002).',
+            },
+            {
+              // `colyseus.js` is the browser client: a separate npm name, not a subpath of
+              // `colyseus`, so it needs its own entry in every place this list is written.
+              group: ['colyseus', 'colyseus.js', '@colyseus/*'],
+              message:
+                "The server framework is a platform choice, never a game's. Colyseus is adopted " +
+                'for apps/realtime only (ADR-0001 §4); a game that names it pins every game to ' +
+                "the platform's netcode and opts into default-broadcast state sync, where a " +
+                'field is visible unless someone remembers to filter it. Keep game state as ' +
+                'plain TypeScript. Enforced for real by `pnpm boundaries` (ADR-0002).',
+            },
+          ],
+          paths: [],
+        },
+      ],
+    },
+  },
+  {
+    /**
+     * Build/CI/tooling code runs on Node, not in a browser, so it needs the Node globals —
+     * without this, every `process` and `console` in `scripts/`, `tools/` and the root configs
+     * is a `no-undef` error and `pnpm lint` can never go green.
+     */
+    files: [
+      '**/*.{js,mjs,cjs}',
+      'scripts/**/*.{js,mjs,cjs,ts,mts}',
+      'tools/**/*.{js,mjs,cjs,ts,mts}',
+      'apps/realtime/**/*.ts',
+    ],
+    languageOptions: { globals: { ...globals.node } },
+  },
+  {
+    files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}', '**/*.cjs'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
