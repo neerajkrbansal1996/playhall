@@ -82,13 +82,55 @@ const timerRecordSchema = z.object({
   clock: playerClockConfigSchema.nullable(),
   expired: z.boolean(),
   /**
-   * Outstanding holds. Optional with an empty default so a snapshot written by
-   * a pre-hold build still restores — a live match must survive the deploy that
-   * introduces the field, and an unheld timer is the correct reading of a
-   * snapshot that had no concept of holds.
+   * Which hold scopes covered this timer when the snapshot was taken. Optional
+   * with an empty default so a snapshot written by a pre-hold build still
+   * restores — a live match must survive the deploy that introduces the field,
+   * and an unheld timer is the correct reading of a snapshot that had no
+   * concept of holds.
+   *
+   * In a `version: 2` snapshot this is derived state; the scopes on the
+   * snapshot itself are the authority. In a `version: 1` snapshot it is the
+   * *only* record of a hold, so `TimerService.restore` reads the scopes back
+   * out of it.
    */
   holds: z.array(z.enum(['room', 'seat-disconnect', 'timer'])).default([]),
   version: z.number().int().positive(),
+})
+
+const snapshotBase = {
+  matchId: z.string().min(1),
+  savedAtMs: z.number().int(),
+  timers: z.array(timerRecordSchema),
+}
+
+/**
+ * The shape written before hold scopes moved off the record.
+ *
+ * Kept as a read path, not for nostalgia: a deploy lands while matches are live,
+ * and the snapshot in Redis was written by the process we just replaced. The
+ * scopes are recovered from each record's `holds` on the way in.
+ */
+export const timerSnapshotV1Schema = z.object({ version: z.literal(1), ...snapshotBase })
+
+/**
+ * The current shape.
+ *
+ * The four fields above `timers` are the ones a record cannot carry: who is on
+ * move is game state, and a room freeze, an absent seat and a reducer's pause
+ * are properties of the room, the seat and the timer id. Persisting them per
+ * record loses every timer that was not running when the pause ran.
+ */
+export const timerSnapshotV2Schema = z.object({
+  version: z.literal(2),
+  ...snapshotBase,
+  /** The seat whose `chess-clock` timers may run. Null between turns. */
+  onMoveSeatId: z.string().min(1).nullable(),
+  /** A host pause or a rematch vote: nothing in the room may run. */
+  roomHeld: z.boolean(),
+  /** Seats that are absent. */
+  heldSeats: z.array(z.string().min(1)),
+  /** Timer ids a game reducer paused explicitly. */
+  heldTimers: z.array(z.string().min(1)),
 })
 
 /**
@@ -98,11 +140,14 @@ const timerRecordSchema = z.object({
  * restoring process's clock, and a snapshot from the future (wall clock stepped
  * backwards between the two processes) is rejected rather than used to hand
  * every player extra time.
+ *
+ * Reads accept either version; `TimerService.snapshot()` only ever writes v2.
  */
-export const timerSnapshotSchema = z.object({
-  version: z.literal(1),
-  matchId: z.string().min(1),
-  savedAtMs: z.number().int(),
-  timers: z.array(timerRecordSchema),
-})
-export type TimerSnapshot = z.infer<typeof timerSnapshotSchema>
+export const timerSnapshotSchema = z.discriminatedUnion('version', [
+  timerSnapshotV1Schema,
+  timerSnapshotV2Schema,
+])
+/** What we write. */
+export type TimerSnapshot = z.infer<typeof timerSnapshotV2Schema>
+/** What we accept. */
+export type AnyTimerSnapshot = z.infer<typeof timerSnapshotSchema>

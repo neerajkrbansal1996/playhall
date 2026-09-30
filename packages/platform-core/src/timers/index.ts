@@ -13,7 +13,7 @@ export { createFixedClock, createManualClock, createSystemClock } from './clock.
 export type { DelayMode, PlayerClockConfig, TimerHold, TimerRecord } from './record.js'
 export {
   DEFAULT_PLAYER_CLOCK,
-  applyHold,
+  TIMER_HOLD_ORDER,
   chargeableElapsedMs,
   createTimerRecord,
   deadlineMsAt,
@@ -24,11 +24,11 @@ export {
   isRunning as isTimerRunning,
   pauseRecord,
   rawElapsedMs,
-  releaseHold,
   remainingMsAt,
   resetRecord,
   resumeRecord,
   startRecord,
+  withHolds,
 } from './record.js'
 
 export type { Scheduler } from './scheduler.js'
@@ -50,9 +50,17 @@ export type {
 } from './sync.js'
 export { ServerTimeSync, TimerSyncTracker } from './sync.js'
 
-export type { TimerSnapshot, TimerSyncEntry, TimerSyncMessage, TimerSyncRequest } from './wire.js'
+export type {
+  AnyTimerSnapshot,
+  TimerSnapshot,
+  TimerSyncEntry,
+  TimerSyncMessage,
+  TimerSyncRequest,
+} from './wire.js'
 export {
   timerSnapshotSchema,
+  timerSnapshotV1Schema,
+  timerSnapshotV2Schema,
   timerSyncEntrySchema,
   timerSyncMessageSchema,
   timerSyncRequestSchema,

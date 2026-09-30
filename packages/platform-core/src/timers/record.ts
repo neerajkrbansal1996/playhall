@@ -64,9 +64,9 @@ export const DEFAULT_PLAYER_CLOCK: PlayerClockConfig = {
 }
 
 /**
- * Who is holding a timer stopped from *outside* the game's own state.
+ * Why a timer is being held stopped from *outside* the game's own state.
  *
- * ## Why a set of reasons and not a boolean
+ * ## A hold is a scope, not a property of a record
  *
  * A stopped timer has two completely different meanings and conflating them is
  * how a reconnect starts the clock of the player who is not to move. Black's
@@ -74,19 +74,27 @@ export const DEFAULT_PLAYER_CLOCK: PlayerClockConfig = {
  * speaking, and no resume should ever override it. Black's clock is also stopped
  * when Black drops — that is a *hold*, and the matching resume must lift it.
  *
- * So a hold records **responsibility for having stopped this timer**. The rule
- * that makes it compose is in `applyHold`: a hold is only taken on a timer that
- * was actually running, or that is already held by someone else. A pause that
- * finds a timer already stopped for a game-state reason takes no hold, so its
- * resume correctly does nothing.
+ * The thing that makes holds correct is **where they live**. `room` is a
+ * property of the room, `seat-disconnect` of the seat, and `timer` of the timer
+ * id — so `TimerService` owns them as three scopes (`#roomHeld`, `#heldSeats`,
+ * `#heldTimers`) and asks, for each record, which scopes cover it. Modelling a
+ * hold as state stamped onto a record at the instant the pause ran cannot work:
+ * a timer that was not running then — or that is created afterwards — escapes
+ * the hold entirely, and a turn switch or a `set` inside a host pause starts a
+ * clock that the room had stopped.
+ *
+ * The array on `TimerRecord.holds` is therefore **derived** bookkeeping: it is
+ * recomputed from the scopes on every mutation, and it exists so that the wire
+ * frame, the snapshot and `isHeld()` can say *why* a clock is stopped without
+ * the reader having to re-run the scope arithmetic.
  *
  * Because it is a set, overlapping holds nest properly: a host pauses the room,
  * then a player drops, then the host unpauses — and that player's clock stays
- * stopped, because their own hold is still outstanding.
+ * stopped, because the seat scope still covers it.
  *
  * - `room` — a whole-room freeze: host pause, or a rematch vote.
- * - `seat-disconnect` — one seat is not there and its manifest says the clock
- *   pauses for that.
+ * - `seat-disconnect` — one seat is not there and its manifest does not say
+ *   `pausesOnDisconnect: false`.
  * - `timer` — an explicit `pause` command from a game reducer.
  *
  * The values are duplicated in `timerRecordSchema`, which is what makes a new
@@ -94,6 +102,9 @@ export const DEFAULT_PLAYER_CLOCK: PlayerClockConfig = {
  * so a hold added here and not there fails immediately rather than in a restart.
  */
 export type TimerHold = 'room' | 'seat-disconnect' | 'timer'
+
+/** Canonical order, so two snapshots of the same state compare equal. */
+export const TIMER_HOLD_ORDER: readonly TimerHold[] = ['room', 'seat-disconnect', 'timer']
 
 /**
  * One timer instance.
@@ -120,9 +131,10 @@ export interface TimerRecord {
   /** True once the budget reached zero. Terminal until the timer is re-set. */
   readonly expired: boolean
   /**
-   * Outstanding holds keeping this timer stopped. Empty for a timer that is
-   * running, or that is stopped because the game state says so. See
-   * `TimerHold`.
+   * Which hold scopes currently cover this timer, in `TIMER_HOLD_ORDER`. Empty
+   * for a timer that is running, that is stopped because the game state says
+   * so, or that has expired. Derived — `TimerService` recomputes it from its
+   * scopes on every mutation. See `TimerHold`.
    */
   readonly holds: readonly TimerHold[]
   /**
@@ -230,7 +242,9 @@ export function isHeld(record: TimerRecord): boolean {
  *
  * Refuses while any hold is outstanding. That is deliberate: a hold outranks a
  * start, so a game reducer's `resume` can never un-pause a clock the platform is
- * holding because the player is not there. Lift the hold with `releaseHold`.
+ * holding because the player is not there. `TimerService` recomputes `holds`
+ * before it decides to start anything, so this guard is the belt to that
+ * braces — it makes a caller who skipped the reconciliation pass fail closed.
  */
 export function startRecord(record: TimerRecord, nowMs: number): TimerRecord {
   if (record.expired || isRunning(record) || isHeld(record)) return record
@@ -263,32 +277,21 @@ export function resumeRecord(record: TimerRecord, nowMs: number): TimerRecord {
 }
 
 /**
- * Freezes the timer and records that `hold` is why.
+ * Records which hold scopes currently cover this timer.
  *
- * The guard is the whole point. A hold is taken only when this call is what
- * stopped the timer (it was running) or when someone else already holds it (so
- * the timer is in the held state and this hold nests inside it). A pause that
- * finds a timer already stopped for a game-state reason — Black's clock while
- * White is to move — takes no hold, so the matching `releaseHold` correctly
- * leaves it stopped instead of starting a clock nobody is on.
- *
- * Idempotent per hold: taking the same hold twice is the first one.
+ * Purely bookkeeping — it moves no anchor and charges no time. Freezing and
+ * re-anchoring are `pauseRecord` and `startRecord`, and `TimerService` calls
+ * them from the same reconciliation pass that computes `holds`. Returns the
+ * same object (no version bump) when nothing changed, so an idle pass over an
+ * unchanged room does not churn the version every client is watching.
  */
-export function applyHold(record: TimerRecord, hold: TimerHold, nowMs: number): TimerRecord {
-  if (record.expired || record.holds.includes(hold)) return record
-  if (!isRunning(record) && !isHeld(record)) return record
-  return bump(pauseRecord(record, nowMs), { holds: [...record.holds, hold] })
+export function withHolds(record: TimerRecord, holds: readonly TimerHold[]): TimerRecord {
+  if (sameHolds(record.holds, holds)) return record
+  return bump(record, { holds: [...holds] })
 }
 
-/**
- * Lifts `hold` and starts the timer again if that was the last one outstanding.
- * A no-op when this hold was never taken — which is exactly how a reconnect
- * leaves the non-mover's clock alone.
- */
-export function releaseHold(record: TimerRecord, hold: TimerHold, nowMs: number): TimerRecord {
-  if (!record.holds.includes(hold)) return record
-  const holds = record.holds.filter((candidate) => candidate !== hold)
-  return startRecord(bump(record, { holds }), nowMs)
+function sameHolds(left: readonly TimerHold[], right: readonly TimerHold[]): boolean {
+  return left.length === right.length && left.every((hold, index) => hold === right[index])
 }
 
 /**
@@ -351,10 +354,10 @@ export function endTurnRecord(record: TimerRecord, nowMs: number): TimerRecord {
  * SDK `set` command when a game re-arms a timer it already owns.
  *
  * A re-armed timer starts from a clean slate: the turn's delay and elapsed time
- * reset, `expired` clears, and so do any holds. A hold refers to a timer the
- * holder stopped; once the game has replaced that timer the reference is stale,
- * and keeping it would leave the new timer stopped by a pause nobody remembers
- * issuing.
+ * reset and `expired` clears. `holds` is cleared too, but only as a starting
+ * point — the service's reconciliation pass immediately puts back every scope
+ * that still covers the timer, so a room pause survives a re-arm and only the
+ * game's own `timer` hold (which the service drops on `set`) does not.
  */
 export function resetRecord(
   record: TimerRecord,

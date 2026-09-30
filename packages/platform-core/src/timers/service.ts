@@ -37,8 +37,9 @@ import { type Scheduler, createTimeoutScheduler } from './scheduler.js'
 import {
   DEFAULT_PLAYER_CLOCK,
   type PlayerClockConfig,
+  TIMER_HOLD_ORDER,
+  type TimerHold,
   type TimerRecord,
-  applyHold,
   createTimerRecord,
   deadlineMsAt,
   delayRemainingMsAt,
@@ -47,13 +48,14 @@ import {
   isHeld,
   isRunning,
   pauseRecord,
-  releaseHold,
   remainingMsAt,
   resetRecord,
   resumeRecord,
   startRecord,
+  withHolds,
 } from './record.js'
 import {
+  type AnyTimerSnapshot,
   type TimerSnapshot,
   type TimerSyncEntry,
   type TimerSyncMessage,
@@ -141,6 +143,32 @@ export class TimerService {
   /** Guards against an `onExpire` handler that re-enters via `apply`. */
   #firing = false
 
+  // ------------------------------------------------- game state vs hold scopes
+  //
+  // Two questions decide whether a timer runs, and reading both off one boolean
+  // (`isRunning`) is what produced every defect in the first two reviews:
+  //
+  //   1. does the *game state* want this timer counting down?
+  //   2. is any *hold scope* covering it?
+  //
+  // (1) is `#onMoveSeatId` for a `chess-clock` and "armed and not expired" for
+  // everything else. (2) is the three scopes below. A hold lives where the thing
+  // it describes lives — the room, the seat, the timer id — never on a record,
+  // because a record that was not running when the pause ran would not have been
+  // stamped, and one created afterwards could not have been.
+  //
+  // Every mutator changes one of these and then calls `#reconcile`, which
+  // recomputes runnability for every record and re-anchors or freezes it.
+
+  /** The seat whose `chess-clock` timers may run. Game state; no hold overrides it. */
+  #onMoveSeatId: SeatId | null = null
+  /** Host pause / rematch vote: nothing in the room may run. */
+  #roomHeld = false
+  /** Seats that are absent, by `SeatId`. */
+  #heldSeats = new Set<string>()
+  /** Timer ids a game reducer paused explicitly. */
+  #heldTimers = new Set<string>()
+
   constructor(options: TimerServiceOptions) {
     this.matchId = options.matchId
     this.#clock = options.clock ?? createSystemClock()
@@ -184,11 +212,17 @@ export class TimerService {
   /**
    * True while something outside the game state is holding this timer stopped —
    * a host pause, a disconnected seat, or a game's own `pause` command. A timer
-   * that is merely not this seat's move is *not* held.
+   * that is merely not this seat's move is *not* held, and neither is an expired
+   * one: a flag-fall is terminal, so no later resume may revive it.
    */
   isHeld(timerId: TimerId): boolean {
     const record = this.#records.get(timerId)
     return record !== undefined && isHeld(record)
+  }
+
+  /** The seat whose per-player clock may run, as last set by `switchTurnTo`. */
+  get onMoveSeatId(): SeatId | null {
+    return this.#onMoveSeatId
   }
 
   /**
@@ -223,16 +257,22 @@ export class TimerService {
   ): TimerRecord {
     const merged: PlayerClockConfig = { ...DEFAULT_PLAYER_CLOCK, ...config }
     this.#assertDeclared(timerId)
-    const record = createTimerRecord({
+    const nowMs = this.#clock.now()
+    this.#records.set(
       timerId,
-      seatId,
-      kind: 'chess-clock',
-      durationMs: merged.initialMs,
-      clock: merged,
-    })
-    this.#records.set(timerId, record)
+      createTimerRecord({
+        timerId,
+        seatId,
+        kind: 'chess-clock',
+        durationMs: merged.initialMs,
+        clock: merged,
+      }),
+    )
+    // Declaring a clock for the seat that is already on move starts it, which
+    // is the only sane reading of "this seat is to move and now has a clock".
+    this.#reconcile(nowMs)
     this.#rearm()
-    return record
+    return this.#records.get(timerId) as TimerRecord
   }
 
   /**
@@ -242,6 +282,11 @@ export class TimerService {
    * "now" — a game that asks for a 30 s turn timer must get 30 s from the
    * instant its action was stamped, not 30 s from whenever the service got
    * round to it. That is the whole reason `TimerCommand.delayMs` is relative.
+   *
+   * A timer armed while a hold covers it is created **stopped with its full
+   * budget** and starts when the hold lifts. A turn timer set during a host
+   * pause must not count down through the pause and hand the game a timeout for
+   * a turn nobody was allowed to take.
    */
   set(
     timerId: TimerId,
@@ -255,13 +300,15 @@ export class TimerService {
   ): TimerRecord {
     this.#assertDeclared(timerId)
     const issuedAtMs = options.issuedAtMs ?? this.#clock.now()
+    this.#drainDue(issuedAtMs)
     const existing = this.#records.get(timerId)
 
     if (existing !== undefined && options.replace === false && !existing.expired) {
       return existing
     }
 
-    const record =
+    this.#records.set(
+      timerId,
       existing === undefined
         ? createTimerRecord({
             timerId,
@@ -270,120 +317,132 @@ export class TimerService {
             durationMs: options.delayMs,
             startedAtMs: issuedAtMs,
           })
-        : resetRecord(existing, options.delayMs, issuedAtMs)
-
-    this.#records.set(timerId, record)
+        : resetRecord(existing, options.delayMs, issuedAtMs),
+    )
+    // A re-arm replaces the timer the reducer paused, so its own hold is stale.
+    // Room and seat scopes are not the reducer's to drop and stay in force.
+    this.#heldTimers.delete(timerId)
+    this.#reconcile(issuedAtMs)
     this.#afterMutation(issuedAtMs)
-    return record
+    return this.#records.get(timerId) as TimerRecord
   }
 
   clear(timerId: TimerId): void {
+    this.#heldTimers.delete(timerId)
     if (this.#records.delete(timerId)) this.#rearm()
   }
 
   /**
-   * A game's explicit `pause`. Takes a `timer` hold, so the matching `resume` is
-   * what lifts it and a *different* hold — a disconnect, a host pause — still
-   * keeps the clock stopped afterwards.
+   * A game's explicit `pause`. Takes the `timer` scope, so the matching `resume`
+   * is what lifts it and a *different* scope — a disconnect, a host pause —
+   * still keeps the clock stopped afterwards.
+   *
+   * Scoped to a timer that exists: a pause for an id the match has never seen
+   * is a no-op rather than a hold left lying in wait for a future `set`.
    */
   pause(timerId: TimerId, atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    this.#mutate(timerId, (record) => applyHold(record, 'timer', nowMs))
+    if (!this.#records.has(timerId)) return
+    this.#heldTimers.add(timerId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
   }
 
   resume(timerId: TimerId, atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    this.#mutate(timerId, (record) => releaseHold(record, 'timer', nowMs))
-  }
-
-  /**
-   * Ends the running per-player clock's turn (crediting increment and any
-   * Bronstein refund) and starts `toSeatId`'s clock. Passing null just stops
-   * the clock — the match is over, or a phase without a mover has begun.
-   *
-   * This is the only correct way to hand the move over: doing it as a separate
-   * `pause` then `resume` loses the increment.
-   */
-  switchTurnTo(toSeatId: SeatId | null, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
-    this.#drainDue(nowMs)
-    for (const [id, record] of this.#records) {
-      if (record.kind !== 'chess-clock') continue
-      if (isRunning(record) && record.seatId !== toSeatId) {
-        this.#records.set(id, endTurnRecord(record, nowMs))
-      }
-    }
-    if (toSeatId !== null) {
-      for (const [id, record] of this.#records) {
-        if (record.kind === 'chess-clock' && record.seatId === toSeatId && !record.expired) {
-          this.#records.set(id, startRecord(record, nowMs))
-        }
-      }
-    }
+    if (!this.#records.has(timerId)) return
+    this.#heldTimers.delete(timerId)
+    this.#reconcile(nowMs)
     this.#afterMutation(nowMs)
   }
 
   /**
-   * Freezes every timer that the manifest says pauses on disconnect, for one
-   * seat. Timers without a spec are treated as pausing — the safe default is
-   * the one that cannot take time off a player who is not there.
+   * Moves the game state: `toSeatId` is now the seat to move. Ends the outgoing
+   * seat's turn (crediting increment and any Bronstein refund) and starts the
+   * incoming seat's clock **if nothing is holding it**. Passing null just ends
+   * the turn — the match is over, or a phase without a mover has begun.
    *
-   * Takes a `seat-disconnect` hold on the timers it actually froze, and only
-   * those. A chess clock that was already stopped because it is the *other*
-   * seat's move is not frozen by this call and takes no hold, so the reconnect
-   * below cannot start it. Getting that wrong runs both clocks at once and
-   * silently decides games.
+   * This is the only correct way to hand the move over: doing it as a separate
+   * `pause` then `resume` loses the increment.
+   *
+   * The outgoing seat is the one `#onMoveSeatId` names, **not** whichever clock
+   * happens to be running. Inferring it from `isRunning` silently forfeits the
+   * increment of a seat whose clock was held (host pause, opponent's turn
+   * arriving during a drop), and starts the incoming seat's clock straight
+   * through a room pause.
+   */
+  switchTurnTo(toSeatId: SeatId | null, atMs?: number): void {
+    const nowMs = atMs ?? this.#clock.now()
+    this.#drainDue(nowMs)
+    const fromSeatId = this.#onMoveSeatId
+    if (fromSeatId !== null && fromSeatId !== toSeatId) {
+      for (const [id, record] of this.#records) {
+        if (record.kind !== 'chess-clock' || record.seatId !== fromSeatId) continue
+        this.#records.set(id, endTurnRecord(record, nowMs))
+      }
+    }
+    this.#onMoveSeatId = toSeatId
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Marks one seat absent. Every timer belonging to it stops, unless the
+   * manifest declared `pausesOnDisconnect: false`. A timer with no spec is
+   * treated as pausing — the safe default is the one that cannot take time off
+   * a player who is not there.
+   *
+   * The hold is on the **seat**, for as long as the seat is away. That covers
+   * the clock of a seat that was not on move when it dropped: when the opponent
+   * then moves, `switchTurnTo` finds the seat held and leaves the clock stopped.
+   * A per-record stamp cannot do this, and the resulting game turns on which
+   * millisecond a socket closed relative to a move — which is the opposite of
+   * server-authoritative.
    */
   pauseForSeat(seatId: SeatId, atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    for (const [id, record] of this.#records) {
-      if (record.seatId !== seatId) continue
-      if (this.#specs?.get(id)?.pausesOnDisconnect === false) continue
-      this.#records.set(id, applyHold(record, 'seat-disconnect', nowMs))
-    }
-    this.#rearm()
+    this.#heldSeats.add(seatId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
   }
 
   /**
-   * Resumes exactly what `pauseForSeat` froze, by lifting the
-   * `seat-disconnect` hold. A timer this seat's disconnect never stopped stays
-   * stopped, and a timer still held for another reason — the host paused the
-   * room while the player was away — stays stopped too.
+   * Marks the seat present again. Its timers resume only if the game state
+   * still wants them running and no other scope covers them — a clock whose
+   * seat is not to move stays stopped, and one the host also paused stays
+   * stopped until the host unpauses too.
    */
   resumeForSeat(seatId: SeatId, atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    for (const [id, record] of this.#records) {
-      if (record.seatId !== seatId) continue
-      this.#records.set(id, releaseHold(record, 'seat-disconnect', nowMs))
-    }
-    this.#rearm()
+    this.#heldSeats.delete(seatId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
   }
 
   /**
-   * Freezes everything — a host pause, or a room waiting on a rematch vote.
-   * Holds only what was running, so `resumeAll` restores the room to the state
-   * it was actually in rather than starting every clock in it.
+   * Freezes the whole room — a host pause, or a room waiting on a rematch vote.
+   * The hold is on the room, so a turn switch or a newly armed timer inside the
+   * pause is covered by it too, and `resumeAll` puts the room back exactly
+   * where the game state says it should be rather than starting every clock.
    */
   pauseAll(atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    for (const [id, record] of this.#records) {
-      this.#records.set(id, applyHold(record, 'room', nowMs))
-    }
-    this.#rearm()
+    this.#roomHeld = true
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
   }
 
   resumeAll(atMs?: number): void {
     const nowMs = atMs ?? this.#clock.now()
     this.#drainDue(nowMs)
-    for (const [id, record] of this.#records) {
-      this.#records.set(id, releaseHold(record, 'room', nowMs))
-    }
-    this.#rearm()
+    this.#roomHeld = false
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
   }
 
   /**
@@ -508,12 +567,24 @@ export class TimerService {
 
   // ------------------------------------------------------------- durability
 
-  /** JSON-safe state for Redis. Anchors stay absolute so a restart can resume. */
+  /**
+   * JSON-safe state for Redis. Anchors stay absolute so a restart can resume.
+   *
+   * `version: 2` carries the game state and the hold scopes alongside the
+   * records, because neither can be reconstructed from the records alone: a
+   * room pause is invisible on a timer that was not running when it started.
+   * `restore` still reads `version: 1`, so the deploy that introduces this does
+   * not strand a live match.
+   */
   snapshot(atMs?: number): TimerSnapshot {
     return {
-      version: 1,
+      version: 2,
       matchId: this.matchId,
       savedAtMs: atMs ?? this.#clock.now(),
+      onMoveSeatId: this.#onMoveSeatId,
+      roomHeld: this.#roomHeld,
+      heldSeats: [...this.#heldSeats],
+      heldTimers: [...this.#heldTimers],
       // `holds` is copied out of its readonly array: the snapshot is the
       // JSON-bound shape, and nothing downstream should share an array with a
       // live record.
@@ -538,6 +609,79 @@ export class TimerService {
       throw new Error(
         `timer '${timerId}' is not declared in the game manifest; add a TimerSpec for it`,
       )
+    }
+  }
+
+  /**
+   * Does the scope named by `hold` cover this record?
+   *
+   * The one place each scope says what it owns. A `switch` and not a chain of
+   * `if`s so that adding a `TimerHold` fails to compile until it says what it
+   * covers, rather than silently covering nothing.
+   */
+  #scopeCovers(hold: TimerHold, record: TimerRecord): boolean {
+    switch (hold) {
+      case 'room':
+        return this.#roomHeld
+      case 'seat-disconnect':
+        return (
+          record.seatId !== null &&
+          this.#heldSeats.has(record.seatId) &&
+          // The manifest's opt-out. Absent spec means "pauses": the safe
+          // default cannot take time off a player who is not there.
+          this.#specs?.get(record.timerId)?.pausesOnDisconnect !== false
+        )
+      case 'timer':
+        return this.#heldTimers.has(record.timerId)
+    }
+  }
+
+  /**
+   * Which hold scopes cover this record right now, in `TIMER_HOLD_ORDER` so
+   * that two snapshots of the same state compare equal.
+   *
+   * An expired record is never held. A flag-fall is terminal, so leaving a
+   * scope on it would mean a later `resumeAll` trying to revive a dead clock.
+   */
+  #holdsFor(record: TimerRecord): readonly TimerHold[] {
+    if (record.expired) return NO_HOLDS
+    const holds = TIMER_HOLD_ORDER.filter((hold) => this.#scopeCovers(hold, record))
+    return holds.length === 0 ? NO_HOLDS : holds
+  }
+
+  /**
+   * Does the *game state* want this timer counting down, holds aside?
+   *
+   * A `chess-clock` runs only for the seat to move — that is what makes it a
+   * chess clock, and no hold and no resume may override it. Everything else is
+   * a one-shot: it was armed by `set` and it runs until it fires or is cleared.
+   */
+  #isWanted(record: TimerRecord): boolean {
+    if (record.expired) return false
+    if (record.kind !== 'chess-clock') return true
+    return record.seatId !== null && record.seatId === this.#onMoveSeatId
+  }
+
+  /**
+   * Brings every record back in line with the game state and the hold scopes.
+   *
+   * This is the single place that decides whether a timer runs, and every
+   * mutator ends in it. Runnable iff the game state wants it and no scope
+   * covers it; a record that should be running and is not gets anchored at
+   * `nowMs`, one that should not be and is gets frozen there. Idempotent — a
+   * pass that changes nothing bumps no versions.
+   */
+  #reconcile(nowMs: number): void {
+    for (const [id, record] of this.#records) {
+      const holds = this.#holdsFor(record)
+      let next = withHolds(record, holds)
+      const shouldRun = holds.length === 0 && this.#isWanted(next)
+      if (shouldRun) {
+        if (!isRunning(next)) next = startRecord(next, nowMs)
+      } else if (isRunning(next)) {
+        next = pauseRecord(next, nowMs)
+      }
+      if (next !== record) this.#records.set(id, next)
     }
   }
 
@@ -599,13 +743,6 @@ export class TimerService {
     if (dropped.length === 0) return
     dropped.sort((a, b) => a.dueAtMs - b.dueAtMs)
     this.#onDrainExhausted(dropped)
-    this.#rearm()
-  }
-
-  #mutate(timerId: TimerId, fn: (record: TimerRecord) => TimerRecord): void {
-    const record = this.#records.get(timerId)
-    if (record === undefined) return
-    this.#records.set(timerId, fn(record))
     this.#rearm()
   }
 
@@ -675,6 +812,22 @@ export class TimerService {
       )
     }
 
+    // Game state and hold scopes before records, so the reconciliation pass at
+    // the bottom has something to reconcile against.
+    const scopes: TimerScopes =
+      parsed.version === 2
+        ? {
+            onMoveSeatId: parsed.onMoveSeatId as SeatId | null,
+            roomHeld: parsed.roomHeld,
+            heldSeats: new Set(parsed.heldSeats),
+            heldTimers: new Set(parsed.heldTimers),
+          }
+        : readV1Scopes(parsed)
+    service.#onMoveSeatId = scopes.onMoveSeatId
+    service.#roomHeld = scopes.roomHeld
+    service.#heldSeats = scopes.heldSeats
+    service.#heldTimers = scopes.heldTimers
+
     for (const timer of parsed.timers) {
       const record: TimerRecord = {
         ...timer,
@@ -699,11 +852,58 @@ export class TimerService {
       )
     }
 
+    service.#reconcile(nowMs)
     // A flag may well have fallen while we were dead; surface it immediately
     // rather than on the next unrelated event.
     service.#afterMutation(nowMs)
     return service
   }
+}
+
+/** Canonical empty holds, shared so `withHolds` can compare by identity fast. */
+const NO_HOLDS: readonly TimerHold[] = []
+
+/**
+ * Recovers the hold scopes and the seat to move from a pre-scope snapshot.
+ *
+ * A v1 snapshot only knows which records were stamped, so this reads the scopes
+ * back out of the stamps. It recovers exactly what the old build could express
+ * and no more — which is the correct reading, because a hold the old build
+ * never took is a hold that was not in force.
+ *
+ * `onMoveSeatId` is the seat whose clock was running, or, if the room was
+ * frozen at the time, the frozen clock that carried a hold. That second case is
+ * the only thing a v1 snapshot can say about a paused room, and it is right:
+ * under the old model a stopped-and-held chess clock was the mover's.
+ */
+function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerScopes {
+  const scopes: TimerScopes = {
+    onMoveSeatId: null,
+    roomHeld: false,
+    heldSeats: new Set<string>(),
+    heldTimers: new Set<string>(),
+  }
+  let heldMover: string | null = null
+  for (const timer of parsed.timers) {
+    if (timer.holds.includes('room')) scopes.roomHeld = true
+    if (timer.holds.includes('seat-disconnect') && timer.seatId !== null) {
+      scopes.heldSeats.add(timer.seatId)
+    }
+    if (timer.holds.includes('timer')) scopes.heldTimers.add(timer.timerId)
+
+    if (timer.kind !== 'chess-clock' || timer.seatId === null || timer.expired) continue
+    if (timer.startedAtMs !== null) scopes.onMoveSeatId = timer.seatId as SeatId
+    else if (heldMover === null && timer.holds.length > 0) heldMover = timer.seatId
+  }
+  if (scopes.onMoveSeatId === null) scopes.onMoveSeatId = heldMover as SeatId | null
+  return scopes
+}
+
+interface TimerScopes {
+  onMoveSeatId: SeatId | null
+  roomHeld: boolean
+  heldSeats: Set<string>
+  heldTimers: Set<string>
 }
 
 export interface RestoreTimerServiceOptions extends Omit<TimerServiceOptions, 'matchId'> {

@@ -58,15 +58,20 @@ function chess(options: { initialMs?: number; startMs?: number } = {}): Harness 
 }
 
 describe('a pause holds only what it froze', () => {
-  it('does not hold the non-mover, so their reconnect cannot start their clock', () => {
+  it('holds the non-mover’s clock too, and their reconnect still cannot start it', () => {
     const h = chess()
     h.service.switchTurnTo(WHITE)
 
+    // The hold is on the *seat*, so it covers a clock that was not running.
+    // That is what stops the opponent's next move from starting it.
     h.service.pauseForSeat(BLACK)
-    expect(h.service.isHeld(BLACK_CLOCK)).toBe(false)
+    expect(h.service.isHeld(BLACK_CLOCK)).toBe(true)
+    expect(h.service.isRunning(BLACK_CLOCK)).toBe(false)
 
     h.clock.advance(10_000)
     h.service.resumeForSeat(BLACK)
+    // Lifting the hold does not start it either: it is still White's move.
+    expect(h.service.isHeld(BLACK_CLOCK)).toBe(false)
     expect(h.service.isRunning(BLACK_CLOCK)).toBe(false)
     expect(h.service.isRunning(WHITE_CLOCK)).toBe(true)
   })
