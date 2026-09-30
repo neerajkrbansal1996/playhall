@@ -1,0 +1,284 @@
+name: CI
+
+# Design note (PER-6): branch protection cannot be enabled on this repo yet
+# (private repo on the current GitHub plan — see docs/ci-cd.md). So the pipeline
+# is built so that turning protection on later is a settings change, not a
+# workflow rewrite:
+#
+#   * `ci-gate` is the single aggregate job. Require that one check and every
+#     gate below becomes required transitively. Adding or renaming a gate never
+#     changes the required-check list.
+#   * `merge_group` is already a trigger, so a merge queue can be switched on
+#     with no edit here.
+#   * Every gate runs through `scripts/ci/gate.mjs`, so a gate whose
+#     implementation has not landed yet reports PENDING instead of erroring on a
+#     missing pnpm script.
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  # `production.yml` calls this on every push to `main`, so the gates run
+  # against the merge commit itself. There is deliberately no `push` trigger
+  # here — it would double every `main` run and double the Actions minutes.
+  workflow_call:
+
+# One run per ref. A force-push supersedes the previous run instead of queueing
+# behind it. `main` is never cancelled, so the production pipeline always has a
+# completed CI run to gate on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-hygiene:
+    name: pr-hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linked issue and conventional PR title
+        run: node scripts/ci/pr-hygiene.mjs
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs typecheck
+
+  # Kept as its own job on purpose (ADR-0002): the boundary rule set is the
+  # contract that makes "games are plugins" true, and its failure must be
+  # readable on its own rather than buried in a lint log.
+  boundaries:
+    name: boundaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs boundaries
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs unit
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: |
+            packages/*/coverage/**
+            games/*/coverage/**
+            games/_examples/*/coverage/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The conformance suite. This is the gate that blocks a game from merging if
+  # it leaks hidden information, is non-deterministic, or accepts an illegal
+  # action. Separate from `unit` so a game author sees *which* contract broke.
+  testkit:
+    name: testkit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs testkit
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Same images as docker-compose.yml, so "green locally" and "green in CI"
+    # mean the same thing.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: playhall
+          POSTGRES_PASSWORD: playhall
+          POSTGRES_DB: playhall
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U playhall -d playhall"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://playhall:playhall@localhost:5432/playhall
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs integration
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: playhall
+          POSTGRES_PASSWORD: playhall
+          POSTGRES_DB: playhall
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U playhall -d playhall"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://playhall:playhall@localhost:5432/playhall
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs e2e
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/**
+            test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # THE required check. Require only this one in branch protection.
+  #
+  # `needs` + `always()` means this job runs even when a gate fails, and then
+  # fails itself unless every gate it depends on succeeded. `pr-hygiene` may be
+  # `skipped` because it does not run on push/merge_group; a `skipped` result
+  # for any other job is treated as a failure, so a mistakenly conditioned job
+  # cannot quietly stop gating.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [pr-hygiene, lint, typecheck, boundaries, unit, testkit, integration, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Needed only to post the gate table on the PR (ADR-0004 Decision 2).
+      # `workflow_call` inherits the caller's permissions, so `main.yml` and
+      # `release.yml` must not narrow `pull-requests` below `write`.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ADR-0004 Decision 2: make "green CI" observable in the PR itself. With
+      # no required checks, a reviewer has to *choose* to look — so the result
+      # goes where the review already is, not in the Actions tab.
+      - name: Post the gate table on the PR
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const marker = '<!-- playhall-ci-gate -->'
+            const needs = JSON.parse(process.env.GATE_RESULTS)
+            const skipAllowed = new Set(['pr-hygiene'])
+
+            const icon = { success: 'pass', failure: 'FAIL', cancelled: 'cancelled', skipped: 'skipped' }
+            const rows = Object.entries(needs)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([job, info]) => {
+                const result = info?.result ?? 'unknown'
+                const ok = result === 'success' || (result === 'skipped' && skipAllowed.has(job))
+                return `| \`${job}\` | ${ok ? '✅' : '❌'} ${icon[result] ?? result} |`
+              })
+
+            const failing = Object.entries(needs).filter(([job, info]) => {
+              const result = info?.result ?? 'unknown'
+              return !(result === 'success' || (result === 'skipped' && skipAllowed.has(job)))
+            })
+
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`
+
+            const body = [
+              marker,
+              `### CI gates — \`${context.sha.slice(0, 7)}\``,
+              '',
+              '| gate | result |',
+              '| --- | --- |',
+              ...rows,
+              '',
+              failing.length === 0
+                ? 'All gates passed.'
+                : `**${failing.length} gate(s) not passing.** Merging this PR is a visible choice, ` +
+                  'not a blocked one — `main` has no required checks (ADR-0004).',
+              '',
+              `[Full run](${runUrl}) · a gate marked \`skipped\` other than \`pr-hygiene\` counts as a failure.`,
+            ].join('\n')
+
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+            })
+            const mine = existing.find((comment) => comment.body?.includes(marker))
+
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body })
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              })
+            }
+
+      # Last step, so the comment above is posted even when the gates failed.
+      - name: Assert every gate passed
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci/assert-gates.mjs

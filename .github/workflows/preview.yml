@@ -1,0 +1,155 @@
+name: Preview deploy
+
+# One preview environment per PR, health-probed, with the URL posted back on the
+# PR.
+#
+# Security note: this uses `pull_request`, not `pull_request_target`. A fork PR
+# therefore gets no secrets and no deploy, which is the correct trade — this
+# workflow executes repo scripts, and `pull_request_target` would run them with
+# this repo's secrets against a contributor's code.
+#
+# `preview-web` and `preview-realtime` are separate jobs rather than one matrix
+# on purpose: matrix jobs share a single `outputs` map, so the second target to
+# finish would overwrite the first target's URL.
+#
+# The hosting provider is board-gated on PER-2, so `DEPLOY_PROVIDER` is unset
+# today and every run reports `not_configured` and passes. See docs/ci-cd.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preview-web:
+    name: preview (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Job-level env is what a composite action's steps can see; the `secrets`
+    # context is not available inside a composite action.
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: preview
+          target: web
+          health-path: /api/health
+          provider: ${{ vars.DEPLOY_PROVIDER }}
+
+  preview-realtime:
+    name: preview (realtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: preview
+          target: realtime
+          health-path: /health
+          # Realtime needs a persistent-process host, which is very likely a
+          # different provider from web. Its own variable keeps that possible.
+          provider: ${{ vars.REALTIME_DEPLOY_PROVIDER || vars.DEPLOY_PROVIDER }}
+
+  comment:
+    name: comment preview URLs
+    needs: [preview-web, preview-realtime]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WEB_URL: ${{ needs.preview-web.outputs.url }}
+          WEB_STATUS: ${{ needs.preview-web.outputs.status }}
+          REALTIME_URL: ${{ needs.preview-realtime.outputs.url }}
+          REALTIME_STATUS: ${{ needs.preview-realtime.outputs.status }}
+        with:
+          script: |
+            const marker = '<!-- playhall-preview -->'
+            const web = { url: process.env.WEB_URL || '', status: process.env.WEB_STATUS || 'unknown' }
+            const realtime = {
+              url: process.env.REALTIME_URL || '',
+              status: process.env.REALTIME_STATUS || 'unknown',
+            }
+
+            const cell = (t) =>
+              t.status === 'deployed' && t.url
+                ? `[${t.url}](${t.url})`
+                : t.status === 'not_configured'
+                  ? '_no provider configured_'
+                  : `_${t.status}_`
+
+            const anyDeployed = web.status === 'deployed' || realtime.status === 'deployed'
+
+            const body = [
+              marker,
+              `### Preview deploy — \`${context.sha.slice(0, 7)}\``,
+              '',
+              '| target | preview URL |',
+              '| --- | --- |',
+              `| web | ${cell(web)} |`,
+              `| realtime | ${cell(realtime)} |`,
+              '',
+              anyDeployed
+                ? 'Each deployed URL above passed a health probe (HTTP 2xx **and** `ok: true`) before this comment was written.'
+                : [
+                    'Nothing was deployed, and **this is expected — not a failure.** No hosting',
+                    'provider is configured, because the board has **held all provisioning** — no',
+                    'vendor account, no card on file, no paid tier, no trial, on any provider.',
+                    '**Activating previews needs a board decision lifting that hold**, not just a',
+                    'repo variable, so please do not set one. Context and what would lift it:',
+                    'ADR-0003 §13. M0 AC1 ("a preview deploy per PR") is recorded as **not met**',
+                    'by the board\'s own decision; this comment is the honest record of that gap,',
+                    'not a broken check. The pipeline needs no code change once the hold lifts.',
+                  ].join('\n'),
+            ].join('\n')
+
+            // Update in place rather than adding a comment per push, so a long
+            // PR does not accumulate a wall of stale URLs.
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+            })
+            const mine = existing.find((comment) => comment.body?.includes(marker))
+
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body })
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              })
+            }
