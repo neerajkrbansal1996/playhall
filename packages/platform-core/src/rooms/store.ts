@@ -9,10 +9,12 @@
  *   A `has()` followed by a `set()` gives two concurrent room creations the
  *   same code, and the window is exactly as wide as an `await`. In Redis this
  *   is `SET room:code:<CODE> <roomId> NX PX <ttl>`.
- * - `save` is **compare-and-set** on the previous snapshot. Two players
- *   joining the same last seat in the same tick must not both succeed; the
- *   loser retries against fresh state. In Redis this is a `WATCH`/`MULTI` or
- *   a small Lua script.
+ * - `save` is **compare-and-set** on `Room.version`. Two players joining the
+ *   same last seat in the same tick must not both succeed; the loser retries
+ *   against fresh state. In Redis this is a `WATCH`/`MULTI` or a small Lua
+ *   script comparing the stored version. It must compare the *counter* — a
+ *   Lua CAS on `updatedAt` inherits the exact bug described on `Room.version`,
+ *   because two writes in one millisecond read equal.
  * - `dueForSweep` is a range query over the next-deadline of every live room.
  *   In Redis this is a sorted set scored by `nextRoomDeadline`, which is why
  *   the lifecycle rules are pure functions of `(room, now)` rather than
@@ -35,7 +37,15 @@ export interface RoomStore {
 
   /** Unconditional write. Used at creation, when there is no prior snapshot. */
   insert(room: Room): Promise<void>
-  /** Compare-and-set. False when `previous` is stale; the caller re-reads. */
+  /**
+   * Compare-and-set on `previous.version`. False when `previous` is stale; the
+   * caller re-reads and re-decides.
+   *
+   * `next` must be `previous`' immediate successor (`version + 1`), which is
+   * what `reviseRoom` produces. Anything else is a caller that built a room by
+   * hand and would defeat the CAS, so implementations reject it loudly rather
+   * than writing it.
+   */
   save(previous: Room, next: Room): Promise<boolean>
   /** Removes the room and frees its code. Match records are untouched. */
   remove(roomId: string): Promise<void>
@@ -72,10 +82,14 @@ export function createInMemoryRoomStore(): RoomStore {
       rooms.set(room.id, room)
     },
     async save(previous, next) {
+      if (next.version !== previous.version + 1) {
+        throw new TypeError(
+          `room ${previous.id}: save expected version ${previous.version + 1}, got ${next.version}. ` +
+            'Build the successor with reviseRoom() — a hand-built room defeats the compare-and-set.',
+        )
+      }
       const current = rooms.get(previous.id)
-      // `updatedAt` is the version token. Every mutation bumps it, and the
-      // service never writes without having just read.
-      if (current === undefined || current.updatedAt !== previous.updatedAt) return false
+      if (current === undefined || current.version !== previous.version) return false
       rooms.set(next.id, next)
       return true
     },

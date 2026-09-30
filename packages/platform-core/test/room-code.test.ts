@@ -6,8 +6,10 @@ import {
   allocateRoomCode,
   generateRoomCode,
   isValidRoomCode,
+  RoomCodeSourceError,
 } from '../src/rooms/code.js'
 import { sequenceRandomSource, webCryptoRandomSource } from '../src/runtime.js'
+import type { RandomSource } from '../src/runtime.js'
 
 const AMBIGUOUS = ['0', 'O', '1', 'I', 'L']
 
@@ -133,5 +135,37 @@ describe('collision handling', () => {
       Array.from({ length: 500 }, () => allocateRoomCode(webCryptoRandomSource(), reserve)),
     )
     expect(new Set(allocations.map((a) => a.code)).size).toBe(500)
+  })
+})
+
+describe('a random source that will not cooperate', () => {
+  /**
+   * The draw loop used to be an unbounded `while`, which spins forever against
+   * a source returning nothing — and a room-creation request that never
+   * returns takes the event loop with it. `vitest`'s own timeout is the only
+   * thing that would have caught it, by killing the run.
+   */
+  it('gives up instead of spinning when the source yields no bytes', () => {
+    const empty: RandomSource = { randomBytes: () => new Uint8Array(0) }
+    expect(() => generateRoomCode(empty)).toThrow(RoomCodeSourceError)
+    expect(() => generateRoomCode(empty)).toThrow(/too few bytes/)
+  })
+
+  it('gives up when every byte the source yields is out of range', () => {
+    // 248..255 are the values rejection sampling discards, so no progress is
+    // ever made however many rounds run.
+    const unusable = sequenceRandomSource([255])
+    expect(() => generateRoomCode(unusable)).toThrow(RoomCodeSourceError)
+  })
+
+  it('tolerates a source that returns short reads, as long as it makes progress', () => {
+    let calls = 0
+    const dribble: RandomSource = {
+      randomBytes: () => {
+        calls += 1
+        return new Uint8Array([calls % 31])
+      },
+    }
+    expect(isValidRoomCode(generateRoomCode(dribble))).toBe(true)
   })
 })

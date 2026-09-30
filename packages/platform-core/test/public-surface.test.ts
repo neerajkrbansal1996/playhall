@@ -7,6 +7,7 @@ import {
   fixedClock,
   randomIdSource,
   sequenceRandomSource,
+  tickingClock,
 } from '../src/runtime.js'
 import { makeRoom } from './fixtures/rooms.js'
 
@@ -42,6 +43,10 @@ describe('the package surface', () => {
       'realtimeJoinTarget',
       'decideRealtimeBinding',
       'publicRoomSummary',
+      // The store implementation lives outside this package (M1.7), so the
+      // successor helper its compare-and-set depends on has to be exported.
+      'reviseRoom',
+      'chargesFailedJoinBudget',
     ]) {
       expect(platform).toHaveProperty(name)
     }
@@ -79,6 +84,15 @@ describe('runtime ports', () => {
     expect(clock.now()).toBe(1000)
     clock.advance(50)
     expect(clock.now()).toBe(1050)
+    clock.set(7)
+    expect(clock.now()).toBe(7)
+  })
+
+  it('advances a ticking clock on every read, and still takes a hand', () => {
+    const clock = tickingClock(1000)
+    expect([clock.now(), clock.now(), clock.now()]).toEqual([1000, 1001, 1002])
+    clock.advance(50)
+    expect(clock.now()).toBe(1053)
     clock.set(7)
     expect(clock.now()).toBe(7)
   })

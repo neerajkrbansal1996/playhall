@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createInMemoryRoomStore } from '../src/rooms/store.js'
 import { DEFAULT_ROOM_LIFECYCLE } from '../src/rooms/lifecycle.js'
+import { reviseRoom } from '../src/rooms/types.js'
 import { T0, makeRoom } from './fixtures/rooms.js'
 
 describe('code reservation', () => {
@@ -38,7 +39,7 @@ describe('compare-and-set', () => {
     const store = createInMemoryRoomStore()
     const room = makeRoom()
     await store.insert(room)
-    expect(await store.save(room, { ...room, updatedAt: room.updatedAt + 1 })).toBe(true)
+    expect(await store.save(room, reviseRoom(room, {}, T0 + 1))).toBe(true)
   })
 
   it('rejects a write against a stale snapshot, so no update is lost', async () => {
@@ -46,12 +47,61 @@ describe('compare-and-set', () => {
     const room = makeRoom()
     await store.insert(room)
 
-    const winner = { ...room, updatedAt: room.updatedAt + 1, spectatorPlayerIds: ['a'] }
+    const winner = reviseRoom(room, { spectatorPlayerIds: ['a'] }, T0 + 1)
     expect(await store.save(room, winner)).toBe(true)
 
-    const loser = { ...room, updatedAt: room.updatedAt + 2, spectatorPlayerIds: ['b'] }
+    const loser = reviseRoom(room, { spectatorPlayerIds: ['b'] }, T0 + 2)
     expect(await store.save(room, loser)).toBe(false)
     expect((await store.get(room.id))?.spectatorPlayerIds).toEqual(['a'])
+  })
+
+  /**
+   * The regression this exists for. The token used to be `updatedAt`, and two
+   * writers landing in the same millisecond therefore compared *equal* — the
+   * stale write was accepted and the winner's change vanished. At the service
+   * level that is two players seated at the same index.
+   *
+   * The whole point is that the clock does not move between the two writes, so
+   * a version counter is the only thing that can tell them apart.
+   */
+  it('rejects a stale write made in the same millisecond as the winner', async () => {
+    const store = createInMemoryRoomStore()
+    const room = makeRoom()
+    await store.insert(room)
+
+    const sameInstant = room.updatedAt
+    const winner = reviseRoom(room, { spectatorPlayerIds: ['a'] }, sameInstant)
+    const loser = reviseRoom(room, { spectatorPlayerIds: ['b'] }, sameInstant)
+    expect(winner.updatedAt).toBe(loser.updatedAt)
+
+    expect(await store.save(room, winner)).toBe(true)
+    expect(await store.save(room, loser)).toBe(false)
+    expect((await store.get(room.id))?.spectatorPlayerIds).toEqual(['a'])
+  })
+
+  it('bumps the version by exactly one per accepted write', async () => {
+    const store = createInMemoryRoomStore()
+    let room = makeRoom()
+    await store.insert(room)
+
+    for (let write = 1; write <= 3; write += 1) {
+      const next = reviseRoom(room, { currentMatchId: `m-${write}` }, T0)
+      expect(next.version).toBe(room.version + 1)
+      expect(await store.save(room, next)).toBe(true)
+      room = next
+    }
+    expect((await store.get(room.id))?.version).toBe(4)
+  })
+
+  it('refuses a hand-built successor rather than writing one that defeats the CAS', async () => {
+    const store = createInMemoryRoomStore()
+    const room = makeRoom()
+    await store.insert(room)
+    // `{ ...room }` is the mistake: same version, so the next writer's CAS
+    // would compare equal against a room that has already changed.
+    await expect(store.save(room, { ...room, spectatorPlayerIds: ['a'] })).rejects.toThrow(
+      /reviseRoom/,
+    )
   })
 
   it('rejects a write to a removed room', async () => {
@@ -59,7 +109,7 @@ describe('compare-and-set', () => {
     const room = makeRoom()
     await store.insert(room)
     await store.remove(room.id)
-    expect(await store.save(room, { ...room, updatedAt: room.updatedAt + 1 })).toBe(false)
+    expect(await store.save(room, reviseRoom(room, {}, T0 + 1))).toBe(false)
   })
 })
 

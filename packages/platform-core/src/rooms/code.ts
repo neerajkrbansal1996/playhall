@@ -26,6 +26,28 @@ export const ROOM_CODE_SPACE = ROOM_CODE_ALPHABET.length ** ROOM_CODE_LENGTH
 const REJECTION_CEILING = ROOM_CODE_ALPHABET.length * Math.floor(256 / ROOM_CODE_ALPHABET.length)
 
 /**
+ * Rounds `generateRoomCode` will run before giving up on the random source.
+ *
+ * Each round rejects a byte with probability 8/256, so needing more than a
+ * handful of rounds has probability around 0.031^n — 64 is unreachable by
+ * chance and is there for the other case: a `RandomSource` that returns fewer
+ * bytes than asked for, or none at all. An unbounded `while` against such a
+ * source spins forever, and a room-creation request that never returns takes
+ * the event loop with it.
+ */
+const MAX_DRAW_ROUNDS = 64
+
+export class RoomCodeSourceError extends Error {
+  constructor(readonly rounds: number) {
+    super(
+      `room code generation made no progress in ${rounds} rounds; ` +
+        'the random source is returning too few bytes',
+    )
+    this.name = 'RoomCodeSourceError'
+  }
+}
+
+/**
  * Draws one uniformly random, alphabet-safe code.
  *
  * Each round asks for exactly the number of bytes still needed and examines
@@ -34,6 +56,9 @@ const REJECTION_CEILING = ROOM_CODE_ALPHABET.length * Math.floor(256 / ROOM_CODE
  * costs about 1.2 rounds per code (the rejection rate is 8/256 ≈ 3.1%) and
  * keeps the byte stream fully consumed, which is what makes the uniformity
  * property testable with a deterministic source instead of a statistic.
+ *
+ * Throws `RoomCodeSourceError` rather than looping forever if the source will
+ * not produce usable bytes.
  */
 export function generateRoomCode(random: RandomSource, length = ROOM_CODE_LENGTH): string {
   if (!Number.isInteger(length) || length < 1) {
@@ -41,7 +66,8 @@ export function generateRoomCode(random: RandomSource, length = ROOM_CODE_LENGTH
   }
 
   const out: string[] = []
-  while (out.length < length) {
+  for (let round = 0; out.length < length; round += 1) {
+    if (round >= MAX_DRAW_ROUNDS) throw new RoomCodeSourceError(MAX_DRAW_ROUNDS)
     for (const byte of random.randomBytes(length - out.length)) {
       if (byte >= REJECTION_CEILING) continue
       out.push(ROOM_CODE_ALPHABET[byte % ROOM_CODE_ALPHABET.length]!)

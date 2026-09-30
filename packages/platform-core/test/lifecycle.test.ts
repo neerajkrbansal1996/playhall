@@ -105,12 +105,43 @@ describe('finished -> stay open 15 min for rematch and chat', () => {
   })
 })
 
-describe('already closed', () => {
-  it('arms nothing', () => {
-    const closed = { ...makeRoom(), status: 'closed' as const }
-    expect(roomDeadlines(closed)).toEqual([])
-    expect(nextRoomDeadline(closed)).toBeNull()
-    expect(evaluateRoomLifecycle(closed, T0 + 10 * noOpponentMs)).toMatchObject({
+describe('already closed -> remove after the grace window', () => {
+  const tombstone = makeRoom({
+    status: 'closed',
+    closedAt: T0,
+    closeReason: 'no_opponent',
+  })
+
+  it('arms exactly one deadline: its own removal', () => {
+    expect(roomDeadlines(tombstone)).toEqual([
+      { at: T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs, action: 'remove', reason: 'no_opponent' },
+    ])
+    expect(nextRoomDeadline(tombstone)).toBe(T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+  })
+
+  it('is kept until the grace window elapses, then removed', () => {
+    expect(
+      evaluateRoomLifecycle(tombstone, T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs - 1),
+    ).toMatchObject({ action: 'keep' })
+    expect(evaluateRoomLifecycle(tombstone, T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)).toMatchObject({
+      action: 'remove',
+      reason: 'no_opponent',
+    })
+  })
+
+  /**
+   * A tombstone that armed nothing would drop out of the sweeper's range
+   * query and sit in Redis until its own key TTL fired — a leaked key, which
+   * is the failure mode the whole lifecycle module exists to avoid.
+   */
+  it('stays visible to the sweeper rather than leaking', () => {
+    expect(nextRoomDeadline(tombstone)).not.toBeNull()
+  })
+
+  it('arms nothing at all if it was somehow closed without a timestamp', () => {
+    const undated = makeRoom({ status: 'closed' })
+    expect(roomDeadlines(undated)).toEqual([])
+    expect(evaluateRoomLifecycle(undated, T0 + 10 * noOpponentMs)).toMatchObject({
       action: 'keep',
       deadlineAt: null,
     })

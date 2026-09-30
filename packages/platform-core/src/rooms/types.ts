@@ -47,6 +47,22 @@ export interface Room {
   readonly code: string
 
   /**
+   * The compare-and-set token. Starts at 1 and is incremented by exactly one
+   * on every accepted write.
+   *
+   * It has to be a counter rather than `updatedAt`, and the difference is not
+   * cosmetic: two joins that land in the same millisecond carry the same
+   * wall-clock reading, so a CAS comparing `updatedAt` finds them equal,
+   * accepts the stale write and seats both players at the same index — the
+   * second silently overwriting the first. A counter cannot collide however
+   * fast the writes arrive. `updatedAt` is display metadata and nothing else.
+   *
+   * `reviseRoom` is the only thing that bumps it, so no mutation site can
+   * forget to.
+   */
+  readonly version: number
+
+  /**
    * The realtime framework's own opaque room handle, or null until the realtime
    * service has created the backing room and bound it. Internal plumbing: it is
    * never shown to a player, never typed by one, and never visible to a game
@@ -92,6 +108,26 @@ export interface Room {
 
   /** The match currently or most recently hosted. Match records outlive the room. */
   readonly currentMatchId: string | null
+}
+
+/**
+ * Fields a successor revision may change. The identity of a room — its id, its
+ * code, when it was born — is fixed for its whole life, and `version` is the
+ * store's to manage, so none of them are settable here.
+ */
+export type RoomRevision = Partial<Omit<Room, 'id' | 'code' | 'version' | 'createdAt'>>
+
+/**
+ * Builds the successor revision of a room: applies `changes`, bumps `version`
+ * by one and stamps `updatedAt`.
+ *
+ * The single place a version is incremented. Every mutation goes through here
+ * so that "each write bumps the token" is a property of the code rather than a
+ * rule each call site has to remember — the CAS is only as strong as its
+ * weakest writer.
+ */
+export function reviseRoom(previous: Room, changes: RoomRevision, now: number): Room {
+  return { ...previous, ...changes, version: previous.version + 1, updatedAt: now }
 }
 
 export function seatedPlayerIds(room: Room): string[] {

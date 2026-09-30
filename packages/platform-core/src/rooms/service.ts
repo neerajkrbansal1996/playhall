@@ -26,7 +26,7 @@ import {
 import { type FailedJoinGuard, createFailedJoinGuard } from '../rate-limit/failed-join-guard.js'
 import { type RateLimiter, createTokenBucketLimiter } from '../rate-limit/token-bucket.js'
 import type { Clock, IdSource, RandomSource } from '../runtime.js'
-import { allocateRoomCode } from './code.js'
+import { RoomCodeExhaustionError, allocateRoomCode } from './code.js'
 import {
   DEFAULT_ROOM_LIFECYCLE,
   type RoomLifecyclePolicy,
@@ -37,6 +37,7 @@ import {
   type JoinRejectionCode,
   applyJoin,
   canonicalizeRoomCode,
+  chargesFailedJoinBudget,
   rejectJoin,
   resolveJoin,
 } from './join.js'
@@ -49,7 +50,7 @@ import {
   realtimeJoinTarget,
 } from './realtime-binding.js'
 import type { RoomStore } from './store.js'
-import type { Room, RoomCloseReason } from './types.js'
+import { type Room, type RoomCloseReason, type RoomRevision, reviseRoom } from './types.js'
 
 /** Server-side validation of the create-room request body. */
 export const createRoomRequestSchema = z.object({
@@ -102,8 +103,27 @@ export type JoinResult =
 export interface SweepReport {
   readonly expired: number
   readonly closed: number
+  /** Tombstones whose grace window elapsed. Their codes are now free again. */
+  readonly removed: number
   readonly prunedLimiterKeys: number
 }
+
+export type RoomMutationFailure =
+  | { readonly code: 'room_not_found' }
+  /**
+   * The room is alive and the change is legal, but the compare-and-set retry
+   * budget ran out. Distinct from `room_not_found` because the caller's
+   * correct response is the opposite one: retry, do not conclude the room is
+   * gone. A `finishMatch` that reported contention as "not found" would leave
+   * a room `in_progress` with no `finishedAt` — and `roomDeadlines` arms
+   * nothing for that state, so the room would never be swept and the players
+   * would sit in a match that silently never ended.
+   */
+  | { readonly code: 'contended'; readonly retryAfterMs: number }
+
+export type RoomMutationResult =
+  | { readonly ok: true; readonly room: Room }
+  | { readonly ok: false; readonly error: RoomMutationFailure }
 
 export interface RoomServiceOptions {
   readonly store: RoomStore
@@ -120,9 +140,9 @@ export interface RoomService {
   create(playerId: string, request: CreateRoomRequest): Promise<CreateRoomResult>
   joinByCode(request: JoinByCodeRequest): Promise<JoinResult>
   /** Marks a player disconnected. Arms the empty timer when the room empties. */
-  leave(roomId: string, playerId: string): Promise<Room | null>
+  leave(roomId: string, playerId: string): Promise<RoomMutationResult>
   /** Records the end of a match and opens the rematch window. */
-  finishMatch(roomId: string, matchId: string): Promise<Room | null>
+  finishMatch(roomId: string, matchId: string): Promise<RoomMutationResult>
   /** Applies every due lifecycle deadline. Call on an interval. */
   sweep(limit?: number): Promise<SweepReport>
   /**
@@ -208,13 +228,19 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     let code: string
     try {
       code = (await allocateRoomCode(random, (draw) => store.reserveCode(draw, roomId))).code
-    } catch {
+    } catch (error) {
+      // Only saturation is a request-level answer. A `RoomCodeSourceError` —
+      // the entropy source itself misbehaving — is a server fault and must
+      // propagate rather than be dressed up as "we ran out of codes".
+      if (!(error instanceof RoomCodeExhaustionError)) throw error
       return { ok: false, error: { code: 'code_exhausted' } }
     }
 
     const room: Room = {
       id: roomId,
       code,
+      // First revision. From here every write goes through `reviseRoom`.
+      version: 1,
       // The realtime service binds its own handle once the backing room exists.
       // The platform room is usable (shareable, chattable) before that happens.
       realtimeRoomId: null,
@@ -298,46 +324,52 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
   }
 
   function fail(ip: string, outcome: Extract<JoinOutcome, { kind: 'rejected' }>): JoinResult {
-    if (outcome.terminal) failedJoins.recordFailure(ip)
+    // Charged on evidence of *guessing*, not on whether the answer is final.
+    // A code for a room that has just closed is a real code held by someone
+    // who was invited — see `chargesFailedJoinBudget`.
+    if (chargesFailedJoinBudget(outcome.code)) failedJoins.recordFailure(ip)
     return { ok: false, code: outcome.code, terminal: outcome.terminal, retryAfterMs: 0 }
   }
 
-  /** Read-modify-write with bounded compare-and-set retries. */
+  /**
+   * Read-modify-write with bounded compare-and-set retries.
+   *
+   * Reports exhausting the retry budget as `contended`, never as
+   * `room_not_found`. The two are opposite instructions to the caller and
+   * collapsing them is how a live room ends up treated as a dead one.
+   */
   async function mutate(
     roomId: string,
-    change: (room: Room, now: number) => Room,
-  ): Promise<Room | null> {
+    change: (room: Room, now: number) => RoomRevision,
+  ): Promise<RoomMutationResult> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const room = await store.get(roomId)
-      if (room === null) return null
-      const next = change(room, clock.now())
-      if (await store.save(room, next)) return next
+      if (room === null) return { ok: false, error: { code: 'room_not_found' } }
+      const now = clock.now()
+      const next = reviseRoom(room, change(room, now), now)
+      if (await store.save(room, next)) return { ok: true, room: next }
     }
-    return null
+    return { ok: false, error: { code: 'contended', retryAfterMs: CAS_BACKOFF_MS } }
   }
 
-  async function leave(roomId: string, playerId: string): Promise<Room | null> {
+  async function leave(roomId: string, playerId: string): Promise<RoomMutationResult> {
     return mutate(roomId, (room, now) => {
       const present = room.presentPlayerIds.filter((id) => id !== playerId)
       return {
-        ...room,
         presentPlayerIds: present,
         // Leaving does not vacate a seat: the seat is held for reconnection.
         // Freeing it is a host action and belongs to PER-13.
         spectatorPlayerIds: room.spectatorPlayerIds.filter((id) => id !== playerId),
         emptySince: present.length === 0 ? (room.emptySince ?? now) : null,
-        updatedAt: now,
       }
     })
   }
 
-  async function finishMatch(roomId: string, matchId: string): Promise<Room | null> {
-    return mutate(roomId, (room, now) => ({
-      ...room,
+  async function finishMatch(roomId: string, matchId: string): Promise<RoomMutationResult> {
+    return mutate(roomId, (_room, now) => ({
       status: 'finished',
       finishedAt: now,
       currentMatchId: matchId,
-      updatedAt: now,
     }))
   }
 
@@ -346,31 +378,38 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     const due = await store.dueForSweep(now, limit)
     let expired = 0
     let closed = 0
+    let removed = 0
 
     for (const room of due) {
       const verdict = evaluateRoomLifecycle(room, now, lifecycle)
       if (verdict.action === 'keep') continue
 
-      const reason: RoomCloseReason = verdict.reason
-      const next: Room = {
-        ...room,
-        status: 'closed',
-        closedAt: now,
-        closeReason: reason,
-        presentPlayerIds: [],
-        updatedAt: now,
+      // Closing and removing are separate passes. A room closed on an earlier
+      // sweep lingers as a tombstone for `ttlGraceMs` so that a player on a
+      // link that has just died is told the room is over rather than that it
+      // never existed — the difference decides whether their IP is charged
+      // for the failed join. Only now does the room object go; the match
+      // record never does, it lives in Postgres and outlives every room.
+      if (verdict.action === 'remove') {
+        await store.remove(room.id)
+        removed += 1
+        continue
       }
+
+      const reason: RoomCloseReason = verdict.reason
+      const next = reviseRoom(
+        room,
+        { status: 'closed', closedAt: now, closeReason: reason, presentPlayerIds: [] },
+        now,
+      )
       if (!(await store.save(room, next))) continue
 
-      // The room object goes; the match record does not. Match history lives
-      // in Postgres and is never touched by room expiry.
-      await store.remove(room.id)
       if (verdict.action === 'expire') expired += 1
       else closed += 1
     }
 
     const prunedLimiterKeys = createLimiter.prune() + joinLimiter.prune() + failedJoins.prune()
-    return { expired, closed, prunedLimiterKeys }
+    return { expired, closed, removed, prunedLimiterKeys }
   }
 
   /**
@@ -398,7 +437,7 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
           : { ok: false, error: { code: decision.code } }
       }
 
-      const next: Room = { ...room, realtimeRoomId, updatedAt: clock.now() }
+      const next = reviseRoom(room, { realtimeRoomId }, clock.now())
       if (await store.save(room, next)) return { ok: true, room: next, bound: true }
     }
     return { ok: false, error: { code: 'contended', retryAfterMs: CAS_BACKOFF_MS } }

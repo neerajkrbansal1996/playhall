@@ -37,7 +37,7 @@ import {
   type RoomLifecyclePolicy,
   evaluateRoomLifecycle,
 } from './lifecycle.js'
-import { type Room, freeSeatIndex, seatIndexOf } from './types.js'
+import { type Room, type RoomRevision, freeSeatIndex, reviseRoom, seatIndexOf } from './types.js'
 
 export const JOIN_REJECTION_CODES = [
   'invalid_code',
@@ -58,6 +58,27 @@ export function isTerminalRejection(code: JoinRejectionCode): boolean {
   return code === 'invalid_code' || code === 'room_not_found' || code === 'room_expired'
 }
 
+/**
+ * Whether a rejection should spend a token from the per-IP failed-join budget.
+ *
+ * Not the same question as `isTerminalRejection`, and conflating them costs
+ * real players their budget. That cap is an *enumeration* defence: it exists
+ * to stop someone walking the 887,503,681-code space. Only a code that has
+ * never named a room is evidence of guessing.
+ *
+ * `room_expired` is the case that matters. The holder of a code for a room
+ * that has just closed is, on the evidence, someone who was invited — they
+ * produced a real code. Charging them is what makes the shared-NAT argument in
+ * `policies.ts` unsound, because that argument leans on a successful join
+ * refunding the budget and a dead link can never succeed: four friends on one
+ * office Wi-Fi tapping a stale link would lock out the fifth. The tombstone
+ * window is what makes this distinguishable at all — see `lifecycle.ts` — and
+ * it is short enough that it is no use as an enumeration oracle.
+ */
+export function chargesFailedJoinBudget(code: JoinRejectionCode): boolean {
+  return code === 'invalid_code' || code === 'room_not_found'
+}
+
 export type JoinOutcome =
   | { readonly kind: 'seated'; readonly seatIndex: number; readonly isRejoin: false }
   | { readonly kind: 'rejoined'; readonly seatIndex: number; readonly isRejoin: true }
@@ -71,11 +92,12 @@ export function rejectJoin(code: JoinRejectionCode): Extract<JoinOutcome, { kind
 /**
  * Normalises player input into a canonical code.
  *
- * Trims, upper-cases, drops separators a player may have typed or a messaging
- * app may have inserted, and folds the confusables the alphabet excludes
- * (`O`->`0` is impossible, so only the folds that land inside the alphabet are
- * applied — see `@playhall/shared`). Returns null when the result is not a
- * complete, valid code.
+ * Trims, upper-cases and drops the separators a player may have typed or a
+ * messaging app may have inserted. There is deliberately **no** confusable
+ * folding: both halves of every confusable pair are excluded from the
+ * alphabet, so there is nothing in-alphabet to fold to — see the reasoning on
+ * `normalizeRoomCode` in `@playhall/shared`. Returns null when the result is
+ * not a complete, valid code.
  */
 export function canonicalizeRoomCode(input: string): string | null {
   const canonical = normalizeRoomCode(input.trim())
@@ -128,21 +150,16 @@ export function applyJoin(room: Room, playerId: string, outcome: JoinOutcome, no
     ? room.presentPlayerIds
     : [...room.presentPlayerIds, playerId]
 
-  const base = {
-    ...room,
-    presentPlayerIds: present,
-    emptySince: null,
-    updatedAt: now,
-  }
+  const base: RoomRevision = { presentPlayerIds: present, emptySince: null }
 
   if (outcome.kind === 'spectating') {
     const spectators = room.spectatorPlayerIds.includes(playerId)
       ? room.spectatorPlayerIds
       : [...room.spectatorPlayerIds, playerId]
-    return { ...base, spectatorPlayerIds: spectators }
+    return reviseRoom(room, { ...base, spectatorPlayerIds: spectators }, now)
   }
 
-  if (outcome.kind === 'rejoined') return base
+  if (outcome.kind === 'rejoined') return reviseRoom(room, base, now)
 
   const seats = room.seats.map((seat) =>
     seat.index === outcome.seatIndex ? { ...seat, occupantPlayerId: playerId } : seat,
@@ -153,10 +170,23 @@ export function applyJoin(room: Room, playerId: string, outcome: JoinOutcome, no
   const secondPlayerJoinedAt =
     room.secondPlayerJoinedAt ?? (playerId === room.hostPlayerId ? null : now)
 
-  return {
-    ...base,
-    seats,
-    spectatorPlayerIds: room.spectatorPlayerIds.filter((id) => id !== playerId),
-    secondPlayerJoinedAt,
-  }
+  // Someone taking a seat in a finished room is re-crewing it for a rematch,
+  // so the 15-minute window restarts from that moment. Without this, a player
+  // seated at minute 14 gets sixty seconds to agree to a game and is thrown
+  // out mid-sentence. Only a *seating* join restarts it — a spectator
+  // wandering in is not a rematch — and seats are finite and are not released
+  // by leaving, so the number of restarts per match is bounded by seat count.
+  const finishedAt = room.status === 'finished' ? now : room.finishedAt
+
+  return reviseRoom(
+    room,
+    {
+      ...base,
+      seats,
+      spectatorPlayerIds: room.spectatorPlayerIds.filter((id) => id !== playerId),
+      secondPlayerJoinedAt,
+      finishedAt,
+    },
+    now,
+  )
 }

@@ -41,6 +41,35 @@ export function fixedClock(startEpochMs: number): MutableClock {
 }
 
 /**
+ * A clock that advances by `stepMs` on every *read*, on top of whatever the
+ * test sets by hand.
+ *
+ * It exists to keep `fixedClock` honest. Under a constant clock every write in
+ * a test carries the same `updatedAt`, which is what let a compare-and-set
+ * comparing `updatedAt` look correct for an entire green suite — the token
+ * never changed, so the check never had an opportunity to fire. Running the
+ * same concurrency assertions under both clocks is what proves the CAS depends
+ * on `Room.version` and not on the wall clock: one of the two clocks would
+ * catch a regression either way round.
+ */
+export function tickingClock(startEpochMs: number, stepMs = 1): MutableClock {
+  let current = startEpochMs
+  return {
+    now: () => {
+      const reading = current
+      current += stepMs
+      return reading
+    },
+    set: (epochMs: number) => {
+      current = epochMs
+    },
+    advance: (deltaMs: number) => {
+      current += deltaMs
+    },
+  }
+}
+
+/**
  * Cryptographically strong bytes. Room codes are guessable-by-construction
  * (31^6), so the generator must at least not be *predictable* on top of that;
  * the real defence is the per-IP failed-join cap.

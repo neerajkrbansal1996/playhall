@@ -1,4 +1,4 @@
-import type { Room, RoomStatus, RoomVisibility } from '../../src/rooms/types.js'
+import type { Room, RoomCloseReason, RoomStatus, RoomVisibility } from '../../src/rooms/types.js'
 
 export const T0 = 1_700_000_000_000
 
@@ -15,6 +15,9 @@ export interface RoomOverrides {
   readonly hostPlayerId?: string
   readonly gameId?: string
   readonly realtimeRoomId?: string | null
+  readonly version?: number
+  readonly closedAt?: number | null
+  readonly closeReason?: RoomCloseReason | null
 }
 
 /** A two-seat lobby hosted by `host`, created at `T0`, with seat 1 free. */
@@ -24,6 +27,7 @@ export function makeRoom(overrides: RoomOverrides = {}): Room {
   return {
     id: 'room-1',
     code: 'ABC234',
+    version: overrides.version ?? 1,
     realtimeRoomId: overrides.realtimeRoomId ?? null,
     gameId: overrides.gameId ?? 'fixture',
     gameSlug: 'fixture',
@@ -41,8 +45,8 @@ export function makeRoom(overrides: RoomOverrides = {}): Room {
     secondPlayerJoinedAt: overrides.secondPlayerJoinedAt ?? null,
     emptySince: overrides.emptySince ?? null,
     finishedAt: overrides.finishedAt ?? null,
-    closedAt: null,
-    closeReason: null,
+    closedAt: overrides.closedAt ?? null,
+    closeReason: overrides.closeReason ?? null,
     currentMatchId: null,
   }
 }

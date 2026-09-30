@@ -1,15 +1,23 @@
 /**
  * Room lifecycle.
  *
- * Three deadlines, one rule each:
+ * Four deadlines, one rule each:
  *
  * | Condition                         | After   | Outcome |
  * | --------------------------------- | ------- | ------- |
  * | Host alone, no second player ever | 30 min  | expire  |
  * | Nobody connected                  |  5 min  | close   |
  * | Match finished                    | 15 min  | close   |
+ * | Already closed                    | grace   | remove  |
  *
- * All three are expressed as *pure functions of `(room, now)`*, not as
+ * Closing and removing are two steps, not one. A closed room stays in the
+ * store as a tombstone for `ttlGraceMs`, and that window is load-bearing
+ * twice over: a player arriving on a link that just died is told the room is
+ * over (`room_expired`) instead of that it never existed, and the code stays
+ * reserved a while longer so a stale link can never be handed a *different*
+ * room that happened to draw the same code.
+ *
+ * All four are expressed as *pure functions of `(room, now)`*, not as
  * `setTimeout`. A timer held in one process dies with that process, and a
  * room that outlives its timer is a leaked Redis key — a scaling bug, not a
  * cosmetic one. Instead every room carries a computable next deadline, which
@@ -30,9 +38,10 @@ export interface RoomLifecyclePolicy {
   /** Match finished -> stay open this long for rematch and chat. */
   readonly finishedMs: number
   /**
-   * Added to the computed deadline when setting a Redis TTL, so the key
-   * survives just long enough for the sweeper to observe and act on it rather
-   * than finding it already gone.
+   * Two jobs, deliberately one number. Added to the computed deadline when
+   * setting a Redis TTL, so the key survives just long enough for the sweeper
+   * to observe and act on it rather than finding it already gone; and how long
+   * a closed room lingers as a tombstone before it is removed.
    */
   readonly ttlGraceMs: number
 }
@@ -54,11 +63,17 @@ export type RoomLifecycleAction =
       readonly deadlineAt: number
       readonly reason: Exclude<RoomCloseReason, 'no_opponent' | 'host_closed'>
     }
+  /** The tombstone has served its purpose. Drop the room and free its code. */
+  | {
+      readonly action: 'remove'
+      readonly deadlineAt: number
+      readonly reason: RoomCloseReason | null
+    }
 
 interface Candidate {
   readonly at: number
-  readonly action: 'expire' | 'close'
-  readonly reason: RoomCloseReason
+  readonly action: 'expire' | 'close' | 'remove'
+  readonly reason: RoomCloseReason | null
 }
 
 /**
@@ -73,7 +88,13 @@ export function roomDeadlines(
   room: Room,
   policy: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
 ): readonly Candidate[] {
-  if (room.status === 'closed') return []
+  // A closed room has exactly one deadline left: its own removal. Returning
+  // `[]` here would take it out of the sweeper's range query entirely, which
+  // is how a tombstone becomes a leaked key.
+  if (room.status === 'closed') {
+    if (room.closedAt === null) return []
+    return [{ at: room.closedAt + policy.ttlGraceMs, action: 'remove', reason: room.closeReason }]
+  }
 
   const candidates: Candidate[] = []
 
@@ -123,6 +144,9 @@ export function evaluateRoomLifecycle(
 
   if (due.action === 'expire') {
     return { action: 'expire', deadlineAt: due.at, reason: 'no_opponent' }
+  }
+  if (due.action === 'remove') {
+    return { action: 'remove', deadlineAt: due.at, reason: due.reason }
   }
   return {
     action: 'close',

@@ -25,6 +25,7 @@ export {
   fixedClock,
   randomIdSource,
   sequenceRandomSource,
+  tickingClock,
   webCryptoRandomSource,
 } from './runtime.js'
 
@@ -44,6 +45,7 @@ export type { RoomCodeAllocation } from './rooms/code.js'
 export {
   ROOM_CODE_SPACE,
   RoomCodeExhaustionError,
+  RoomCodeSourceError,
   allocateRoomCode,
   generateRoomCode,
   isValidRoomCode,
@@ -52,11 +54,18 @@ export {
 export type {
   Room,
   RoomCloseReason,
+  RoomRevision,
   RoomSeatSlot,
   RoomStatus,
   RoomVisibility,
 } from './rooms/types.js'
-export { freeSeatIndex, isRoomMember, seatIndexOf, seatedPlayerIds } from './rooms/types.js'
+export {
+  freeSeatIndex,
+  isRoomMember,
+  reviseRoom,
+  seatIndexOf,
+  seatedPlayerIds,
+} from './rooms/types.js'
 
 export type { RoomLifecycleAction, RoomLifecyclePolicy } from './rooms/lifecycle.js'
 export {
@@ -72,6 +81,7 @@ export {
   JOIN_REJECTION_CODES,
   applyJoin,
   canonicalizeRoomCode,
+  chargesFailedJoinBudget,
   isTerminalRejection,
   rejectJoin,
   resolveJoin,
@@ -99,6 +109,8 @@ export type {
   CreateRoomResult,
   JoinByCodeRequest,
   JoinResult,
+  RoomMutationFailure,
+  RoomMutationResult,
   RoomService,
   RoomServiceOptions,
   SweepReport,

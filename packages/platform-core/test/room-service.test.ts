@@ -9,10 +9,11 @@ import {
   type RoomService,
 } from '../src/rooms/service.js'
 import { createInMemoryRoomStore, type RoomStore } from '../src/rooms/store.js'
-import { isValidRoomCode } from '../src/rooms/code.js'
+import { RoomCodeSourceError, isValidRoomCode } from '../src/rooms/code.js'
 import {
   countingIdSource,
   fixedClock,
+  tickingClock,
   webCryptoRandomSource,
   type MutableClock,
 } from '../src/runtime.js'
@@ -178,6 +179,28 @@ describe('create', () => {
       service.create('host', { slug: 'duo', visibility: 'private' }),
     ).resolves.toMatchObject({ ok: false, error: { code: 'code_exhausted' } })
   })
+
+  it('lets a broken entropy source fail loudly rather than reporting exhaustion', async () => {
+    const flags = createFeatureFlags()
+    const registry = await createGameRegistry({
+      registrations: [registrationFor(makeGame({ slug: 'duo' }))],
+      flags,
+    })
+    const service = createRoomService({
+      store: createInMemoryRoomStore(),
+      registry,
+      flags,
+      clock: fixedClock(T0),
+      random: { randomBytes: () => new Uint8Array(0) },
+      ids: countingIdSource('room'),
+    })
+    // "We ran out of codes" is a claim about the 887-million-code space and
+    // would send an operator looking in exactly the wrong place. A CSPRNG
+    // that has stopped producing bytes is a server fault and must read as one.
+    await expect(service.create('host', { slug: 'duo', visibility: 'private' })).rejects.toThrow(
+      RoomCodeSourceError,
+    )
+  })
 })
 
 describe('join by code', () => {
@@ -259,6 +282,43 @@ describe('join by code', () => {
     await expect(
       h.service.joinByCode({ rawCode: code, playerId: 'fourth', ip: IP }),
     ).resolves.toMatchObject({ ok: false, code: 'room_expired' })
+  })
+
+  it('restarts the rematch window when a new player re-crews a finished room', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    const { code, id } = created.room
+    await h.service.finishMatch(id, 'match-1')
+
+    // Seat 1 is free, so someone arriving near the end of the window is
+    // re-crewing for a rematch, not turning up to a room that is about to
+    // close under them. Sixty seconds is not enough to agree to a game.
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.finishedMs - 60_000)
+    await expect(
+      h.service.joinByCode({ rawCode: code, playerId: 'guest', ip: IP }),
+    ).resolves.toMatchObject({ ok: true, outcome: { kind: 'seated' } })
+
+    // The window now runs from the moment they sat down.
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.finishedMs - 1)
+    expect(await h.service.sweep()).toMatchObject({ closed: 0 })
+    h.clock.advance(1)
+    expect(await h.service.sweep()).toMatchObject({ closed: 1 })
+  })
+
+  it('does not restart the rematch window for a spectator', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    const { code, id } = created.room
+    await h.service.joinByCode({ rawCode: code, playerId: 'guest', ip: IP })
+    await h.service.finishMatch(id, 'match-1')
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.finishedMs - 1)
+    await expect(
+      h.service.joinByCode({ rawCode: code, playerId: 'watcher', ip: IP }),
+    ).resolves.toMatchObject({ ok: true, outcome: { kind: 'spectating' } })
+
+    h.clock.advance(1)
+    expect(await h.service.sweep()).toMatchObject({ closed: 1 })
   })
 
   it('rate-limits joins per guest', async () => {
@@ -372,6 +432,92 @@ describe('the per-IP failed-join cap', () => {
   })
 })
 
+/**
+ * The seat race, run under two clocks on purpose.
+ *
+ * `fixedClock` puts both writes in the same millisecond, which is the exact
+ * condition under which a compare-and-set on `updatedAt` compares equal and
+ * lets the stale write through. `tickingClock` moves time on every read, so a
+ * pass there proves the protection is not merely a side effect of time
+ * standing still. A regression to a timestamp token fails the first; a
+ * regression that depends on time moving fails the second.
+ */
+describe.each([
+  ['a clock that does not move', () => fixedClock(T0)],
+  ['a clock that advances on every read', () => tickingClock(T0)],
+])('concurrent joins for the last seat, under %s', (_label, makeClock) => {
+  it('seats exactly one player and sends the loser to the spectators', async () => {
+    const clock = makeClock()
+    const inner = createInMemoryRoomStore()
+    const flags = createFeatureFlags()
+    const registry = await createGameRegistry({
+      registrations: [registrationFor(makeGame({ slug: 'duo', id: 'game-duo' }))],
+      flags,
+    })
+
+    // Both joiners read the room before either writes — the interleaving a
+    // single-threaded event loop produces the moment a store is a network
+    // call rather than a Map.
+    let release: () => void = () => {}
+    const bothHaveRead = new Promise<void>((resolve) => {
+      let arrived = 0
+      release = () => {
+        arrived += 1
+        if (arrived === 2) resolve()
+      }
+    })
+    let gateArmed = true
+    const store: RoomStore = {
+      ...inner,
+      async getByCode(code) {
+        const room = await inner.getByCode(code)
+        if (gateArmed) {
+          release()
+          await bothHaveRead
+        }
+        return room
+      },
+    }
+
+    const service = createRoomService({
+      store,
+      registry,
+      flags,
+      clock,
+      random: webCryptoRandomSource(),
+      ids: countingIdSource('room'),
+    })
+
+    const created = await service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+
+    const [first, second] = await Promise.all([
+      service.joinByCode({ rawCode: created.room.code, playerId: 'alice', ip: '198.51.100.1' }),
+      service.joinByCode({ rawCode: created.room.code, playerId: 'bob', ip: '198.51.100.2' }),
+    ])
+    // The loser's compare-and-set retry re-reads; let it through the gate.
+    gateArmed = false
+
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+
+    const kinds = [first.outcome.kind, second.outcome.kind].sort()
+    expect(kinds).toEqual(['seated', 'spectating'])
+
+    const room = await store.get(created.room.id)
+    expect(room?.seats.map((seat) => seat.occupantPlayerId)).toEqual([
+      'host',
+      expect.stringMatching(/^(alice|bob)$/),
+    ])
+    // The decisive assertion: nobody was overwritten. The player who lost the
+    // seat is still in the room, as a spectator.
+    expect([...(room?.spectatorPlayerIds ?? [])]).toHaveLength(1)
+    expect(
+      new Set([...(room?.spectatorPlayerIds ?? []), room?.seats[1]?.occupantPlayerId]),
+    ).toEqual(new Set(['alice', 'bob']))
+  })
+})
+
 describe('lost-update protection', () => {
   /** A store whose compare-and-set always loses, standing in for a hot room. */
   async function contendedHarness(): Promise<Harness> {
@@ -411,14 +557,33 @@ describe('lost-update protection', () => {
     expect(joined).toMatchObject({ ok: false, code: 'rate_limited' })
     expect(!joined.ok && joined.retryAfterMs).toBeGreaterThan(0)
 
-    expect(await c.service.leave(created.room.id, 'host')).toBeNull()
-    expect(await c.service.finishMatch(created.room.id, 'm')).toBeNull()
+    // Contention is reported as contention, never as a missing room. The two
+    // are opposite instructions: retry, versus give up and treat the room as
+    // gone. A `finishMatch` told "not found" would leave the room in_progress
+    // with no `finishedAt`, which arms no deadline at all — the room would
+    // never be swept and the players would sit in a match that never ended.
+    await expect(c.service.leave(created.room.id, 'host')).resolves.toEqual({
+      ok: false,
+      error: { code: 'contended', retryAfterMs: expect.any(Number) },
+    })
+    await expect(c.service.finishMatch(created.room.id, 'm')).resolves.toEqual({
+      ok: false,
+      error: { code: 'contended', retryAfterMs: expect.any(Number) },
+    })
 
     // A sweep that cannot win the write leaves the room alone rather than
     // half-closing it; the next sweep tries again.
     c.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
     expect(await c.service.sweep()).toMatchObject({ expired: 0, closed: 0 })
     expect(await c.store.get(created.room.id)).not.toBeNull()
+  })
+
+  it('still reports a genuinely missing room as not found', async () => {
+    const c = await contendedHarness()
+    await expect(c.service.leave('nope', 'p')).resolves.toEqual({
+      ok: false,
+      error: { code: 'room_not_found' },
+    })
   })
 })
 
@@ -429,8 +594,8 @@ describe('leave and the empty timer', () => {
 
     h.clock.advance(1000)
     const left = await h.service.leave(created.room.id, 'host')
-    expect(left?.presentPlayerIds).toEqual([])
-    expect(left?.emptySince).toBe(T0 + 1000)
+    expect(left.ok && left.room.presentPlayerIds).toEqual([])
+    expect(left.ok && left.room.emptySince).toBe(T0 + 1000)
 
     h.clock.advance(1000)
     const back = await h.service.joinByCode({
@@ -447,12 +612,13 @@ describe('leave and the empty timer', () => {
     await h.service.joinByCode({ rawCode: created.room.code, playerId: 'guest', ip: IP })
 
     const after = await h.service.leave(created.room.id, 'guest')
-    expect(after?.seats[1]?.occupantPlayerId).toBe('guest')
+    expect(after.ok && after.room.seats[1]?.occupantPlayerId).toBe('guest')
   })
 
-  it('returns null for an unknown room', async () => {
-    expect(await h.service.leave('nope', 'p')).toBeNull()
-    expect(await h.service.finishMatch('nope', 'm')).toBeNull()
+  it('reports an unknown room as not found', async () => {
+    const notFound = { ok: false, error: { code: 'room_not_found' } }
+    await expect(h.service.leave('nope', 'p')).resolves.toEqual(notFound)
+    await expect(h.service.finishMatch('nope', 'm')).resolves.toEqual(notFound)
   })
 })
 
@@ -466,7 +632,12 @@ describe('sweep', () => {
     expect(h.store.size).toBe(1)
 
     h.clock.advance(1)
-    expect(await h.service.sweep()).toMatchObject({ expired: 1, closed: 0 })
+    expect(await h.service.sweep()).toMatchObject({ expired: 1, closed: 0, removed: 0 })
+    expect((await h.store.get(created.room.id))?.status).toBe('closed')
+
+    // The tombstone, not the room, is what holds the code now.
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    expect(await h.service.sweep()).toMatchObject({ removed: 1 })
     expect(h.store.size).toBe(0)
     expect(await h.store.getByCode(created.room.code)).toBeNull()
   })
@@ -480,6 +651,9 @@ describe('sweep', () => {
 
     h.clock.advance(DEFAULT_ROOM_LIFECYCLE.emptyMs)
     expect(await h.service.sweep()).toMatchObject({ closed: 1, expired: 0 })
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    expect(await h.service.sweep()).toMatchObject({ removed: 1 })
     expect(await h.store.getByCode(created.room.code)).toBeNull()
   })
 
@@ -495,7 +669,65 @@ describe('sweep', () => {
 
     h.clock.advance(1)
     expect(await h.service.sweep()).toMatchObject({ closed: 1 })
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    expect(await h.service.sweep()).toMatchObject({ removed: 1 })
     expect(h.store.size).toBe(0)
+  })
+
+  it('keeps a closed room as a tombstone for the grace window, then removes it', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
+    await h.service.sweep()
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs - 1)
+    expect(await h.service.sweep()).toMatchObject({ removed: 0 })
+    expect(h.store.size).toBe(1)
+
+    h.clock.advance(1)
+    expect(await h.service.sweep()).toMatchObject({ removed: 1 })
+    expect(h.store.size).toBe(0)
+  })
+
+  it('tells a player on a just-dead link the room is over, and does not charge their IP', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    const { code } = created.room
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
+    await h.service.sweep()
+
+    // Far more arrivals than the per-IP failure budget: four friends on one
+    // office Wi-Fi all tapping the same stale invite must not lock each other
+    // out. They hold a real code, which is the opposite of enumeration.
+    const budget = DEFAULT_RATE_LIMITS.failedCodeJoinPerIp.capacity
+    for (let attempt = 0; attempt < budget + 2; attempt += 1) {
+      await expect(
+        h.service.joinByCode({ rawCode: code, playerId: `p${attempt}`, ip: IP }),
+      ).resolves.toMatchObject({ ok: false, code: 'room_expired' })
+    }
+
+    // A guessed code from the same IP is still charged, so the enumeration
+    // defence is intact.
+    await expect(
+      h.service.joinByCode({ rawCode: 'ZZZZZZ', playerId: 'q', ip: IP }),
+    ).resolves.toMatchObject({ ok: false, code: 'room_not_found' })
+  })
+
+  it('charges the IP once the tombstone is gone and the code reads as unknown', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    const { code } = created.room
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
+    await h.service.sweep()
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    await h.service.sweep()
+
+    await expect(
+      h.service.joinByCode({ rawCode: code, playerId: 'late', ip: IP }),
+    ).resolves.toMatchObject({ ok: false, code: 'room_not_found' })
   })
 
   it('prunes rate-limiter keys so they cannot outlive their window', async () => {
@@ -508,6 +740,11 @@ describe('sweep', () => {
   })
 
   it('is a no-op when nothing is due', async () => {
-    expect(await h.service.sweep()).toEqual({ expired: 0, closed: 0, prunedLimiterKeys: 0 })
+    expect(await h.service.sweep()).toEqual({
+      expired: 0,
+      closed: 0,
+      removed: 0,
+      prunedLimiterKeys: 0,
+    })
   })
 })
