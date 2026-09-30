@@ -102,6 +102,7 @@ export const CONFORMANCE_CHECKS = [
   'serialization-round-trip',
   'reconnect-snapshot-matches-live',
   'random-playout-terminates',
+  'result-standings-well-formed',
 ] as const
 
 /** The SDK version this testkit build conforms to. Recorded on every run. */
