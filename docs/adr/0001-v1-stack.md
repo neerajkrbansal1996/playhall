@@ -56,6 +56,23 @@
   `packages/game-sdk` is unchanged and no SDK contract change is implied. Row 2 also now states
   what layer 2 does **not** prove, so it cannot be cited as discharging layer 5 or 6. Found while
   ruling on [PER-153](/PER/issues/PER-153); corrected on [PER-158](/PER/issues/PER-158).
+- **Amended:** 2026-09-30 (rev 8) — **§4.4.1 only; no decision changes.** Rev 7 required layer 3
+  to ship "a negative fixture" and left it there. That is not auditable, and it fails the same way
+  the two defects rev 7 fixed do: a fixture asserting too little is green for free. §4.4.1 now
+  specifies the harness — a **new kind**, since no test in this repo asserts an ESLint rule fires
+  and every existing negative fixture is a dependency-cruiser fixture via
+  `tools/boundaries/src/mini-repo.ts`, so there is nothing to copy — together with **three**
+  assertions rather than one, and the requirement that the fixture live _inside_ the linted tree.
+  Assertion 2 is the load-bearing addition: because `send` and `raw` are generic names, a ban
+  firing on every receiver in `apps/realtime/src` satisfies a count-of-4 assertion, and only a
+  compliant-file-yields-0 check distinguishes the two. The fixture location matters for the same
+  reason — parked outside `apps/realtime` it yields _"File ignored because outside of base path"_
+  and zero errors, which reads identically to a clean tree. Docs-only: `eslint.config.mjs` is
+  untouched and layer 3's implementation remains [PER-15](/PER/issues/PER-15)'s deliverable. Rev 7
+  landed layer 2's correction but not this one, so
+  [PER-153](/PER/issues/PER-153)'s rev 3 header over-claimed that both rulings were carried here;
+  raised by [Platform Engineer](/PER/agents/platform-engineer), corrected on
+  [PER-173](/PER/issues/PER-173).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -353,6 +370,34 @@ family" would be green for free.
 That is why the negative fixture is part of layer 3's deliverable on
 [PER-15](/PER/issues/PER-15) and not a nicety: without one, a rule that catches 0 of 4 is
 indistinguishable from a clean tree. The rule itself lands with PER-15, not with this revision.
+
+**Layer 3's fixture harness, specified (rev 8).** Rev 7 required "a negative fixture" and stopped
+there. That is not enough to audit against, and the gap is the same shape as the two defects rev 7
+fixed: a fixture that asserts too little is green for free. Three things are therefore part of
+layer 3's deliverable, not one.
+
+_It is a new harness kind, and that is authorised._ The repo has **no** test that asserts an
+ESLint rule fires. Every negative fixture that exists today is a dependency-cruiser fixture driven
+through `tools/boundaries/src/mini-repo.ts`, so "in the style of the `no-game-to-colyseus`
+fixtures" is a misleading instruction — there is nothing to copy. Build a vitest test driving the
+programmatic `ESLint` API (`new ESLint({ cwd: repoRoot }).lintFiles(…)`). This is in scope for
+[PER-15](/PER/issues/PER-15) and needs no separate ADR.
+
+_Three assertions, each closing a distinct false green._
+
+| #   | Assertion                                                                                                    | Why it exists                                                                                                                          |
+| --- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The violating fixture yields **exactly 4** `no-restricted-properties` errors, one per shape.                 | A rule catching 1 of 4 passes a merely non-empty assertion — the rev 6 failure mode, one level up. Pin the count.                      |
+| 2   | A **compliant** file in the same tree — calls `colyseusEgress()`, touches no banned property — yields **0**. | `send` and `raw` are generic names. A ban firing on _every_ receiver in `apps/realtime/src` still satisfies (1); only this catches it. |
+| 3   | The `colyseusEgress()` module itself, which genuinely contains `client.send`, yields **0**.                  | Proves the `ignores` exemption works rather than assuming it.                                                                          |
+
+_The fixture's location is load-bearing._ It must sit **inside** the linted tree, at
+`apps/realtime/src/__fixtures__/egress-violations.ts` — deliberately inside the new block's
+`files:` — with that path added to the repo-level `ignores` so `pnpm lint` stays green while the
+harness lints it explicitly. A fixture parked outside `apps/realtime` does not produce a failure;
+it produces _"File ignored because outside of base path"_ and zero errors, which reads identically
+to a clean tree. Layer 3's done-when is the fixture **failing with the rule removed**; a passing
+`lint` is not evidence.
 
 **Where this is weakest, stated plainly.** Layers 1, 2 and 3 are mechanical, but none of them
 exists today: Colyseus appears in no source file in the repo, so there is nothing for them to
