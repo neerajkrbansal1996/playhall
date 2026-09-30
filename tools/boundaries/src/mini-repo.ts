@@ -39,6 +39,18 @@ const COPIED_FROM_REPO = [
  */
 export const SCOPE_TOKEN = '@scope'
 
+/**
+ * The token for a scope this workspace does *not* use — a package name left behind by a rename.
+ * It is derived from the real scope rather than spelled out, so it is guaranteed to differ from
+ * whatever the brand becomes and no fixture has to name a retired brand.
+ */
+export const STALE_SCOPE_TOKEN = '@stale-scope'
+
+/** A valid npm scope that is always different from `scope`. */
+export function staleScope(scope: string): string {
+  return `${scope}-legacy`
+}
+
 /** The npm scope the real workspace uses, e.g. `@playhall`. */
 export function workspaceScope(repoRoot: string): string {
   const sdkName = JSON.parse(
@@ -51,9 +63,13 @@ export function workspaceScope(repoRoot: string): string {
   return scope
 }
 
-/** Replaces every `@scope` token with the workspace's real scope. */
+/**
+ * Replaces every `@stale-scope` token with a retired scope and every `@scope` token with the
+ * workspace's real one. Stale first: `@scope` is not a substring of `@stale-scope`, but doing it
+ * in this order keeps that from mattering if either token is ever reworded.
+ */
 export function applyScope(text: string, scope: string): string {
-  return text.replaceAll(SCOPE_TOKEN, scope)
+  return text.replaceAll(STALE_SCOPE_TOKEN, staleScope(scope)).replaceAll(SCOPE_TOKEN, scope)
 }
 
 /**
