@@ -403,3 +403,45 @@ describe('no game knowledge', () => {
     )
   })
 })
+
+describe('a game with nothing to configure (ADR-0008 §10)', () => {
+  // `settingsForm` is required at contract v1 (PER-95), so "no settings" is spelled
+  // `fields: []` rather than by omitting the descriptor. That keeps "deliberately
+  // no settings" distinguishable from "forgot the descriptor", and it means the
+  // renderer must treat an empty descriptor as a valid form, not as a defect.
+  it('renders an empty descriptor as an empty form rather than failing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const seen = tracker()
+
+    render(
+      <Harness
+        settingsForm={{ version: 1, fields: [] }}
+        defaultSettings={{}}
+        onValues={seen.onValues}
+      />,
+    )
+
+    expect(screen.queryAllByRole('group')).toHaveLength(0)
+    expect(screen.queryAllByRole('radio')).toHaveLength(0)
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0)
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+    // An empty descriptor is legal, so it is not a skipped-field warning either.
+    expect(warn).not.toHaveBeenCalled()
+    expect(seen.last).toEqual({})
+  })
+
+  it('still draws the preset picker for a game whose presets carry no fields', () => {
+    // Presets are a sibling of `fields`, not a consumer of them, so a descriptor
+    // with no fields must not suppress them.
+    render(
+      <Harness
+        settingsForm={{ version: 1, fields: [] }}
+        defaultSettings={{}}
+        presets={[{ id: 'standard', label: 'Standard', settings: {}, isDefault: true }]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /Standard/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
