@@ -2,7 +2,9 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['test/**/*.test.ts'],
+    // `.mjs` is here for the release-build tooling in `build.mjs` and
+    // `scripts/release/`, which runs under plain Node and is not TypeScript.
+    include: ['test/**/*.test.ts', 'test/**/*.test.mjs'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
