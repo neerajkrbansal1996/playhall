@@ -1,10 +1,13 @@
 # ADR-0003: Cost the hosting candidates per 1,000 concurrent players and escalate the choice
 
-- **Status:** **Accepted.** The board answered on [PER-2](/PER/issues/PER-2) on 2026-09-30:
-  **Fly.io for M0–M5**, budget **phased $120/month now → $250/month at M5** under a standing
-  **$400/month ceiling**, regions **deferred to M5** with interim environments to sit as close to
-  India as the provider allows (§5.5b). **M6 remains board-gated and is explicitly not settled by
-  this ADR** (§7c).
+- **Status:** **Accepted as to the choice; suspended as to the spend.** The board answered on
+  [PER-2](/PER/issues/PER-2) on 2026-09-30: **Fly.io for M0–M5**, budget **phased $120/month now
+  → $250/month at M5** under a standing **$400/month ceiling**, regions **deferred to M5** with
+  interim environments to sit as close to India as the provider allows (§5.5b). **M6 remains
+  board-gated and is explicitly not settled by this ADR** (§7c). **Later the same day the board
+  held all provisioning and put everything back on free tiers** — the authority in §12 is
+  ratified but **may not be exercised**, and **§8 is the operative topology again** (rev 4,
+  §13).
 - **Date:** 2026-09-30
 - **Amended:** 2026-09-30 (**rev 2**) — the board set the infrastructure budget to **$0**, and
   [ADR-0001](./0001-v1-stack.md) rev 2 withdrew the `noeviction` disqualifier. **§5.1, §7, §8
@@ -15,6 +18,11 @@
   premise: **Fly has no India region — `bom` was removed from the product on 2026-09-25.** New
   **§5.5b** and **§12**; §0, §3.6, §4, §7a, §7c, §10 and §11.3 changed materially. See
   [What changed in rev 3](#what-changed-in-rev-3).
+- **Amended:** 2026-09-30 (**rev 4**) — the board **held all provisioning and returned everything
+  to free tiers**, hours after approving the spend. The provider choice survives; the permission
+  to spend does not. **§8 becomes operative again, §7 and §12 become authorised-but-dormant, and
+  the approved $8 capacity test cannot run.** New **§8.7** and **§13**; the Status line, §7, §8,
+  §8.4 and §12 changed materially. See [What changed in rev 4](#what-changed-in-rev-4).
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -85,9 +93,47 @@ the provisioning instruction that replaces it.
 
 Rev 1's and rev 2's §2, §6 and §9 are unchanged.
 
+### What changed in rev 4 {#what-changed-in-rev-4}
+
+Rev 3 was written against an approval that was withdrawn in practice a few hours later on the
+same day. The board's answer to the payment-instrument question was **"hold all provisioning for
+now — keep everything on free tiers"**, relayed on [PER-38](/PER/issues/PER-38) as: _"No vendor
+account, no card on file, no paid tier, no trial, on any provider — Fly and Hetzner included."_
+
+**The distinction that keeps this ADR honest is between authority and permission.** The board
+ratified the envelope — Fly.io, $120/month stepping to $250 at M5, $400 ceiling, plus the ~$8
+capacity test — and separately withheld permission to exercise any of it. Rev 4 does not
+un-decide the provider. It records that **every figure in §12 is dormant** and that §8's free
+topology is what actually runs.
+
+| Rev 3 said                                                            | Rev 4 says                                                                                                                                                                          |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §7 is operative and approved                                          | §7 is **the standing choice, dormant**. Correct when spend resumes; authorises nothing today.                                                                                       |
+| §8 is retained as the fallback, "nothing in §8 should be provisioned" | §8 is **operative again**. It is the topology we run, with §8.5's eight non-proofs in force.                                                                                        |
+| §12 is the buy-list; Platform Engineer may provision §12.3            | **§12.3 is withdrawn. Nothing is provisioned.** The buy-list keeps its value as a costed, board-ratified plan that executes on one word from the board.                             |
+| Test A (~$8, 48-hour Hetzner capacity window) is approved, run it     | **Test A cannot run.** Hetzner's hourly billing needs a card. The gate was never the money — it was the payment instrument, and $8 approved is $8 unspendable. I9 stays unmeasured. |
+
+**What this costs, recorded rather than absorbed:** the two quantities the entire cost model rests
+on — bytes per message and memory per room (I9) — stay unmeasured through at least M2. Every
+number in §3, §4 and §12 therefore remains a **budget or a published list price, not a
+measurement**. §9 already says so; rev 4 is the point at which that stops being a caveat and
+becomes the durable state of the document. Nothing in here should harden into apparent fact by
+repetition.
+
+**One conflict inside the instruction, which §8.7 is new to record.** "No vendor account … on any
+provider" and "everything stays on the free topology you costed in §8.1" cannot both be complied
+with literally: §8.1's topology _is_ four vendor accounts (Cloudflare, Render, Upstash, Neon),
+all free, none needing a card. Which reading holds decides whether **three** of M0's five
+acceptance criteria are demonstrable or **none** are. That is a board question, not mine, and
+§8.7 states it so it is answered once rather than assumed differently by each reader.
+
 ---
 
 ## 0. Summary for the board {#summary-for-the-board}
+
+> **Rev 4: the decision below stands; the spending does not.** All provisioning is held and
+> everything is on free tiers. Read §0 as "what we will do when spend resumes", and §8 as "what
+> runs today". The `$` figures are dormant, not active.
 
 **Rev 3: the board has decided.** Fly.io for M0–M5, $120/month now stepping to $250/month at M5
 under a $400 ceiling, regions deferred to M5. This section now records the decision and the two
@@ -821,15 +867,20 @@ to be evaluated alongside Hetzner and Colyseus in [PER-21](/PER/issues/PER-21) �
 
 ---
 
-## 7. Recommendation — **approved by the board 2026-09-30** (§10)
+## 7. Recommendation — **approved by the board 2026-09-30, dormant under the provisioning hold** (§10, §13)
 
-> **Rev 3: this section is now operative and the board has approved it.** Fly.io for **M0–M5
-> only**, with the two conditions in §7a carried in full. **§8 is no longer the operative
-> section** — it is retained as the record of what $0 would have bought and as the fallback if
-> spend authority is withdrawn. The buy-list and the money are in **§12**.
+> **Rev 4: approved, and not exercisable.** The provider choice stands — this is still the right
+> answer and no further board input is needed to act on it the moment provisioning resumes. But
+> **nothing here may be provisioned today**: no Fly account, no card, no trial. **§8 is the
+> operative section again.** Treat §7 and §12 as a signed purchase order with no released funds.
+>
+> ~~Rev 3: this section is now operative and the board has approved it … §8 is no longer the
+> operative section.~~ **Half-superseded 2026-09-30** — the approval is real, the operativeness
+> is not.
 >
 > ~~Rev 2: this section is conditional on a budget existing. The board has set the budget to
-> $0, so §8 is the operative section today.~~ **Superseded 2026-09-30.**
+> $0, so §8 is the operative section today.~~ **Reinstated by rev 4**, for a different reason:
+> in rev 2 there was no authority; now there is authority and no permission.
 
 **Split the decision by workload and by time.**
 
@@ -936,16 +987,19 @@ India destination rates**. **No M6 spend is approved or requested.**
 
 ---
 
-## 8. The $0 topology — **superseded 2026-09-30, retained as the fallback**
+## 8. The $0 topology — **operative again as of 2026-09-30 (rev 4)**
 
-> **Rev 3: this section is no longer operative.** The board reversed $0 and approved
-> $120/month; **§12 is the buy-list.** §8 is kept for two reasons: it is the record of what the
-> board was choosing between, and it is the fallback shape if spend authority is ever withdrawn.
-> Nothing in §8 should be provisioned.
+> **Rev 4: this is the operative section.** All provisioning is held and everything is on free
+> tiers, so this is the shape that runs. Read §8.5's eight non-proofs as live constraints on what
+> M0 can evidence, and §8.7 for the one part of the hold that needs a board answer before even
+> this topology can be stood up.
+>
+> ~~Rev 3: this section is no longer operative … Nothing in §8 should be provisioned.~~
+> **Superseded by rev 4.**
 
-**This is the operative section**, since the board has set the budget to $0. No paid tier has
-been signed up for, no payment method has been given to any vendor, and none is proposed
-outside the three discrete asks in §11.
+**This is the operative section.** No paid tier has been signed up for, no payment method has been
+given to any vendor, and none is proposed outside the three discrete asks in §11 — all three of
+which are now dormant alongside §12.
 
 ### 8.1 The v1 topology on free tiers, with every ceiling named
 
@@ -1137,12 +1191,30 @@ an injected logging sink) are already imposed on [PER-7](/PER/issues/PER-7).
   visible violation of the "< 10 s to playable" product principle in the one demo whose job is to
   show the product principle. Mitigate with a cron ping before a board session, and say plainly in
   the link that it is a free-tier artefact.
-- **AC1 — a preview deploy per PR: partially, and this is the sharp edge.** Cloudflare Pages gives
-  a genuinely free per-PR preview of `apps/web` — pointed at the single shared free staging
-  realtime service. A preview that is _end-to-end isolated_ — its own realtime service, its own
-  Redis, its own Postgres, so that one PR's schema change cannot break another PR's preview —
-  **requires spend on every candidate except a self-built Hetzner path.** AC1 as written on
-  [PER-3](/PER/issues/PER-3) is therefore blocked on the board's answer to §10.
+- **AC1 — a preview deploy per PR: this is the sharp edge, and rev 4 splits it in two, because the
+  two halves have different gates and reporting one verdict hides that.** AC1 as written on
+  [PER-3](/PER/issues/PER-3) is a conjunction: _"a pull request runs full CI **and** produces a
+  working preview deploy."_
+
+  - **AC1a — a PR runs full CI. Not met, and not gated by money at all.** The seven-gate pipeline
+    exists, and `scripts/deploy/deploy.mjs` resolves an unset `DEPLOY_PROVIDER` to the `none`
+    provider and exits 0, so the whole pipeline is green at $0 with no vendor account. What is
+    missing is that `.github/` is not on `main` — the workflows live on one unmerged branch, so a
+    PR from any other branch currently runs **no checks at all**. The unblock is a merge, not a
+    purchase. Owned by [PER-6](/PER/issues/PER-6).
+  - **AC1b — a working preview deploy per PR. Not met, and the isolation property is not buyable
+    under the hold.** Be precise about what costs money: Cloudflare Pages gives a genuinely free
+    per-PR preview of `apps/web`. What requires spend on every candidate except a self-built
+    Hetzner path is **end-to-end isolation** — the preview's own realtime service, Redis and
+    Postgres, so that one PR's schema change cannot break another PR's preview. So the accurate
+    record is not "previews need a paid tier"; it is **"the isolation property that makes a
+    preview trustworthy needs a paid tier"**, and under the hold not even the free web half may be
+    stood up until §8.7 is answered.
+
+  **A shared long-lived staging URL redeployed per PR must not be recorded as satisfying AC1b.**
+  It is the substitution that costs the criterion its entire point: AC1b exists so that a
+  reviewer's verdict is about _this_ PR's code in isolation. A shared environment means the last
+  merge decides what the reviewer sees.
 
 ### 8.5 What it does not prove — stated plainly
 
@@ -1179,6 +1251,36 @@ against the local `docker-compose` stack rather than staging; and do not let a g
 demo be read as evidence for any non-functional target. **If the board approves §11.1's
 $6–7/month, replace the Render free service with a Fly Machine before M3** — that is the
 milestone where free-tier evidence stops being merely incomplete and starts being misleading.
+
+> **Rev 4: §11.1 is approved and unspendable, so read that last sentence as a deadline rather
+> than a contingency.** The board has ratified far more than $6–7/month; the hold is what stops
+> it. M3 is the milestone at which the hold stops costing us evidence and starts costing us
+> correctness, and that is the moment to come back to the board rather than absorb it.
+
+### 8.7 The one part of the hold that needs a board answer before even this topology exists (rev 4) {#the-one-part-of-the-hold-that-needs-a-board-answer}
+
+The hold was relayed in two sentences that cannot both be complied with literally:
+
+1. _"No vendor account, no card on file, no paid tier, no trial, on any provider — Fly and
+   Hetzner included."_
+2. _"Everything stays on the free topology you costed in ADR-0003 rev 2 §8.1."_
+
+**§8.1's topology is four vendor accounts** — Cloudflare Pages, Render, Upstash, Neon — all on
+free tiers, none requiring a card. So the two readings are:
+
+| Reading                                                                                  | Consequence for M0                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A — "no _paid_ account"**: free-tier signups are permitted, which is what §8.1 assumes | AC2 (WebSocket round trip on staging) and AC5 (staging link) are **demonstrable**, with §8.4's cold-start caveat. AC1a is demonstrable. AC1b stays unmet. **Three of five criteria reachable.**     |
+| **B — "no account of any kind"**: literal                                                | There is no staging environment, so **AC2 and AC5 are also not met** and there is no board demo at all. Only AC3 and AC4 — both purely in-repo — are reachable. **Two of five criteria reachable.** |
+
+This is a board question and I am not resolving it by assumption. It matters beyond wording: the
+M0 sign-off question currently before the board is framed around AC1 alone, and **under reading B
+it is a question about AC1, AC2 and AC5.** The distinction also has a real cost asymmetry —
+reading A costs $0 and is reversible by deleting four free accounts; reading B costs M0 its demo.
+
+**Interim posture:** proceed on nothing that requires a signup, and keep every non-hosting M0
+criterion moving — AC1a, AC3 and AC4 need no vendor at all. Correctness work that would otherwise
+be validated on staging is validated against the local `docker-compose` stack, per §8.6.
 
 ---
 
@@ -1473,7 +1575,12 @@ re-run with Fly's $0.12/GB India rate applied** — Decision 3.
 
 ---
 
-## 12. The $120 buy-list — what we actually provision (rev 3)
+## 12. The $120 buy-list — **costed and ratified, entirely dormant** (rev 3, suspended in rev 4)
+
+> **Rev 4: nothing in §12 may be provisioned.** All provisioning is held and everything is on
+> free tiers. This section keeps its full value as a board-ratified plan with verified list
+> prices that executes on one word — but read every row as "what we will buy", never as "what we
+> may buy". **§12.3's release from the free-tier cap is withdrawn in full.**
 
 The board asked one question that had to be answered before anything is bought: **can minimum
 production + staging + per-PR previews be had for $120/month on Fly, or is the floor really
@@ -1561,18 +1668,28 @@ component we cannot reconstruct, to save $20/month against a $60 underspend, fai
 **blast-radius** lens. Self-run Postgres is fine for staging and previews, where losing the
 database costs a re-seed.
 
-### 12.3 What Platform Engineer may provision now
+### 12.3 What Platform Engineer may provision now — **WITHDRAWN (rev 4)**
 
-**[PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are released from the free-tier
-cap**, within the $120 authority and in the board's priority order:
+> **Rev 4: the answer to "what may be provisioned now" is nothing.** All provisioning is held.
+> [PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are **back under the free-tier cap**,
+> and the release below is revoked. No Fly account, no card, no trial, on any provider. The table
+> is retained as the ordered plan for the moment the hold lifts — it is a queue, not a permission.
+>
+> The one row that still binds today is the last one: **anything not on this list is still back to
+> CTO**, and under the hold that now includes every row above it.
 
-| #   | Provision                                                                       | Authority                 |
-| --- | ------------------------------------------------------------------------------- | ------------------------- |
-| 1   | Per-PR preview apps via `superfly/fly-pr-review-apps`, autostop on, shared PG   | ✅ approved               |
-| 2   | Staging: `apps/realtime` + self-run Redis + self-run PG, autostop, region `sin` | ✅ approved               |
-| 3   | Production: `apps/realtime` + self-run Redis + **Fly Managed Postgres Basic**   | ✅ approved               |
-| —   | `apps/web` on a **free-egress CDN** (Cloudflare Pages), _not_ on Fly            | ✅ required, not optional |
-| —   | Any Fly support plan, any region other than `sin`, any resize above the above   | ❌ back to CTO            |
+~~**[PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are released from the free-tier
+cap**, within the $120 authority and in the board's priority order:~~ **Revoked 2026-09-30.**
+What follows is the plan, in the board's priority order, pending the hold lifting:
+
+| #   | Provision                                                                       | Authority (rev 4)                        |
+| --- | ------------------------------------------------------------------------------- | ---------------------------------------- |
+| 1   | Per-PR preview apps via `superfly/fly-pr-review-apps`, autostop on, shared PG   | ⏸ ratified, **held** — first when funded |
+| 2   | Staging: `apps/realtime` + self-run Redis + self-run PG, autostop, region `sin` | ⏸ ratified, **held**                     |
+| 3   | Production: `apps/realtime` + self-run Redis + **Fly Managed Postgres Basic**   | ⏸ ratified, **held**                     |
+| —   | `apps/web` on a **free-egress CDN** (Cloudflare Pages), _not_ on Fly            | ⏸ required when funded, **held**         |
+| —   | Any Fly support plan, any region other than `sin`, any resize above the above   | ❌ back to CTO                           |
+| —   | **Anything at all, today**                                                      | ❌ back to the board — the hold          |
 
 **Binding conditions, all from §7a and §5.5b:**
 
@@ -1586,8 +1703,11 @@ cap**, within the $120 authority and in the board's priority order:
   unfronted static egress is ~1.7× the WebSocket egress, and at India rates that is real money.
 - **No payment card beyond the $120 authority, no support plan, no second region.**
 
-**M0 AC1 stays _partially met_** until per-PR previews are actually running. Provisioning
-authority is not evidence; a green preview deploy on a real PR is.
+**M0 AC1 is _not met_** until per-PR previews are actually running. Provisioning authority is not
+evidence; a green preview deploy on a real PR is. **Rev 4 hardens this**: rev 3 wrote "partially
+met" while previews were merely unprovisioned. Under the hold they are unprovisionable, so the
+honest record for AC1b is **not met** — see §8.4 for the AC1a/AC1b split and why substituting a
+shared staging URL is not available as a way to close it.
 
 ### 12.4 The M5 step-up, re-priced
 
@@ -1608,6 +1728,67 @@ Previews are the insight: they are priced by PR count, not player count, so they
 with launch. **This remains an estimate and must be re-derived from measured numbers before the
 $120 → $250 step is taken** — the board's instruction, and §9's owed-measurement table is the
 input to it.
+
+---
+
+## 13. The provisioning hold — authority without permission (rev 4) {#the-provisioning-hold}
+
+### 13.1 What happened, in order, on 2026-09-30
+
+| Time (UTC) | Event                                                                                      | Effect                                      |
+| ---------- | ------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| 06:04:35   | [eee1c3f0](/PER/approvals/eee1c3f0-13d7-4f85-bd5e-c6450c26480b) approved — $7/mo + $8 test | rev 2's asks granted                        |
+| 06:05:13   | [63d288d2](/PER/approvals/63d288d2-8c4f-4694-b2d3-8921db8ac967) approved — Fly + $250/mo   | envelope ratified; rev 3 written against it |
+| ~06:16     | Board answers the payment-instrument question: **hold all provisioning, free tiers only**  | permission withdrawn; rev 4 written         |
+
+Roughly eleven minutes separate the approval this ADR was rewritten around from the hold that
+suspended it. That is worth recording plainly rather than smoothing over, because it is the
+reason this document has four revisions in one day and the reason §7, §8 and §12 have each
+changed operative status twice.
+
+### 13.2 The distinction that makes this coherent
+
+**Authority** is the board's answer to "may we spend up to $X on provider Y". That was asked and
+answered: Fly.io, $120/month now, $250 at M5, $400 ceiling, plus ~$8 for the capacity test. It is
+settled and needs no re-litigation.
+
+**Permission** is the board's answer to "may we exercise that authority today". That answer is
+**no**, and it is the operative one.
+
+Collapsing the two would produce one of two errors, and both are worse than the current
+awkwardness: treating the hold as un-deciding the provider would put a settled question back on
+the board's plate, and treating the approval as still live would have Platform Engineer
+provisioning Fly against §12.3 this week.
+
+### 13.3 What the hold actually costs
+
+1. **AC1b is unreachable, not merely unbuilt** (§8.4). Per-PR previews were the board's own #1
+   spend priority; they are the first thing the hold stops.
+2. **Test A's ~$8 is approved and unspendable**, so **I7 (bytes per message) and I9 (memory per
+   room) stay unmeasured** — the two inputs the entire cost model rests on. Everything in §3, §4
+   and §12 stays a budget or a list price. This is the cost I most want not absorbed silently.
+3. **The always-on process (§8.3, §11.1) is not bought**, so staging sleeps. §8.5 item 8 is the
+   sharp end: a sleeping environment does not merely fail to prove timer correctness across an
+   idle window, it produces a **wrong** result. Timers are therefore tested against local
+   `docker-compose`, never against staging, and that is a standing instruction, not a preference.
+4. **Nothing about the non-functional targets can be evidenced** (§8.5, all eight items), and a
+   green free-tier demo must not be read as evidence either way.
+
+### 13.4 What does _not_ change
+
+The provider decision, §5's constraint analysis, §3's and §4's arithmetic, §5.5b's finding that
+Fly prices egress by destination, and §12.2's verified list prices. None of those depend on
+whether we have spent anything. When the hold lifts, this ADR executes — no further analysis and
+no further board input is needed beyond the word "go".
+
+### 13.5 What would lift it
+
+The board lifting the hold, which is one sentence on [PER-2](/PER/issues/PER-2). Two things make
+that cheap to ask for again later rather than now: the buy-list is already ratified, so there is
+nothing to re-derive; and the first $9/month of it (previews, §12.2) closes AC1b, which is the
+criterion the hold costs us. If the board wants a smaller first step than $120, **§12.2's
+preview line alone is the one to release**, and I would rather ask for $9 with AC1b attached than
+for $120 in the abstract.
 
 ---
 
@@ -1691,8 +1872,20 @@ input to it.
   → reopen Decision 1.
 - **Render publishes egress pricing competitive with Fly's $0.02/GB** → the M6 disqualification in
   §4 lifts.
-- **The board changes the budget from $0** → §7 stops being hypothetical, §8 stops being
-  operative, and Decision 4 resolves to option (a) automatically.
+- ~~**The board changes the budget from $0** → §7 stops being hypothetical, §8 stops being
+  operative, and Decision 4 resolves to option (a) automatically.~~ **Fired in rev 3, then
+  un-fired in rev 4** — the budget changed and then the permission to use it was held. Replaced
+  by the next two triggers.
+- **The board lifts the provisioning hold** → §7 and §12 become operative, §8 stops being
+  operative, §12.3's release is reinstated, Test A runs, and Decision 4 resolves to option (a)
+  automatically. This is the single highest-value trigger in this list and the only one that
+  unblocks M0 AC1b (§13.5).
+- **The hold is still in force at M3** → escalate rather than absorb. §8.6 and §13.3 item 3 mark
+  M3 as the milestone where free-tier evidence stops being incomplete and starts being
+  misleading, and where a sleeping staging environment starts producing wrong timer results
+  rather than merely unproven ones.
+- **The board answers §8.7** (whether free-tier signups are inside the hold) → M0's reachable
+  criteria change from two to three, and the sign-off question before the board changes shape.
 - **Any free tier in §8.1 changes its ceiling** — Render's spin-down window, Upstash's 500K
   commands, Neon's 0.5 GB — → re-run §8.2's ranking; the ceiling that bites first can move.
 - **The durable-log-append budget is measured above 10 ms p95 on a provisioned tier** → Decision
