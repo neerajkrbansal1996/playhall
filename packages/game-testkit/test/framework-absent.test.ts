@@ -47,8 +47,13 @@ import { ticTacToeSubject } from './subjects.js'
  * this file must keep working when run without the repo around it, and a
  * shared constant would make the behavioural check inherit any blind spot the
  * pattern-based one develops.
+ *
+ * All three of Colyseus' published names, not two. `colyseus.js` is the browser
+ * client: not a subpath of `colyseus`, not under the `@colyseus` scope, a third
+ * npm name — so a pattern written from the server packages alone misses the
+ * form a game's client-side code reaches for first (ADR-0002 §2 rev 2.1).
  */
-const PLATFORM_FRAMEWORK = /^(colyseus|@colyseus\/[^/]+)(\/.*)?$/
+const PLATFORM_FRAMEWORK = /^(colyseus|colyseus\.js|@colyseus\/[^/]+)(\/.*)?$/
 
 class PlatformFrameworkAccessError extends Error {
   constructor(readonly specifier: string) {
@@ -86,7 +91,7 @@ function withoutPlatformFramework<T>(body: () => T): T {
 const require = createRequire(import.meta.url)
 
 describe('the platform netcode framework is absent from the game path', () => {
-  it.each(['colyseus', '@colyseus/schema', '@colyseus/core'])(
+  it.each(['colyseus', 'colyseus.js', '@colyseus/schema', '@colyseus/core'])(
     'cannot resolve %s from the testkit',
     (specifier) => {
       // pnpm's strict node_modules is doing the work here: a package that is
@@ -97,16 +102,27 @@ describe('the platform netcode framework is absent from the game path', () => {
     },
   )
 
-  it('fails loudly when something does reach for the framework', () => {
-    // The negative control for the trap itself. Assert on the error type, not
-    // just that something threw: a `Cannot find module` from the real loader
-    // would look identical from the outside and would prove nothing.
-    expect(() =>
-      withoutPlatformFramework(() => {
-        const specifier = ['coly', 'seus'].join('')
-        return require(specifier) as unknown
-      }),
-    ).toThrow(PlatformFrameworkAccessError)
+  // The negative control for the trap itself, run once per published name. Every
+  // name the trap claims to cover needs its own case: with only `colyseus` here,
+  // deleting `colyseus.js` from the pattern above broke nothing, because the
+  // resolve assertions test the dependency tree rather than the trap. A branch of
+  // the denylist with no case asserting it is a branch that can be removed
+  // silently, which is the failure mode this whole file exists to rule out.
+  //
+  // Specifiers are assembled at runtime so this file never contains a literal
+  // import of the framework for the boundary gate to flag.
+  it.each([
+    ['coly', 'seus', ''],
+    ['coly', 'seus', '.js'],
+    ['@coly', 'seus', '/schema'],
+  ])('fails loudly when something does reach for %s%s%s', (head, tail, suffix) => {
+    const specifier = `${head}${tail}${suffix}`
+    // Assert on the error type, not just that something threw: a `Cannot find
+    // module` from the real loader would look identical from the outside and
+    // would prove nothing.
+    expect(() => withoutPlatformFramework(() => require(specifier) as unknown)).toThrow(
+      PlatformFrameworkAccessError,
+    )
   })
 
   it('restores the loader even when the body throws', () => {
