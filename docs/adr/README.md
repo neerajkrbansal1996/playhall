@@ -44,7 +44,7 @@ so per decision rather than downgrading the whole document.
 | --------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------- |
 | [0001](./0001-v1-stack.md)                          | The v1 stack                                    | Accepted (rev 4)                                    |
 | [0002](./0002-dependency-boundary-enforcement.md)   | Dependency-boundary enforcement                 | Accepted (rev 2)                                    |
-| 0003                                                | Hosting + cost per 1,000 concurrent players     | Reserved — drafting on [PER-38](/PER/issues/PER-38) |
+| [0003](./0003-hosting-and-cost-model.md)            | Hosting + cost per 1,000 concurrent players     | Board-gated for §10 (provider + budget); accepted for the workload model, the constraint findings and the free-tier path |
 | [0004](./0004-pr-gate-without-branch-protection.md) | Enforcing the PR gate without branch protection | Accepted                                            |
 | [0005](./0005-the-real-time-path.md)                | The real-time path (design only, M6)            | Mixed — see its own status table; §9 board-gated    |
 | 0006                                                | Empty standings for a match that did not count  | Reserved — drafting on [PER-42](/PER/issues/PER-42) |
