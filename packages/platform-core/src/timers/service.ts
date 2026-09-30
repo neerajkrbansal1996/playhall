@@ -321,7 +321,7 @@ export class TimerService {
             durationMs: options.delayMs,
             startedAtMs: issuedAtMs,
           })
-        : resetRecord(existing, options.delayMs, issuedAtMs),
+        : resetRecord(existing, options.delayMs, issuedAtMs, options.seatId),
     )
     // A re-arm replaces the timer the reducer paused, so its own hold is stale.
     // Room and seat scopes are not the reducer's to drop and stay in force.
@@ -989,7 +989,14 @@ function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerS
       roomHeldAlone.push(timer.seatId as SeatId)
     }
   }
-  scopes.onMoveSeatId = onlyMember(running) ?? onlyMember(roomHeldAlone)
+  // Rule 2 applies only when *nothing* ran. `onlyMember(running)` returns null
+  // for two different reasons — nothing ran, or several did — and a `??` chain
+  // cannot tell them apart, so it would let the corrupt multi-runner shape that
+  // rule 1 exists to refuse fall through into rule 2 and name a seat whose
+  // clock was demonstrably stopped while two others ran. Unreachable at two
+  // seats; live the moment a game declares chess clocks for three, which
+  // nothing in this service forbids.
+  scopes.onMoveSeatId = running.length > 0 ? onlyMember(running) : onlyMember(roomHeldAlone)
   return scopes
 }
 

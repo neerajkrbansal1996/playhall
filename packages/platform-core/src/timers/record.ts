@@ -358,15 +358,24 @@ export function endTurnRecord(record: TimerRecord, nowMs: number): TimerRecord {
  * point — the service's reconciliation pass immediately puts back every scope
  * that still covers the timer, so a room pause survives a re-arm and only the
  * game's own `timer` hold (which the service drops on `set`) does not.
+ *
+ * `seatId` is ownership, not budget, so it is the one field a re-arm carries
+ * over by default: pass `undefined` to leave it alone. A game that re-arms its
+ * turn timer for the next mover — `setTimer(MOVE_TIMER, 30_000, nextSeat)`, the
+ * pattern the SDK documents — passes the new seat and the record follows it.
+ * Without that, seat-scoped holds keep pausing the *previous* mover's timer and
+ * a disconnect stops the wrong clock.
  */
 export function resetRecord(
   record: TimerRecord,
   durationMs: number,
   startedAtMs: number | null,
+  seatId?: SeatId | null,
 ): TimerRecord {
   return bump(record, {
     remainingMs: Math.max(0, durationMs),
     startedAtMs,
+    ...(seatId === undefined ? {} : { seatId }),
     delayRemainingMs: record.clock?.delayMode === 'simple' ? record.clock.delayMs : 0,
     turnElapsedMs: 0,
     expired: false,
