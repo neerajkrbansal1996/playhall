@@ -74,3 +74,52 @@ describe('parseMoveInput promotion narrowing', () => {
     expect(parseMoveInput(new Chess(PROMOTION_FEN), 'd7d8q')).toBeNull()
   })
 })
+
+/**
+ * A bare from/to pair on a promoting push names four legal moves, not one.
+ *
+ * Before the fix the coordinate branch took the first legal move whose from/to
+ * matched, and chess.js lists promotions n, b, r, q — so "e7e8" underpromoted
+ * to a knight with no signal to the player. Rejecting instead forces the caller
+ * (keyboard entry, or a drag-and-drop client whose promotion picker did not
+ * open) to ask which piece.
+ */
+describe('parseMoveInput on a bare coordinate promotion', () => {
+  it('rejects a quiet promotion push with no promotion piece', () => {
+    expect(parseMoveInput(new Chess(PROMOTION_FEN), 'e7e8')).toBeNull()
+  })
+
+  it('rejects a capture-promotion with no promotion piece', () => {
+    expect(parseMoveInput(new Chess(PROMOTION_CAPTURE_FEN), 'b7a8')).toBeNull()
+  })
+
+  it('still resolves the same pushes once the piece is given', () => {
+    // The rejection is about the missing piece, not about the squares: the very
+    // same inputs with a letter appended resolve normally.
+    expect(parseMoveInput(new Chess(PROMOTION_FEN), 'e7e8q')).toEqual({
+      from: 'e7',
+      to: 'e8',
+      promotion: 'q',
+    })
+    expect(parseMoveInput(new Chess(PROMOTION_CAPTURE_FEN), 'b7a8q')).toEqual({
+      from: 'b7',
+      to: 'a8',
+      promotion: 'q',
+    })
+  })
+
+  it('leaves a non-promoting coordinate move unaffected', () => {
+    // The from/to pair is unambiguous here, so no promotion letter is needed.
+    expect(parseMoveInput(new Chess(), 'e2e4')).toEqual({ from: 'e2', to: 'e4' })
+    expect(parseMoveInput(new Chess(), 'g1f3')).toEqual({ from: 'g1', to: 'f3' })
+    expect(parseMoveInput(new Chess(), 'e4')).toEqual({ from: 'e2', to: 'e4' })
+  })
+
+  it('leaves a pawn push to the last rank by a non-pawn unaffected', () => {
+    // A rook reaching the eighth rank is one move, not four: the "exactly one
+    // candidate" rule must not reject ordinary traffic into the back rank.
+    const rookToEighth = '7k/8/8/8/8/8/8/K5R1 w - - 0 1'
+
+    expect(parseMoveInput(new Chess(rookToEighth), 'g1g8')).toEqual({ from: 'g1', to: 'g8' })
+  })
+})
