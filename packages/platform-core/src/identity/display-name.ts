@@ -85,11 +85,20 @@ const INVISIBLE = /[\u00AD\u180E\u200B-\u200D\u2060\uFEFF]/g
 const WHITESPACE_RUN = /\s+/g
 
 /**
- * At least one character a player would call content: a letter, a digit, or an
- * emoji. Deliberately not "any non-punctuation" — that would admit "-=-",
- * because `=` is a math symbol rather than punctuation.
+ * One character a player would call content: a letter, a digit, or an emoji.
+ * Deliberately not "any non-punctuation" — that would admit "-=-", because `=`
+ * is a math symbol rather than punctuation.
+ *
+ * `\p{RI}` is listed separately because a flag is built from two regional
+ * indicators and those are *not* `Extended_Pictographic`; without it "🇬🇧" is
+ * the one emoji this package calls punctuation.
+ *
+ * Exported because `avatar.ts` must use the identical class: any name the
+ * sanitiser accepts has to be able to produce an initial, or the avatar renders
+ * a letter the player never typed. `display-name.test.ts` asserts the two stay
+ * in step.
  */
-const HAS_CONTENT = /[\p{L}\p{N}\p{Extended_Pictographic}]/u
+export const NAME_CONTENT_PATTERN = /[\p{L}\p{N}\p{Extended_Pictographic}\p{RI}]/u
 
 /**
  * Cleans a candidate name without judging it. Idempotent: sanitising a
@@ -129,7 +138,9 @@ export function validateDisplayName(
   const length = displayNameLength(sanitized)
   if (length < DISPLAY_NAME_MIN_LENGTH) return err({ reason: 'too_short', sanitized })
   if (length > DISPLAY_NAME_MAX_LENGTH) return err({ reason: 'too_long', sanitized })
-  if (!HAS_CONTENT.test(sanitized)) return err({ reason: 'no_letters_or_emoji', sanitized })
+  if (!NAME_CONTENT_PATTERN.test(sanitized)) {
+    return err({ reason: 'no_letters_or_emoji', sanitized })
+  }
 
   if (!options.skipProfanityCheck) {
     const term = findProfanity(sanitized, options)

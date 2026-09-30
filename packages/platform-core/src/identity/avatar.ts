@@ -15,6 +15,8 @@
  * with Frontend, where it belongs, and keeps this package free of markup.
  */
 
+import { NAME_CONTENT_PATTERN } from './display-name.js'
+
 /** FNV-1a, 32-bit. Same mixer the SDK's RNG uses to fold a seed string. */
 function hash32(value: string): number {
   let hash = 0x811c9dc5
@@ -56,33 +58,56 @@ export const AVATAR_PALETTE: readonly AvatarColor[] = [
 ]
 
 export interface GuestAvatar {
-  /** 1-2 characters, already upper-cased. Safe to render as text. */
+  /**
+   * One or two grapheme clusters, already upper-cased. Safe to render as text.
+   * A cluster is not a character: "🇬🇧" is one initial and four UTF-16 units.
+   */
   readonly initials: string
   readonly color: AvatarColor
   /** Index into `AVATAR_PALETTE`. Persisted nowhere; recompute instead. */
   readonly paletteIndex: number
 }
 
-const NON_INITIAL = /[^\p{L}\p{N}]/u
+const WORD_SPLIT = /\s+/
 
 /**
- * First letter of the first word plus first letter of the last word; a single
+ * Grapheme clusters, not code points. `Array.from('🇬🇧')` yields two regional
+ * indicators and `Array.from('👍🏽')` splits the skin tone off its base, so
+ * taking `[0]` of either renders half an emoji.
+ */
+const GRAPHEMES = new Intl.Segmenter('en', { granularity: 'grapheme' })
+
+/** The first cluster of `word` that `display-name.ts` counts as content. */
+function firstContentGrapheme(word: string): string | undefined {
+  for (const { segment } of GRAPHEMES.segment(word)) {
+    if (NAME_CONTENT_PATTERN.test(segment)) return segment
+  }
+  return undefined
+}
+
+/**
+ * First initial of the first word plus first initial of the last word; a single
  * word yields a single initial rather than two, because "AL" for "Alex" reads
  * like two people's initials and "A" does not.
  *
- * Emoji and scripts without case (CJK, Devanagari) pass through unchanged —
- * `toUpperCase` is a no-op there, which is the correct behaviour, not a gap.
+ * An initial is anything `display-name.ts` accepts as content — the two use the
+ * same `NAME_CONTENT_PATTERN`. Emoji therefore produce emoji initials: a name
+ * the sanitiser deliberately admits ("🙂🙂") must not fall through to the
+ * `guestId`-derived latin letter, which would show the player a letter they
+ * never typed. Scripts without case (CJK, Devanagari) pass through unchanged —
+ * `toUpperCase` is a no-op there, which is correct rather than a gap.
  */
 export function initialsFor(displayName: string): string {
-  const words = displayName
-    .split(/\s+/)
-    .map((word) => Array.from(word).filter((ch) => !NON_INITIAL.test(ch)))
-    .filter((chars) => chars.length > 0)
+  const initials: string[] = []
+  for (const word of displayName.split(WORD_SPLIT)) {
+    const initial = firstContentGrapheme(word)
+    if (initial !== undefined) initials.push(initial)
+  }
 
-  if (words.length === 0) return ''
-  const first = words[0]?.[0] ?? ''
-  if (words.length === 1) return first.toUpperCase()
-  const last = words[words.length - 1]?.[0] ?? ''
+  if (initials.length === 0) return ''
+  const first = initials[0] as string
+  if (initials.length === 1) return first.toUpperCase()
+  const last = initials[initials.length - 1] as string
   return `${first}${last}`.toUpperCase()
 }
 

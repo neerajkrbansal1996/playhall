@@ -13,6 +13,14 @@
  * false positives ("Scunthorpe"), so `SAFE_SUBSTRINGS` re-permits the innocent
  * words that contain a blocked term. Matching is substring-based on purpose:
  * word boundaries disappear once punctuation is stripped.
+ *
+ * Folding and allowlisting both happen **per word** before they happen on the
+ * whole name. Folding the whole name first concatenates across spaces, which
+ * makes an exact-match allowlist unreachable the moment a second word appears
+ * ("Emily Dickinson" folds to `emilydickinson`, which is not `dickinson`) while
+ * leaving the substring blocklist perfectly able to fire. The whole-name pass
+ * is still run, over the words the allowlist did *not* clear, because that is
+ * what catches a term split across a space ("Fu ck").
  */
 
 /**
@@ -85,9 +93,10 @@ const BLOCKED_TERMS: readonly string[] = [
 ]
 
 /**
- * Folded strings that contain a blocked term but are not profanity. If the
- * whole folded name is one of these, it passes. Exact-match rather than
- * substring, so "cockfaceshuttlecock" does not get a free pass.
+ * Folded words that contain a blocked term but are not profanity. Matched
+ * exactly, against each folded word and against the folded whole name, so
+ * "cockfaceshuttlecock" — one word, and not an entry here — does not get a
+ * free pass off the back of "shuttlecock".
  */
 const SAFE_SUBSTRINGS: readonly string[] = [
   'scunthorpe',
@@ -139,30 +148,95 @@ export function foldForProfanity(value: string): string {
 export interface ProfanityOptions {
   /** Additional folded terms to block. Folded automatically if not already. */
   readonly extraTerms?: readonly string[]
-  /** Folded whole-name strings to allow even if they contain a blocked term. */
+  /**
+   * Words to allow even though they contain a blocked term. An entry with a
+   * space in it allows that whole phrase and nothing else: `'Pea Cock'` permits
+   * exactly "Pea Cock", where `'peacock'` permits the single word and does not
+   * let "Pea Cock" through the back door.
+   */
   readonly extraAllowed?: readonly string[]
+}
+
+const WORD_SPLIT = /\s+/
+
+interface Allowlist {
+  /** Folded single words. Matched against each word of the name. */
+  readonly words: ReadonlySet<string>
+  /** Folded multi-word entries. Matched against the whole folded name. */
+  readonly phrases: ReadonlySet<string>
+}
+
+function buildAllowlist(extra: readonly string[]): Allowlist {
+  const words = new Set<string>(SAFE_SUBSTRINGS)
+  const phrases = new Set<string>()
+  for (const entry of extra) {
+    const folded = foldForProfanity(entry)
+    if (folded.length === 0) continue
+    if (WORD_SPLIT.test(entry.trim())) phrases.add(folded)
+    else words.add(folded)
+  }
+  return { words, phrases }
+}
+
+/** The folded words of a name, in order, with empty folds dropped. */
+function foldWords(value: string): string[] {
+  const words: string[] = []
+  for (const word of value.split(WORD_SPLIT)) {
+    const folded = foldForProfanity(word)
+    if (folded.length > 0) words.push(folded)
+  }
+  return words
+}
+
+function firstMatch(candidate: string, terms: readonly string[]): string | undefined {
+  for (const term of terms) {
+    if (candidate.includes(term)) return term
+  }
+  return undefined
 }
 
 /**
  * Returns the blocked term that matched, or `undefined` if the name is clean.
  * Returning the term (not just a boolean) keeps the moderation log useful
  * without having to re-run the screen.
+ *
+ * Three passes, in this order:
+ *
+ * 1. An allowlisted *phrase* matching the whole folded name clears everything.
+ *    Only a configured multi-word entry can do this — a single-word entry must
+ *    not, or "Pea Cock" walks in behind "peacock".
+ * 2. Each folded word the allowlist did not clear is screened on its own.
+ *    "Peacock Jim" gets here as `peacock` (cleared) and `jim` (clean).
+ * 3. The cleared words are dropped and what is left is concatenated and
+ *    screened as one string. That catches a term written across a space
+ *    ("Fu ck" -> `fuck`) without resurrecting one that only exists because two
+ *    innocent words were spliced together ("Grape Ape" -> `ape`, not `grapeape`).
+ *
+ * Pass 3 still has cross-word false positives for words that are not on the
+ * allowlist ("Bo Nerdy" folds to `bonerdy`). That is the same trade the old
+ * whole-name fold made, minus the allowlisted cases; `extraAllowed` is the
+ * release valve, and a name is one line of text next to a report button.
  */
 export function findProfanity(value: string, options: ProfanityOptions = {}): string | undefined {
-  const folded = foldForProfanity(value)
-  if (folded.length === 0) return undefined
+  const words = foldWords(value)
+  if (words.length === 0) return undefined
 
-  const allowed = new Set<string>([
-    ...SAFE_SUBSTRINGS,
-    ...(options.extraAllowed ?? []).map(foldForProfanity),
-  ])
-  if (allowed.has(folded)) return undefined
+  const allowed = buildAllowlist(options.extraAllowed ?? [])
+  if (allowed.phrases.has(words.join(''))) return undefined
 
-  const terms = [...BLOCKED_TERMS, ...(options.extraTerms ?? []).map(foldForProfanity)]
-  for (const term of terms) {
-    if (term.length > 0 && folded.includes(term)) return term
+  const terms = [...BLOCKED_TERMS, ...(options.extraTerms ?? []).map(foldForProfanity)].filter(
+    (term) => term.length > 0,
+  )
+
+  const uncleared: string[] = []
+  for (const word of words) {
+    if (allowed.words.has(word)) continue
+    const hit = firstMatch(word, terms)
+    if (hit !== undefined) return hit
+    uncleared.push(word)
   }
-  return undefined
+
+  return firstMatch(uncleared.join(''), terms)
 }
 
 export function isProfane(value: string, options: ProfanityOptions = {}): boolean {

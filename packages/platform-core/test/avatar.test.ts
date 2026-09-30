@@ -78,6 +78,42 @@ describe('initialsFor', () => {
     expect(initialsFor('---')).toBe('')
     expect(initialsFor('')).toBe('')
   })
+
+  it.each([
+    // display-name.ts accepts an emoji-only name deliberately, so the initials
+    // must be that emoji. Filtering it out rendered an unrelated latin letter
+    // derived from the guest id — a letter the player never typed.
+    // One word yields one initial, same as "Ada" -> "A".
+    ['\u{1F642}\u{1F642}', '\u{1F642}'],
+    ['\u{1F642} \u{1F642}', '\u{1F642}\u{1F642}'],
+    ['\u{1F642}', '\u{1F642}'],
+    ['\u{1F642} Ada', '\u{1F642}A'],
+    ['Ada \u{1F642}', 'A\u{1F642}'],
+  ])('%j -> %j', (name, expected) => {
+    expect(initialsFor(name)).toBe(expected)
+  })
+
+  it('takes a whole grapheme cluster, not the first code point', () => {
+    // A flag is two regional indicators and a thumbs-up with a skin tone is a
+    // base plus a modifier. `Array.from(word)[0]` returns half of either, which
+    // renders as a lone indicator letter or a bare unmodified emoji.
+    const flag = '\u{1F1EC}\u{1F1E7}'
+    const thumbsUp = '\u{1F44D}\u{1F3FD}'
+
+    expect(initialsFor(flag)).toBe(flag)
+    expect(initialsFor(`${flag} ${thumbsUp}`)).toBe(`${flag}${thumbsUp}`)
+    expect(initialsFor(thumbsUp)).toBe(thumbsUp)
+    expect(initialsFor(`${thumbsUp} Ada`)).toBe(`${thumbsUp}A`)
+
+    // The half-cluster each of those would have been.
+    expect(initialsFor(flag)).not.toBe('\u{1F1EC}')
+    expect(initialsFor(thumbsUp)).not.toBe('\u{1F44D}')
+  })
+
+  it('still skips a leading punctuation cluster inside a word', () => {
+    expect(initialsFor('--Ada')).toBe('A')
+    expect(initialsFor('\u{1F642}')).not.toBe('')
+  })
 })
 
 describe('avatarFor', () => {
@@ -135,6 +171,17 @@ describe('avatarFor', () => {
   it('never returns empty initials', () => {
     for (const name of ['', '---', '   ', '!!!']) {
       expect(avatarFor('guest-abc', name).initials.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('does not reach the id-derived fallback for a name made of emoji', () => {
+    // The fallback exists for a name with no content at all. An emoji name has
+    // content — display-name.ts says so — so reaching the fallback here means
+    // the player sees a letter they never typed.
+    for (const name of ['\u{1F642}\u{1F642}', '\u{1F642} \u{1F642}', '\u{1F1EC}\u{1F1E7}']) {
+      const avatar = avatarFor('guest-abc', name)
+      expect(avatar.initials, name).toBe(initialsFor(name))
+      expect(avatar.initials, name).not.toMatch(/^[A-Z]$/)
     }
   })
 })

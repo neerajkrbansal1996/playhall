@@ -8,6 +8,7 @@ import {
   validateDisplayName,
 } from '../src/identity/display-name.js'
 import { findProfanity, foldForProfanity, isProfane } from '../src/identity/profanity.js'
+import { initialsFor } from '../src/identity/avatar.js'
 
 /**
  * Non-ASCII inputs are written as `\u` escapes throughout. A zero-width space
@@ -123,6 +124,30 @@ describe('validateDisplayName — rejects', () => {
     expect(reject('!?!').reason).toBe('no_letters_or_emoji')
   })
 
+  it('accepts a flag, which is regional indicators rather than a pictograph', () => {
+    // `\p{Extended_Pictographic}` is false for U+1F1E6..U+1F1FF, so a flag was
+    // the one emoji this module was calling punctuation.
+    expect(accept('\u{1F1EC}\u{1F1E7}')).toBe('\u{1F1EC}\u{1F1E7}')
+  })
+
+  it('every name it accepts can produce an avatar initial', () => {
+    // The two modules share `NAME_CONTENT_PATTERN` precisely so this holds. If
+    // they drift, a name the sanitiser admits renders a latin letter derived
+    // from the guest id — a letter the player never typed.
+    for (const name of [
+      '\u{1F642}\u{1F642}',
+      '\u{1F642} \u{1F642}',
+      '\u{1F1EC}\u{1F1E7}',
+      '\u{1F44D}\u{1F3FD} Ada',
+      'Ada Lovelace',
+      '中文',
+      '42',
+    ]) {
+      expect(validateDisplayName(name).ok, name).toBe(true)
+      expect(initialsFor(name), name).not.toBe('')
+    }
+  })
+
   it('refuses markup rather than escaping it into the stored name', () => {
     // The alternative — accepting and escaping — leaves "&lt;b&gt;" sitting in
     // a seat chip the moment some render path forgets to unescape.
@@ -155,6 +180,38 @@ describe('validateDisplayName — profanity screen', () => {
     }
   })
 
+  it('applies the allowlist per word, so a surname plus a first name still passes', () => {
+    // Folding the whole name first concatenates across the space, which made
+    // the exact-match allowlist unreachable the moment a second word appeared
+    // while the substring blocklist kept firing. "Emily Dickinson" folded to
+    // `emilydickinson`, which is not `dickinson`, so it was rejected for
+    // "dick". Every one of these was a measured rejection before the fix.
+    for (const name of [
+      'Emily Dickinson',
+      'Scunthorpe United',
+      'Peacock Jim',
+      'Analyst Ann',
+      'Grape Ape',
+    ]) {
+      expect(validateDisplayName(name).ok, name).toBe(true)
+    }
+  })
+
+  it('still catches a blocked term inside a single unallowlisted word', () => {
+    // The allowlist is exact-match per word on purpose: "shuttlecock" is a
+    // badminton shuttle, "cockfaceshuttlecock" is not a place in Lincolnshire.
+    expect(validateDisplayName('cockfaceshuttlecock').ok).toBe(false)
+    expect(findProfanity('cockfaceshuttlecock')).toBe('cock')
+  })
+
+  it('still catches a term written across a space', () => {
+    // Per-word screening alone would miss this, which is why the whole-name
+    // pass still runs — over the words the allowlist did not clear.
+    expect(validateDisplayName('Fu ck').ok).toBe(false)
+    expect(validateDisplayName('Shuttlecock fu ck').ok).toBe(false)
+    expect(validateDisplayName('Pea Cock').ok).toBe(false)
+  })
+
   it('takes extra terms from config so Product can tune without a release', () => {
     expect(validateDisplayName('Admin Bot', { extraTerms: ['adminbot'] }).ok).toBe(false)
     expect(validateDisplayName('Admin Bot').ok).toBe(true)
@@ -163,6 +220,15 @@ describe('validateDisplayName — profanity screen', () => {
   it('takes an extra allowlist entry', () => {
     expect(validateDisplayName('Cockfosters').ok).toBe(false)
     expect(validateDisplayName('Cockfosters', { extraAllowed: ['Cockfosters'] }).ok).toBe(true)
+  })
+
+  it('a one-word allowlist entry does not clear the same letters spread over two', () => {
+    // Otherwise "peacock" on the list lets "Pea Cock" through, which is the
+    // evasion the per-word screen exists to catch.
+    expect(validateDisplayName('Pea Cock').ok).toBe(false)
+    expect(validateDisplayName('Pea Cock', { extraAllowed: ['peacock'] }).ok).toBe(false)
+    // A phrase entry is how an operator permits it deliberately.
+    expect(validateDisplayName('Pea Cock', { extraAllowed: ['Pea Cock'] }).ok).toBe(true)
   })
 
   it('can be skipped for internally generated names', () => {
