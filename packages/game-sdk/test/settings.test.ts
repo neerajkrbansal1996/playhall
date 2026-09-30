@@ -316,8 +316,11 @@ describe('checkSettingsForm', () => {
     const issues = checkSettingsForm(
       withField('takebacks', { kind: 'toggle', key: 'takebacksss', label: 'Allow takebacks' }),
     )
-    expect(codes(issues)).toEqual(['unknown_field_key'])
+    // A typo is both halves of the same drift: the control points at nothing,
+    // and the setting it meant to point at is left with no control.
+    expect(codes(issues)).toEqual(['unknown_field_key', 'setting_without_field'])
     expect(issues[0]?.path).toBe('settingsForm.fields.takebacksss')
+    expect(issues[1]?.path).toBe('defaultSettings.takebacks')
   })
 
   it('catches two fields bound to the same key', () => {
@@ -461,6 +464,109 @@ describe('checkSettingsForm', () => {
       }),
     )
     expect(codes(issues)).toEqual(['visibility_unsatisfiable'])
+  })
+
+  // --- the reverse direction: a setting with no control ---------------------
+
+  it('catches a setting the descriptor forgot', () => {
+    // The drift this exists for: a game adds a setting to the schema and the
+    // defaults, forgets the field, and the form renders no control for it. The
+    // descriptor is all `apps/web` gets, so nothing downstream could notice.
+    const issues = checkSettingsForm(withField('takebacks', null))
+    expect(codes(issues)).toEqual(['setting_without_field'])
+    expect(issues[0]?.path).toBe('defaultSettings.takebacks')
+  })
+
+  it('reports one issue per unbound setting', () => {
+    const stripped = {
+      ...chessLike,
+      settingsForm: {
+        version: 1 as const,
+        fields: chessLikeForm.fields.filter((field) => field.key === 'timeControl'),
+      },
+    }
+    const issues = checkSettingsForm(stripped)
+    expect(codes(issues)).toEqual([
+      'setting_without_field',
+      'setting_without_field',
+      'setting_without_field',
+      'setting_without_field',
+    ])
+    expect(issues.map((issue) => issue.path)).toEqual([
+      'defaultSettings.customInitialMinutes',
+      'defaultSettings.customIncrementSeconds',
+      'defaultSettings.color',
+      'defaultSettings.takebacks',
+    ])
+  })
+
+  it('does not demand a control for a setting no field kind could bind', () => {
+    // A non-scalar is unbindable by construction — asking for a control would
+    // be asking for something the descriptor cannot express. A field that does
+    // try is caught by `non_scalar_field_key` instead.
+    const issues = checkSettingsForm({
+      settingsSchema: z.object({ nested: z.object({ a: z.number() }) }).strict(),
+      defaultSettings: { nested: { a: 1 } },
+      settingsForm: { version: 1, fields: [] },
+    })
+    expect(issues).toEqual([])
+  })
+
+  it('still names the unbound setting when the defaults do not parse', () => {
+    // The traversal is structural, so it survives a schema the defaults fail.
+    const issues = checkSettingsForm({
+      ...withField('takebacks', null),
+      defaultSettings: { ...chessLikeDefaults, color: 'green' as never },
+    })
+    expect(codes(issues)).toEqual(['defaults_rejected', 'setting_without_field'])
+  })
+
+  // --- toggle values ---------------------------------------------------------
+
+  it('catches a toggle the schema pins to one position', () => {
+    const pinnedSchema = z
+      .object({ ...chessLikeSchema.shape, takebacks: z.literal(false) })
+      .strict()
+    const issues = checkSettingsForm({
+      ...chessLike,
+      settingsSchema: pinnedSchema,
+      defaultSettings: { ...chessLikeDefaults, takebacks: false as boolean },
+    })
+    expect(codes(issues)).toEqual(['toggle_value_rejected'])
+    expect(issues[0]?.path).toBe('settingsForm.fields.takebacks.true')
+  })
+
+  it('catches a toggle position a cross-field refine forbids', () => {
+    // `ranked` is legal on its own and legal alongside a preset time control —
+    // it is only `custom` that forbids it. Probing against the raw defaults
+    // (timeControl '5+0') would therefore pass; probing under the condition
+    // that reveals the field is what catches it.
+    const rankedSchema = z
+      .object({ ...chessLikeSchema.shape, ranked: z.boolean() })
+      .strict()
+      .refine(
+        (value) => !(value.timeControl === 'custom' && value.ranked),
+        'a custom time control cannot be ranked',
+      )
+    const issues = checkSettingsForm({
+      settingsSchema: rankedSchema,
+      defaultSettings: { ...chessLikeDefaults, ranked: false },
+      settingsForm: {
+        version: 1,
+        fields: [
+          ...chessLikeForm.fields,
+          { kind: 'toggle', key: 'ranked', label: 'Ranked', visibleWhen: showWhenCustom },
+        ],
+      },
+    })
+    expect(codes(issues)).toEqual(['toggle_value_rejected'])
+    expect(issues[0]?.path).toBe('settingsForm.fields.ranked.true')
+  })
+
+  it('accepts a toggle both of whose positions the schema takes', () => {
+    // The clean half of the pair: `takebacks` in the fixture is a plain
+    // boolean, and probing it adds nothing to the result.
+    expect(checkSettingsForm(chessLike)).toEqual([])
   })
 
   it('catches a non-boolean condition on a toggle', () => {
