@@ -7,10 +7,12 @@ branch protection) and the free-tier path in
 [ADR-0003](adr/0003-hosting-and-cost-model.md) §8.
 
 Everything runs on GitHub Actions, which is included with the repository. **No paid
-service is used and none was signed up for.** The board has held all provisioning — no
-vendor account, no card on file, no paid tier, no trial, on any provider — so the CI half
-of this pipeline is live and the deploy half is inert by design, not by omission. See
-[ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and
+service is used and none was signed up for.** The board has held all provisioning — **no
+new vendor account, no card on file, no paid tier, no trial** — so the CI half of this
+pipeline is live and the deploy half is inert by design, not by omission. **One
+pre-existing vendor connection exists and is carved out of the hold:** a board-created
+**Cloudflare** connection, usable for a free Cloudflare Pages deploy of `apps/web` only.
+See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 [Activating deploys](#activating-deploys) below.
 
 ## What runs when
@@ -210,11 +212,29 @@ not been provisioned is not a build break.
 
 **One condition, and it is not technical: the board lifts the provisioning hold.**
 
-Provisioning is held — no vendor account, no card on file, no paid tier, no trial, on any
-provider. The hold, and what would lift it, is [ADR-0003](adr/0003-hosting-and-cost-model.md)
+Provisioning is held: **no new vendor account, no card on file, no paid tier, no trial, on any
+provider — Fly.io included.** Fly.io is the ratified M0–M5 provider and **is not provisioned**.
+The hold, and what would lift it, is [ADR-0003](adr/0003-hosting-and-cost-model.md)
 §13. Deliberately not restated here: the provider, the envelope and the spend priorities.
 They are settled, they live in ADR-0003 §10 and §12, and a figure duplicated into four files
 is a figure that goes stale in four files.
+
+**The hold has exactly one carved exception, and `apps/realtime` is not in it.** An earlier
+version of this page said "no vendor account … on any provider". That was wrong: the board
+created a **Cloudflare** connection on 29 Sep, before it set the hold on 30 Sep. On
+2026-09-30 the board ruled that the pre-existing connection may be used for a **free
+Cloudflare Pages staging deploy of `apps/web` only** — no card, because the account already
+exists. The full scope is **ADR-0003 §13.7**; do not infer the boundary from this page.
+
+|         | Carved out of the hold                               | Still held                                                 |
+| ------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| Account | The pre-existing board-created Cloudflare connection | Any new vendor account, anywhere                           |
+| Spend   | $0 by construction                                   | Any card, paid tier, trial, or spend — Cloudflare included |
+| Target  | `apps/web`, static, via `cloudflare-pages`           | `apps/realtime`, Redis, Postgres, all Fly targets          |
+
+`apps/realtime` is excluded for a capability reason before a policy one: Pages cannot hold an
+open WebSocket connection for the life of a match. **M0 AC2b is unchanged** and still gated on
+provisioning. **This is not a provider change** — a staging link is not a migration.
 
 Read §13.2 before treating a budget approval as permission. The board ratified the spend
 **authority** and withheld **permission** to exercise it; those are separate answers and only
@@ -222,19 +242,23 @@ the second one gates this section. An approved budget buys nothing.
 
 So the order is: board lifts the hold → [PER-7](/PER/issues/PER-7) provisions and sets the
 variables and secrets below → previews and deploys start producing URLs. **No code change at
-any step.** Until then the honest state of this pipeline is `not_configured`, printed in the
-run log and in the PR comment, and M0 AC1 is recorded as not met.
+any step.** Until then the honest state of every held target is `not_configured`, printed in the
+run log and in the PR comment, and M0 AC1 is recorded as not met. The one exception above is
+being stood up under [PER-111](/PER/issues/PER-111), which owns the deploy mechanics; **any
+number measured against that link is labelled with the provider and tier it came from, and the
+Fly.io equivalents stay owed** (ADR-0003 §9, §13.7).
 
-| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                      |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure. |
-| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                               |
-| `cloudflare-pages` | web only              | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one.                                                                 |
-| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                              |
-| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                             |
+| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure.                                                                                                            |
+| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                                                                                                                                          |
+| `cloudflare-pages` | web only              | Free-egress static hosting. **The one target carved out of the hold** (ADR-0003 §13.7) — the board's pre-existing Cloudflare connection may host `apps/web` at $0, per [PER-111](/PER/issues/PER-111). Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                                                                                                                                         |
+| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                                                                                                                                        |
 
-Set these in repository settings **once the hold is lifted**, not before. No code change
-needed at that point.
+Set these in repository settings **once the hold is lifted**, not before — with the single
+exception of the two `CLOUDFLARE_*` secrets, which the §13.7 carve-out permits for the
+`apps/web` staging deploy. No code change is needed at any point.
 
 | Kind     | Name                                              | Purpose                                                                                     |
 | -------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
