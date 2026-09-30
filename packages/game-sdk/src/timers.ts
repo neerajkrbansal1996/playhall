@@ -46,7 +46,11 @@ export type TimerCommand =
   | {
       readonly op: 'set'
       readonly timerId: TimerId
-      /** The seat the timer belongs to, or null for a match-wide timer. */
+      /**
+       * The seat the timer belongs to, or null for a match-wide timer. Always
+       * present: re-arming an existing timer transfers ownership to whatever
+       * this says, so there is no "leave it as it was" value. See `setTimer`.
+       */
       readonly seatId: SeatId | null
       /** Relative to the `ctx.now` of the call that returned this command. */
       readonly delayMs: number
@@ -67,10 +71,22 @@ export type ClearTimerCommand = Extract<TimerCommand, { op: 'clear' }>
 export type PauseTimerCommand = Extract<TimerCommand, { op: 'pause' }>
 export type ResumeTimerCommand = Extract<TimerCommand, { op: 'resume' }>
 
+/**
+ * Asks for a timer. `seatId` is required, and having to state it is the point.
+ *
+ * On a re-arm — a `set` for a `timerId` that already exists — this argument
+ * **transfers ownership** of the timer to the seat named here, and `null`
+ * **disowns** it, making the timer match-wide. Seat-scoped effects reach a timer
+ * through its owner, so a disowned turn deadline is no longer frozen when its
+ * player disconnects: they drop on mobile data and lose on a timeout they never
+ * saw. A default would let `setTimer(MOVE_TIMER, 30_000)` read at the call site
+ * as "re-arm the move deadline" while quietly stripping that protection, so
+ * there is no default. Pass `null` only when the timer really is match-wide.
+ */
 export function setTimer(
   timerId: TimerId,
   delayMs: number,
-  seatId: SeatId | null = null,
+  seatId: SeatId | null,
 ): SetTimerCommand {
   return { op: 'set', timerId, seatId, delayMs }
 }
