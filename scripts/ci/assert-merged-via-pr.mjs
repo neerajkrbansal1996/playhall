@@ -13,6 +13,13 @@
  * within a minute and leaves a permanent marker in the commit list. Detection
  * instead of prevention, stated as such rather than dressed up as a gate.
  *
+ * Scope: the two deploy-bearing refs — a `push` to `main` (staging) and *any*
+ * tag, on any event (production). Narrowing this to `push`-to-`main` alone
+ * disarms the release-side audit, because a `v*` tag push is `push` on
+ * `refs/tags/...`; see point 3 of the exemption below before touching it.
+ * Anything else is reported as not applicable and passes — see point 1 for why
+ * that is a pass rather than a skipped job.
+ *
  * Needs `GITHUB_TOKEN` with `contents: read` and `pull-requests: read`.
  */
 import { appendFileSync } from 'node:fs'
@@ -22,6 +29,60 @@ const sha = process.env.GITHUB_SHA
 const token = process.env.GITHUB_TOKEN
 const apiUrl = process.env.GITHUB_API_URL ?? 'https://api.github.com'
 const actor = process.env.GITHUB_ACTOR ?? 'unknown'
+const eventName = process.env.GITHUB_EVENT_NAME
+const ref = process.env.GITHUB_REF
+
+// The control covers two deploy-bearing refs: a commit *reaching `main`*
+// (staging, `main.yml`) and a *tag* (production, `release.yml`). `main.yml`
+// also offers `workflow_dispatch`, which is the only way to re-exercise the
+// staging deploy without landing a new commit — and a dispatched branch commit
+// has no merged PR by construction, so auditing one is a false positive.
+//
+// Three things about the shape of this exemption are deliberate:
+//
+// 1. It lives in the script, not in a job-level `if:` on `push-audit`. The
+//    staging jobs list `push-audit` in `needs:`, and a skipped job skips its
+//    dependents — guarding the job would take staging down with it, which is
+//    the exact thing the exemption exists to keep reachable. Passing keeps the
+//    dependency edge satisfied.
+// 2. A missing `GITHUB_EVENT_NAME`/`GITHUB_REF` is a misconfiguration, not an
+//    exemption. Actions always sets both, so their absence means this is not
+//    the environment the audit was written for, and inferring "exempt" from
+//    that would let the control fail open — the same failure mode the HTTP
+//    error path below already refuses.
+// 3. **A tag is never exempt, whatever the event.** Scoping this to
+//    `push`-to-`main` alone looks right and quietly disarms production: a `v*`
+//    tag push is `push` on `refs/tags/...`, so the release audit would report
+//    "not applicable" and exit 0 while its step still claimed to assert the
+//    tagged commit arrived via a merged PR. That restores the exact bypass the
+//    release-side audit exists to close — push straight to `main`, ignore the
+//    red `main.yml` audit, tag that commit, ship it — and it would only ever
+//    have been noticed on a real production cut. `workflow_dispatch` on a tag
+//    is audited for the same reason.
+if (!eventName || !ref) {
+  console.error(
+    '::error title=Push audit misconfigured::GITHUB_EVENT_NAME and GITHUB_REF are both ' +
+      'required. Refusing to treat their absence as an exemption — ADR-0004 relies on this ' +
+      'check actually running.',
+  )
+  process.exit(2)
+}
+
+const isTag = ref.startsWith('refs/tags/')
+const isPushToMain = eventName === 'push' && ref === 'refs/heads/main'
+
+if (!isTag && !isPushToMain) {
+  console.log(
+    `::notice title=Push audit not applicable::ADR-0004 audits commits reaching \`main\` and ` +
+      `every tag; this run is \`${eventName}\` on \`${ref}\`, which deploys nothing. There is ` +
+      'nothing to audit, so the job passes and the jobs that depend on it proceed.',
+  )
+  summarise(
+    `## Push audit\n\nNot applicable — \`${eventName}\` on \`${ref}\`. ` +
+      'ADR-0004 audits commits reaching `main` and every tag.\n',
+  )
+  process.exit(0)
+}
 
 if (!repo || !sha || !token) {
   console.error(
