@@ -278,6 +278,35 @@ loop. Readiness failure only removes the instance from rotation.
 answers the same question as `/health`. M1 appends a Redis check and a Postgres check —
 one entry each, with no change to the endpoints, the probe script, or the uptime workflow.
 
+### What each deploy probe asks
+
+`.github/workflows/*` all pass `health-path: /api/health`. That is a **request, not the
+last word**: `scripts/deploy/deploy.mjs` may return its own `probe-path`, and
+`.github/actions/deploy` prefers it. Only the adapter knows what it actually served, and
+the alternative — a provider conditional in three workflows — would mean a workflow naming
+a vendor, which none of them do.
+
+| Deployed by                        | Probed at            | Passes when                               |
+| ---------------------------------- | -------------------- | ----------------------------------------- |
+| any process-backed provider        | `/api/health`        | 2xx **and** `ok: true`                    |
+| `cloudflare-pages` (static `out/`) | `/deploy-stamp.json` | 2xx, `ok: true`, **and** `commit` matches |
+
+The static case is not a weaker substitute for the route that cannot exist there — it asks
+a different and better question. A static host runs no process that could be alive or dead,
+so `ok: true` is a constant; the artifact _is_ the deployment. What can actually be wrong is
+that the edge is still serving the **previous** upload, and `--expect-commit` is what turns
+that into a red job instead of a silent one. A mismatch is retried rather than failed
+outright, because an edge mid-propagation looks identical to a stale one for the first few
+seconds and only the stale one is still wrong at the last attempt.
+
+`deploy-stamp.json` is written into `apps/web/out` after the export and before the upload,
+so it ships as one more static asset. It carries `ok: true` and `service` deliberately:
+that is the existing probe contract, so a static target needed no second probe script and
+no "expect mode" switch — just one extra field to pin.
+
+An adapter that declares nothing leaves the caller's path standing, so this is additive and
+every existing deploy still probes `/api/health`. Covered by `tools/ci-gate`.
+
 ## Activating deploys
 
 All provider logic is in `scripts/deploy/deploy.mjs`; no workflow names a provider. With
@@ -406,10 +435,23 @@ exists to catch. Rather than weaken that contract for the benefit of a link, the
 drops `.ts` from Next's `pageExtensions`, which excludes `route.ts` while `layout.tsx` and
 `page.tsx` still build.
 
-**Consequence, and it is the one thing to remember: a Pages URL has no `/api/health`.**
-Do not add it to `PRODUCTION_WEB_URL`, do not point `uptime.yml` at it, and do not extend
-the smoke probe to it — all three assert 2xx _and_ `ok: true` on that route and would fail
-against this target by design. The staging link is for a human to open, not for a monitor.
+**Consequence: a Pages URL has no `/api/health`, so it is not probed there.** Every
+workflow passes `health-path: /api/health`, which is right for a provider running a Node
+process and a guaranteed 404 here. That mismatch used to be recorded only in a comment on
+the adapter, and a comment does not fail a build: with `DEPLOY_PROVIDER=cloudflare-pages`
+the deploy reported `deployed`, which opens the probe step's guard, and the probe then
+retried a 404 thirty times and failed `staging (web)` on every push to `main`
+([PER-144](/PER/issues/PER-144)).
+
+So the adapter now **declares** what it served and the probe follows it, rather than the
+workflow guessing — see ["What each deploy probe asks"](#what-each-deploy-probe-asks). The
+static target is probed at `/deploy-stamp.json`, pinned to the deployed commit.
+
+Still true, and still the thing to remember: **do not put a Pages URL in
+`PRODUCTION_WEB_URL` and do not point `uptime.yml` at it.** Those probe `/api/health`
+directly rather than through the adapter, so they would fail against this target by design.
+There is no path by which that happens accidentally — the adapter throws on `production`,
+which is where `PRODUCTION_WEB_URL` comes from.
 
 #### Switching it on
 

@@ -25,17 +25,33 @@
  *   in  — env DEPLOY_PROVIDER, DEPLOY_ENV (preview|staging|production),
  *         DEPLOY_TARGET (web|realtime), plus whatever the provider needs.
  *         An unset or empty DEPLOY_PROVIDER means `none`, not "misconfigured".
- *   out — `url` and `status` on $GITHUB_OUTPUT. `status` is one of
- *         `deployed` | `not_configured`. Exit code is non-zero only for a real
- *         deploy failure or a provider name that is set but unrecognised;
- *         "no provider configured" is a clean skip, because infrastructure that
- *         has not been provisioned yet is not a build break.
+ *   out — `url`, `status`, `probe-path` and `probe-commit` on $GITHUB_OUTPUT.
+ *         `status` is one of `deployed` | `not_configured`. Exit code is
+ *         non-zero only for a real deploy failure or a provider name that is set
+ *         but unrecognised; "no provider configured" is a clean skip, because
+ *         infrastructure that has not been provisioned yet is not a build break.
+ *
+ * **The adapter declares what to probe, because only the adapter knows what it
+ * served.** `probe-path` is the third output for a reason worth stating: the
+ * caller in `.github/workflows/*` asks for `/api/health`, which is right for
+ * every provider that runs a process and wrong for one that uploads a static
+ * artifact with no route handler in it. A workflow cannot make that distinction
+ * without naming a vendor, and no workflow names a vendor. So an adapter that
+ * serves a different health contract returns its own `probePath`, and
+ * `.github/actions/deploy` prefers it over the caller's request. An adapter that
+ * returns none — every process-backed provider here — leaves the caller's path
+ * standing, so this is additive and the default path is unchanged.
+ *
+ * Before this existed, the mismatch was recorded only in a comment, and a
+ * comment does not fail a build: `DEPLOY_PROVIDER=cloudflare-pages` deployed
+ * successfully and then retried a 404 on `/api/health` thirty times on every
+ * push to `main` ([PER-144](/PER/issues/PER-144)).
  *
  * Adding a provider means adding one entry to PROVIDERS. Nothing else changes —
  * not the workflows, not the smoke test, not the uptime probe.
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync } from 'node:fs'
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 
 // `??` alone is not enough. `.github/actions/deploy` always sets
 // DEPLOY_PROVIDER, and sets it to the empty string when the `DEPLOY_PROVIDER`
@@ -163,9 +179,20 @@ const PROVIDERS = {
    * uploaded `apps/web/.next`, which is a build cache and not a servable Pages
    * artifact at all. The export deliberately drops `/api/health`, because that
    * route is `runtime = 'nodejs'` + `force-dynamic` on purpose and a prerendered
-   * health payload answers about the build rather than the process. **So do not
-   * point a health probe at a Pages URL** — `smoke` and `uptime.yml` expect
-   * `/api/health` and would fail against this target by design.
+   * health payload answers about the build rather than the process.
+   *
+   * So this adapter declares its own `probePath` and the health probe follows
+   * it. `/api/health` is not merely missing here — it is the wrong question. A
+   * static host runs no process to be alive or dead; the artifact *is* the
+   * deployment. The question that can fail is "is the edge serving the bytes
+   * this job just uploaded, or the previous ones?", and `deploy-stamp.json`
+   * (written below, pinned by `--expect-commit`) is the one that answers it.
+   * That is a stronger check than a 200 on the landing page, not a weaker
+   * substitute for the route that cannot exist.
+   *
+   * `uptime.yml` is deliberately *not* wired to this: it probes
+   * `PRODUCTION_WEB_URL`, and this adapter throws on `production`, so there is
+   * no path by which a Pages URL becomes the uptime target.
    */
   'cloudflare-pages'() {
     if (target !== 'web') {
@@ -211,6 +238,33 @@ const PROVIDERS = {
     const project = process.env.CLOUDFLARE_PAGES_PROJECT ?? 'playhall-web-staging'
     run('pnpm', ['--filter', './apps/web', 'build'], { PLAYHALL_STATIC_EXPORT: '1' })
 
+    // The static stand-in for `/api/health`, written into the artifact *after*
+    // the export and *before* the upload, so it ships as one more static asset
+    // and Next never sees it.
+    //
+    // Shaped to satisfy the existing probe unchanged — `ok: true` plus
+    // `service` is all `scripts/ci/health-probe.mjs` requires — so a static
+    // target needed no second probe script and no "expect" mode switch. The
+    // extra field is `commit`, which is what `--expect-commit` pins.
+    //
+    // `ok: true` is a constant here and that is correct, not a rubber stamp: a
+    // static asset that can be fetched at all has proved everything a static
+    // deploy can be wrong about. There is no process behind it whose health
+    // could differ from "the file is being served".
+    const commit = (process.env.GITHUB_SHA ?? '').trim()
+    const stamp = {
+      ok: true,
+      service: '@playhall/web',
+      provider,
+      environment,
+      // Empty when built outside Actions (a local smoke run). The probe treats
+      // an empty `--expect-commit` as "do not check", so a local run degrades
+      // to the plain 2xx + `ok: true` assertion rather than failing.
+      commit,
+      builtAtMs: Date.now(),
+    }
+    writeFileSync('apps/web/out/deploy-stamp.json', `${JSON.stringify(stamp, null, 2)}\n`)
+
     // `--branch` decides production-vs-preview *inside the Pages project*: a
     // deployment on the project's production branch owns the durable
     // `<project>.pages.dev` hostname, anything else gets a per-deployment one.
@@ -230,7 +284,12 @@ const PROVIDERS = {
       `--branch=${branch}`,
     ])
 
-    return { status: 'deployed', url: firstUrl(out) }
+    return {
+      status: 'deployed',
+      url: firstUrl(out),
+      probePath: '/deploy-stamp.json',
+      probeCommit: commit,
+    }
   },
 
   /**
@@ -319,11 +378,36 @@ if (result.status === 'deployed' && !/^https?:\/\//.test(result.url)) {
   )
 }
 
+// A `probePath` that is set but not absolute would silently probe the wrong
+// place: `url + 'deploy-stamp.json'` concatenates onto the host with no slash.
+// Cheap to assert, and the alternative is a 404 nobody can explain.
+if (result.probePath !== undefined && !result.probePath.startsWith('/')) {
+  fail(
+    `Provider "${provider}" returned probePath "${result.probePath}", which is not ` +
+      'absolute. A probe path is appended to the deployed URL and must start with "/".',
+  )
+}
+
+// A commit expectation is meaningless without a path to read it from, and
+// would be silently dropped — `.github/actions/deploy` only passes
+// `--expect-commit` alongside the adapter's own path.
+if (result.probeCommit && result.probePath === undefined) {
+  fail(
+    `Provider "${provider}" returned probeCommit without probePath. The commit ` +
+      'expectation is only applied to an adapter-declared probe path.',
+  )
+}
+
 setOutput('status', result.status)
 setOutput('url', result.url)
+// Empty means "no adapter opinion", which is how `.github/actions/deploy` knows
+// to fall back to the caller's `health-path` input.
+setOutput('probe-path', result.probePath ?? '')
+setOutput('probe-commit', result.probeCommit ?? '')
 console.log(
   `deploy: provider=${provider} env=${environment} target=${target} ` +
-    `status=${result.status} url=${result.url || '(none)'}`,
+    `status=${result.status} url=${result.url || '(none)'} ` +
+    `probe-path=${result.probePath ?? '(caller default)'}`,
 )
 
 function lastLine(text) {
