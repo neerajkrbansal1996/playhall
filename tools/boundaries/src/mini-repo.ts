@@ -177,7 +177,10 @@ export function createMiniRepo(repoRoot: string): string {
   // specifier (what a game author produces by writing the import before installing). Only one
   // of those two is a path a stub can produce, so the stub covers the resolved half and the
   // unresolved half is covered by importing a package that is deliberately absent.
-  for (const name of ['colyseus', '@colyseus/schema']) {
+  // `colyseus.js` is the browser client and a distinct npm name, so it is stubbed separately:
+  // a pattern written as `colyseus` + `@colyseus/*` does not match it, and that is the form a
+  // game's client-side code reaches for first.
+  for (const name of ['colyseus', 'colyseus.js', '@colyseus/schema']) {
     write(
       root,
       `node_modules/${name}/package.json`,
