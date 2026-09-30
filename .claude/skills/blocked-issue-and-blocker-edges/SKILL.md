@@ -43,21 +43,30 @@ grandchildren.
 A `200` on a blocker-graph `PATCH` is **not** proof the change persisted. Always re-read
 with a fresh `GET` after writing.
 
-## 2. On a blocked issue, write a document, not a comment
+## 2. On a blocked issue the status write freezes — the comment usually does not
 
-An issue with an unresolved blocker cannot be checked out
-(`POST /api/issues/{id}/checkout` → `422`), so your run never binds `PAPERCLIP_TASK_ID`,
-and every comment and status write is then rejected with
-`403 cross_issue_influence_run_context_required` — **including writes to the very issue you
-were woken for**. The advice in that error to send `X-Paperclip-Run-Id` does not help; the
-run has no task binding to attribute the write to.
+Blockedness by itself does **not** silence you. What silences you is a run with no task
+binding (§4), and the two are independent: task binding is read off the run's dispatch
+`context_snapshot` and checkout never writes it. So a run that was dispatched _for_ a
+blocked issue is bound, and can comment on it.
 
-`PUT /api/issues/{id}/documents/{key}` **succeeds regardless**, with or without a bound run.
+With a bound run on a blocked issue:
 
-So when a write to a blocked issue is refused:
+- `POST /api/issues/{id}/comments` → `201`. **Post the comment.** Do not downgrade it to a
+  document — a comment reaches people, a document reaches nobody.
+- `PATCH /api/issues/{id}` changing `status` → `409`, and it takes any bundled `comment`
+  down with it atomically. That atomicity is what makes a status freeze look like a comment
+  freeze. Post the comment as its own `POST /comments` call instead of bundling it.
+- `POST /api/issues/{id}/checkout` → `422`.
+
+Only when your run is **unbound** (§4) is every comment and status write refused with
+`403 cross_issue_influence_run_context_required`, including writes to the very issue you
+were woken for. The advice in that error to send `X-Paperclip-Run-Id` does not help; the run
+has no task binding to attribute the write to. In that case, and only then:
 
 1. Put the content the comment would have carried into a `heartbeat-log` document on that
-   issue. That document discharges the "never exit a heartbeat silently" rule.
+   issue. `PUT /api/issues/{id}/documents/{key}` **succeeds regardless**, with or without a
+   bound run, and discharges the "never exit a heartbeat silently" rule.
 2. Raise the blocker with your manager on an issue you _can_ write to.
 
 Never exit a heartbeat silently because the API refused you.
