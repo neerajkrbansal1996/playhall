@@ -2,6 +2,14 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
+- **Amended:** 2026-09-30 (**rev 1.1**, before this ADR first landed on `main`) — rev 1 specified
+  the probe as a bare `ws` server on the grounds that `ws` is "already the agreed server in
+  ADR-0001 §4.1". **That was stale when written.** [ADR-0001](./0001-v1-stack.md) **rev 4** records
+  the board's rejection of the §4.4 amendment, so **Colyseus is the server framework for
+  turn-based and real-time both, and `apps/realtime` is a Colyseus server** (§4.2). A probe that
+  stands up its own independent WebSocket server would evidence an upgrade path we do not ship —
+  the same defect this ADR rejects alternative D for. **§2 is rewritten and §2.1 is new.** The
+  decision, the AC2a/AC2b split, the alternatives and the revisit triggers stand unchanged.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-87](/PER/issues/PER-87)
@@ -60,8 +68,9 @@ money-shaped one.
 
 ### 2. Gate 1 is closed by a transport probe, and the board is told it is a probe
 
-`apps/realtime` gains one route, `GET /ws/probe`, using `ws` — already the agreed server in
-ADR-0001 §4.1, so this commits us to nothing new. Specification, which is binding on the
+`apps/realtime` gains one WebSocket route, `/ws/probe`, **served by the same HTTP server and the
+same WebSocket transport the shipped product uses** — see §2.1, which is the load-bearing
+constraint and supersedes rev 1's "using `ws`". Specification, which is binding on the
 implementation ([PER-94](/PER/issues/PER-94)):
 
 - **One frame shape, zod-validated in both directions.** Client sends
@@ -82,6 +91,41 @@ implementation ([PER-94](/PER/issues/PER-94)):
   liability; house rules already require unfinished work behind a flag.
 - **Isolated in one file**, `apps/realtime/src/ws-probe.ts`, importing nothing from a game and
   imported by no game. It is diagnostics, exactly like `/health`.
+
+### 2.1 The probe rides the shipped transport — it does not stand up its own (rev 1.1)
+
+[ADR-0001](./0001-v1-stack.md) §4.2 makes `apps/realtime` a **Colyseus** server. So:
+
+- **The probe must not introduce a second WebSocket server.** It attaches to the **same
+  `http.Server` instance** that Colyseus's transport is constructed with, and it reuses the `ws`
+  dependency **already bundled by `@colyseus/ws-transport`** rather than adding an independent
+  one. Two upgrade handlers on two servers is not a smaller change than one — it is a second
+  network surface to deploy, probe and secure.
+- **Why this is the whole point of AC2a, not a tidiness preference.** AC2a exists to prove that a
+  WebSocket upgrade survives the path from a mobile client, through the provider's TLS terminator,
+  proxy and load balancer, into **our** process. If the probe's socket is served by a stack we do
+  not ship, a green AC2a tells us nothing about the stack we do ship — and staging could still
+  break on Colyseus's upgrade path with the probe passing. That is precisely the objection this
+  ADR raises against alternative D, applied to ourselves.
+- **No new declared runtime dependency.** `ws` is already in the tree transitively under Colyseus.
+  If `ws-probe.ts` imports it directly it must be declared in `apps/realtime/package.json` (no
+  phantom dependencies) and **pinned to the version Colyseus resolves**, so we never run two
+  copies of `ws` in one process.
+- **No boundary-rule change.** Colyseus is a platform-internal dependency under ADR-0001 §4.2 and
+  `apps/realtime` is the one place it is allowed. The probe lives there, imports nothing from
+  `packages/game-sdk` and is imported by no game, so [ADR-0002](./0002-dependency-boundary-enforcement.md)'s
+  rule set needs no exception. **If the implementation finds it needs one, that is a signal to
+  stop and escalate, not to widen a rule.**
+
+**One question this ADR does not pretend to answer, and PER-94 must settle by measurement rather
+than assumption:** whether Colyseus's transport tolerates a sibling raw-`ws` upgrade route on the
+same server, path-routed on `/ws/probe`. It may not — Colyseus's transport binds the `upgrade`
+event itself. If it does not, the fallback is a Colyseus room with **exactly one message type**,
+and the "no rooms" revisit trigger in this ADR is **not** violated by that: that trigger forbids
+the probe growing a _semantic_ room — players, seats, matches, fan-out — not the use of the
+framework's own class as a mount point. Whichever path PER-94 takes, it reports **which one and
+why**, because the answer is itself a fact about our transport that [PER-15](/PER/issues/PER-15)
+needs.
 
 ### 3. What the probe deliberately does not do
 
@@ -165,13 +209,16 @@ the room runner's tests will extend.
 
 **Harder.** The repo now contains a WebSocket path that is _not_ the protocol, and that is a
 standing invitation to mistake one for the other. Mitigated three ways: one file, a feature flag
-that is off in production, and a deletion trigger below. It also adds one dependency (`ws`) and one
-env var to `apps/realtime` ahead of M1.
+that is off in production, and a deletion trigger below. It adds **one env var** and, per §2.1, **no
+new declared runtime dependency** — `ws` is already transitive under `@colyseus/ws-transport`. It
+also pulls forward the first real Colyseus wiring in `apps/realtime`, which no branch has yet: the
+probe cannot ride the shipped transport until a shipped transport exists. That is work M1 would do
+anyway, but M0 now depends on a slice of it.
 
 **Committed to.** Reporting AC2 as two rows in [PER-86](/PER/issues/PER-86) and in the M0 demo, and
 to describing the probe to the board as evidence of a socket rather than of the platform. Also to
-`ws` as the M1 server — though ADR-0001 §4.1 already committed us to that, so this is a
-restatement, not a new commitment.
+**Colyseus as the host of the probe's socket**, which is a restatement of ADR-0001 §4.2 rather than
+a new commitment. Rev 1 said `ws` here and was wrong; see the amendment note.
 
 **Cost to reverse: cheap** (a day). One file, one dependency, one env var, one CI test. The
 acceptance-criterion split is a documentation change.
