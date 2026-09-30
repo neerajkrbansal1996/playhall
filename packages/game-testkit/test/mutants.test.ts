@@ -345,7 +345,11 @@ describe('termination and results', () => {
         return { ...base, standings: base.standings.slice(0, 1).map((s) => ({ ...s, rank: 2 })) }
       },
     })
-    expectCaughtBy(report, 'random-playout-terminates')
+    // `random-playout-terminates` only asks whether a result was *reached*;
+    // whether it is well-formed is `result-standings-well-formed`'s question
+    // (ADR-0006), so the failure has to name that check and not the other one.
+    expectCaughtBy(report, 'result-standings-well-formed')
+    expect(failedChecks(report)).not.toContain('random-playout-terminates')
   })
 
   it('catches a timer the manifest never declared', () => {

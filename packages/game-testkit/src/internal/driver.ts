@@ -275,6 +275,106 @@ export function playout<TState, TAction, TSettings, TEvent extends GameEvent>(
   }
 }
 
+export interface AbortRunOptions<
+  TState,
+  TAction,
+  TSettings,
+  TEvent extends GameEvent,
+> extends PlayoutOptions<TState, TAction, TSettings, TEvent> {
+  /** Normal moves to play before the abort action. */
+  readonly afterSteps: number
+  /** The action that ends the match without recording a result. */
+  abortAction(
+    state: TState,
+    roster: SeatRoster,
+  ): { readonly seatId: SeatId; readonly action: TAction } | null
+}
+
+export interface AbortRun<TState> {
+  readonly state: TState
+  readonly result: MatchResult | null
+  /** Normal moves actually played before the abort was attempted. */
+  readonly stepsPlayed: number
+  /**
+   * Why the abort never happened, or `null` if it did. A scenario that cannot
+   * reach its own abort is a hole in the gate, not a pass, so the caller
+   * reports this rather than skipping.
+   */
+  readonly unreachable: string | null
+}
+
+/**
+ * Plays `afterSteps` normal moves and then the game's own abort action.
+ *
+ * The suite needs a match that ends with no recorded result, and random
+ * playouts never produce one — they only reach endings the rules arrive at on
+ * their own. This is the smallest driver that gets there while still going
+ * through `applyAction` like the real runner, so the abort is exercised as a
+ * game action rather than as a state the test hand-builds.
+ */
+export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
+  options: AbortRunOptions<TState, TAction, TSettings, TEvent>,
+): AbortRun<TState> {
+  const { server, roster, context } = options
+  const run = <T>(body: () => T): T => (options.trapAmbient ? withoutAmbientSources(body) : body())
+
+  let state = run(() =>
+    server.createInitialState(contextAt(context, 0), options.settings, roster),
+  ).state
+  const driverRng = createRng(deriveSeed(String(context.seed), 'conformance-abort'))
+  const getLegalActions = server.getLegalActions?.bind(server)
+
+  let sequence = 1
+  let stepsPlayed = 0
+  while (stepsPlayed < options.afterSteps) {
+    if (run(() => server.getResult(state)) !== null) break
+    if (getLegalActions === undefined) break
+
+    const candidates: ActionCandidate<TAction>[] = []
+    for (const seat of roster) {
+      const current = state
+      const actions = run(() => getLegalActions(current, seat.seatId))
+      if (actions.length > 0) candidates.push({ seatId: seat.seatId, actions })
+    }
+    const chosen = options.chooseAction(state, candidates, driverRng)
+    if (chosen === null) break
+
+    const before = state
+    state = run(() =>
+      server.applyAction(contextAt(context, sequence), before, chosen.seatId, chosen.action),
+    ).state
+    sequence += 1
+    stepsPlayed += 1
+  }
+
+  const early = run(() => server.getResult(state))
+  if (early !== null) {
+    return {
+      state,
+      result: early,
+      stepsPlayed,
+      unreachable: `the match was already over after ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves`,
+    }
+  }
+
+  const chosen = run(() => options.abortAction(state, roster))
+  if (chosen === null) {
+    return {
+      state,
+      result: null,
+      stepsPlayed,
+      unreachable: `abortAction returned null after ${String(stepsPlayed)} moves`,
+    }
+  }
+
+  const before = state
+  state = run(() =>
+    server.applyAction(contextAt(context, sequence), before, chosen.seatId, chosen.action),
+  ).state
+
+  return { state, result: run(() => server.getResult(state)), stepsPlayed, unreachable: null }
+}
+
 /**
  * Replays a recorded action log against the same contexts, without consulting
  * `getLegalActions`. This is what the platform does when it rebuilds a match

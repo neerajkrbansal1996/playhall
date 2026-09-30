@@ -81,6 +81,8 @@ export interface Prepared<
   readonly scenarios: readonly Scenario<TSettings>[]
   readonly runs: readonly PlayoutRun<TState, TAction, TSettings, TEvent>[]
   readonly seeds: readonly string[]
+  /** Root the run's seeds were derived from. Checks that need their own runs derive from it. */
+  readonly baseSeed: string
   readonly maxSteps: number
   readonly trapAmbient: boolean
   readonly chooseAction: ActionChooser<TState, TAction>
@@ -210,6 +212,7 @@ export function prepare<
     scenarios,
     runs,
     seeds,
+    baseSeed,
     maxSteps,
     trapAmbient,
     chooseAction,
