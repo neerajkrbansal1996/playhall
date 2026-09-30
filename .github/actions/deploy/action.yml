@@ -6,7 +6,7 @@ description: >-
 
 inputs:
   environment:
-    description: preview | production
+    description: preview | staging | production
     required: true
   target:
     description: web | realtime
@@ -68,9 +68,10 @@ runs:
           {
             echo "### ${{ inputs.environment }} / ${{ inputs.target }} — not configured"
             echo ""
-            echo "No hosting provider is set, so nothing was deployed. The provider choice and"
-            echo "its budget are board decisions still open on PER-2. Setting the"
-            echo "\`DEPLOY_PROVIDER\` repo variable plus its secrets activates this with no code"
-            echo "change — see \`docs/ci-cd.md\`."
+            echo "No hosting provider is set, so nothing was deployed. **This is expected, not a"
+            echo "failure.** The board has chosen Fly.io with \$120/month of spend authority"
+            echo "(PER-2, detail on PER-38); what is still missing is the provisioned apps and"
+            echo "secrets, which are PER-7. Setting the \`DEPLOY_PROVIDER\` repo variable plus its"
+            echo "secrets activates this with no code change — see \`docs/ci-cd.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
         fi
