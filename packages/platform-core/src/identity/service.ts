@@ -29,6 +29,7 @@ import {
 import { suggestDisplayNameFor } from './fun-names.js'
 import {
   type GuestClaims,
+  GuestClaimsSchema,
   type GuestKeyring,
   type GuestTokenRejection,
   signGuestToken,
@@ -37,6 +38,32 @@ import {
 
 /** 128 bits. Opaque, unguessable, and short enough for a 6-char-code-era URL. */
 export const GUEST_ID_BYTES = 16
+
+declare const verifiedGuest: unique symbol
+
+/**
+ * A guest this package itself established: either freshly minted from
+ * `randomBytes`, or recovered from a token whose MAC verified.
+ *
+ * The brand cannot be produced outside this module, which is the point.
+ * `issue()` used to take a bare `guestId: string`, so any handler could read a
+ * gid off a request body and mint a valid token for another player's seat —
+ * server-authoritative by convention only. Requiring this type makes that call
+ * fail to typecheck: the only way to get one is `GuestIdentity.ref` from a
+ * successful `authenticate()`, or the `guest` on its `invalid_name` rejection.
+ */
+export interface VerifiedGuestRef {
+  /** Guest id. Stable for the life of the cookie; the player's identity. */
+  readonly gid: string
+  /** Session id from the same token, or minted alongside a new `gid`. */
+  readonly sid: string
+  readonly [verifiedGuest]: true
+}
+
+/** The one place the brand is applied. Never export this. */
+function verifiedRef(gid: string, sid: string): VerifiedGuestRef {
+  return { gid, sid } as unknown as VerifiedGuestRef
+}
 
 export interface GuestIdentity {
   /**
@@ -51,6 +78,8 @@ export interface GuestIdentity {
   /** Seconds since epoch, from the token. */
   readonly issuedAt: number
   readonly expiresAt: number
+  /** Pass to `issue({ reuse })` to rename or renew without losing the guest. */
+  readonly ref: VerifiedGuestRef
 }
 
 export interface IssuedGuestIdentity {
@@ -75,12 +104,34 @@ export interface GuestIdentityServiceConfig {
   readonly clockToleranceSeconds?: number
 }
 
-export type IssueGuestRejection = { readonly kind: 'invalid_name' } & DisplayNameRejection
+/**
+ * `invalid_claims` is the catch-all for an id or name that cannot be signed —
+ * over 64 characters, or empty. It should be unreachable now that the only ids
+ * `issue()` accepts are ones this module minted or verified, but the schema is
+ * the authority on what fits in a token and a schema failure must surface as a
+ * `Result`, not as a `ZodError` thrown through a signature that promises one.
+ */
+export type IssueGuestRejection =
+  | ({ readonly kind: 'invalid_name' } & DisplayNameRejection)
+  | {
+      readonly kind: 'invalid_claims'
+      readonly reason: 'invalid_claims'
+      /** Developer-facing detail from the schema. Never key a UI off it. */
+      readonly message?: string
+    }
 
+/**
+ * `invalid_name` carries the `guest` whose token just verified. Without it a
+ * blocklist edit would be a silent account deletion: the caller could not
+ * re-issue for the same guest, so the player would lose their id, their avatar
+ * and their match history rather than being asked to pick a new name.
+ */
 export type AuthenticateRejection =
   | ({ readonly kind: 'no_cookie' } & { reason?: undefined })
   | ({ readonly kind: 'invalid_token' } & GuestTokenRejection)
-  | ({ readonly kind: 'invalid_name' } & DisplayNameRejection)
+  | ({ readonly kind: 'invalid_name' } & DisplayNameRejection & {
+        readonly guest: VerifiedGuestRef
+      })
 
 export interface IssueGuestOptions {
   /** Server time, ms since epoch. */
@@ -88,12 +139,13 @@ export interface IssueGuestOptions {
   /** What the player typed. Absent or blank means "use the suggestion". */
   readonly requestedName?: string | null
   /**
-   * Reuse an existing guest id — a returning player renaming themselves, or a
+   * Reuse an existing guest — a returning player renaming themselves, or a
    * sliding-expiry renewal. Omit to mint a new guest.
+   *
+   * Only a `VerifiedGuestRef` is accepted, so the id provably came from a token
+   * whose signature checked out. A gid off a request body does not typecheck.
    */
-  readonly guestId?: string
-  /** Reuse an existing session id. Omit to mint a new browsing context. */
-  readonly sessionId?: string
+  readonly reuse?: VerifiedGuestRef
 }
 
 export interface GuestIdentityService {
@@ -125,6 +177,7 @@ function identityFromClaims(claims: GuestClaims): GuestIdentity {
     avatar: avatarFor(claims.gid, claims.nam),
     issuedAt: claims.iat,
     expiresAt: claims.exp,
+    ref: verifiedRef(claims.gid, claims.sid),
   }
 }
 
@@ -141,8 +194,8 @@ export function createGuestIdentityService(
     suggestNameFor: suggestDisplayNameFor,
 
     issue(options) {
-      const guestId = options.guestId ?? newId()
-      const sessionId = options.sessionId ?? newId()
+      const guestId = options.reuse?.gid ?? newId()
+      const sessionId = options.reuse?.sid ?? newId()
 
       // A blank field is not an error — it is the player accepting the
       // suggestion, which is the two-tap path we are optimising for.
@@ -156,17 +209,28 @@ export function createGuestIdentityService(
       if (!name.ok) return err({ kind: 'invalid_name', ...name.error })
 
       const issuedAt = toSeconds(options.now)
-      const claims: GuestClaims = {
+      // Validate before signing rather than letting `signGuestToken` throw on
+      // the way past: the return type promises a Result, so no caller will have
+      // wrapped this in a `try` and the first bad id would be a 500.
+      const claims = GuestClaimsSchema.safeParse({
         gid: guestId,
         sid: sessionId,
         nam: name.value,
         iat: issuedAt,
         exp: issuedAt + ttlSeconds,
+      })
+      if (!claims.success) {
+        return err({
+          kind: 'invalid_claims',
+          reason: 'invalid_claims',
+          message: claims.error.issues[0]?.message,
+        })
       }
-      const token = signGuestToken(claims, config.keyring)
+
+      const token = signGuestToken(claims.data, config.keyring)
 
       return ok({
-        identity: identityFromClaims(claims),
+        identity: identityFromClaims(claims.data),
         token,
         setCookie: serializeGuestCookie(token, cookieOptions),
       })
@@ -186,7 +250,15 @@ export function createGuestIdentityService(
       // have been signed before a blocklist update, or by an older build with
       // a looser rule. A signature proves origin, not current policy.
       const name = validateDisplayName(verified.value.nam, config.nameOptions)
-      if (!name.ok) return err({ kind: 'invalid_name', ...name.error })
+      if (!name.ok) {
+        // Carry the verified guest through the rejection: the caller must be
+        // able to force a rename that keeps this guest, not mint a new one.
+        return err({
+          kind: 'invalid_name',
+          ...name.error,
+          guest: verifiedRef(verified.value.gid, verified.value.sid),
+        })
+      }
 
       return ok(identityFromClaims({ ...verified.value, nam: name.value }))
     },

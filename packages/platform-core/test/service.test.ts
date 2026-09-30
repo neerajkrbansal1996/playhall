@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type GuestIdentityService,
   type GuestIdentityServiceConfig,
+  type VerifiedGuestRef,
   createGuestIdentityService,
 } from '../src/identity/service.js'
 import { GUEST_COOKIE_NAME, GUEST_TOKEN_TTL_SECONDS } from '../src/identity/cookie.js'
@@ -134,12 +135,67 @@ describe('issue', () => {
     const renamed = issueOrThrow(service, {
       now: NOW_MS + 60_000,
       requestedName: 'Grace Hopper',
-      guestId: first.identity.guestId,
-      sessionId: first.identity.sessionId,
+      reuse: first.identity.ref,
     })
     expect(renamed.identity.guestId).toBe(first.identity.guestId)
+    expect(renamed.identity.sessionId).toBe(first.identity.sessionId)
     expect(renamed.identity.avatar.color).toEqual(first.identity.avatar.color)
     expect(renamed.identity.displayName).toBe('Grace Hopper')
+  })
+
+  it('reuses only a ref it minted or verified, never a caller-supplied string', () => {
+    // Server-authoritative (principle 5). The reuse parameter is branded so a
+    // handler cannot read a gid off a request body and mint a token for
+    // somebody else's seat. This is a compile-time guarantee, asserted here so
+    // the guarantee is a test failure rather than a code-review habit.
+    const service = makeService()
+    const issued = issueOrThrow(service, { now: NOW_MS, requestedName: 'Ada Lovelace' })
+
+    // Never invoked — the assertion is that this body does not compile without
+    // the suppressions, which `tsc -p tsconfig.test.json` checks.
+    const wouldNotCompile = (): unknown[] => [
+      // @ts-expect-error a bare string is not a VerifiedGuestRef
+      service.issue({ now: NOW_MS, reuse: 'somebody-else' }),
+      // @ts-expect-error nor is an unbranded object of the right shape
+      service.issue({ now: NOW_MS, reuse: { gid: 'somebody-else', sid: 'sid' } }),
+    ]
+    expect(typeof wouldNotCompile).toBe('function')
+
+    // The producers are a verified identity and its `invalid_name` rejection.
+    const verified = service.authenticate(asRequestCookie(issued.setCookie), NOW_MS)
+    expect(verified.ok).toBe(true)
+    if (verified.ok) {
+      expect(verified.value.ref.gid).toBe(issued.identity.guestId)
+      expect(verified.value.ref.sid).toBe(issued.identity.sessionId)
+    }
+  })
+
+  it('returns err rather than throwing when the claims do not fit the token', () => {
+    // The brand makes this unreachable through the type system; the schema is
+    // still the authority on what fits in a cookie, and a schema failure must
+    // arrive as the Result the signature promises. Casting past the brand is
+    // exactly how a future refactor would reintroduce the throw.
+    const service = makeService()
+    const badRefs = [
+      { gid: 'x'.repeat(65), sid: 'sid' },
+      { gid: '', sid: 'sid' },
+      { gid: 'gid', sid: '' },
+      { gid: 'gid', sid: 'y'.repeat(65) },
+    ]
+
+    for (const bad of badRefs) {
+      const ref = bad as unknown as VerifiedGuestRef
+      const run = (): ReturnType<GuestIdentityService['issue']> =>
+        service.issue({ now: NOW_MS, requestedName: 'Ada Lovelace', reuse: ref })
+
+      expect(run).not.toThrow()
+      const result = run()
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error.kind).toBe('invalid_claims')
+        expect(result.error.reason).toBe('invalid_claims')
+      }
+    }
   })
 
   it('honours a configured TTL in both the token and the cookie', () => {
@@ -242,6 +298,35 @@ describe('authenticate', () => {
     expect(result.ok).toBe(false)
     if (!result.ok)
       expect(result.error).toMatchObject({ kind: 'invalid_name', reason: 'profanity' })
+  })
+
+  it('a blocklist update forces a rename, it does not destroy the guest', () => {
+    // The rejection above is a rename prompt, not a deletion. If it dropped the
+    // gid the caller would have to mint a new guest, and the player would lose
+    // their identity, their avatar and their match history because somebody
+    // edited a word list.
+    const service = makeService()
+    const issued = issueOrThrow(service, { now: NOW_MS, requestedName: 'Admin Bot' })
+    const stricter = makeService({ nameOptions: { extraTerms: ['adminbot'] } })
+
+    const rejected = stricter.authenticate(asRequestCookie(issued.setCookie), NOW_MS)
+    expect(rejected.ok).toBe(false)
+    if (rejected.ok || rejected.error.kind !== 'invalid_name') throw new Error('expected a rename')
+
+    expect(rejected.error.guest.gid).toBe(issued.identity.guestId)
+    expect(rejected.error.guest.sid).toBe(issued.identity.sessionId)
+
+    // And the ref is directly re-issuable: same guest, new name, same avatar.
+    const renamed = issueOrThrow(stricter, {
+      now: NOW_MS + 1_000,
+      requestedName: 'Grace Hopper',
+      reuse: rejected.error.guest,
+    })
+    expect(renamed.identity.guestId).toBe(issued.identity.guestId)
+    expect(renamed.identity.sessionId).toBe(issued.identity.sessionId)
+    expect(renamed.identity.avatar.color).toEqual(issued.identity.avatar.color)
+    expect(renamed.identity.displayName).toBe('Grace Hopper')
+    expect(stricter.authenticate(asRequestCookie(renamed.setCookie), NOW_MS + 2_000).ok).toBe(true)
   })
 })
 

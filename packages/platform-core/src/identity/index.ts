@@ -17,6 +17,7 @@ export {
   DISPLAY_NAME_MAX_RAW_LENGTH,
   DISPLAY_NAME_MIN_LENGTH,
   DISPLAY_NAME_REJECTION_REASONS,
+  NAME_CONTENT_PATTERN,
   displayNameLength,
   escapeHtml,
   sanitizeDisplayName,
@@ -98,4 +99,5 @@ export type {
   IssueGuestRejection,
   IssuedGuestIdentity,
   RandomBytes,
+  VerifiedGuestRef,
 } from './service.js'
