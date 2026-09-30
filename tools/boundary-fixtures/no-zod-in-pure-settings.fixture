@@ -1,0 +1,42 @@
+# expect: no-zod-in-pure-settings
+# why: a schema-backed helper added to the pure half of the settings contract, which silently puts the whole validator back in the create-lobby client chunk
+=== file: packages/game-sdk/src/settings-form.ts ===
+// The presentation half of the settings contract. It exists so a browser can compute which
+// settings fields to show without shipping a validator, so it must import nothing — see
+// ADR-0007 "Consequences" and PER-115. The plausible way this gets broken is not malice but
+// convenience: someone needs to validate one field and reaches for zod in the file they are
+// already editing, because that is where the other settings code lives.
+//
+// Nothing else in the suite would go red. The renderer's tests still pass, the SDK's tests
+// still pass, typecheck is clean — and the create-lobby route silently regains 79.6 kB raw.
+// That gap between "all green" and "the fix is gone" is the whole reason this rule exists.
+import { z } from 'zod'
+
+export type SettingsValue = string | number | boolean
+
+export interface SettingsFormDescriptor {
+  readonly version: 1
+  readonly fields: readonly { readonly key: string }[]
+}
+
+export const seatCount = z.number().int()
+
+export function visibleFields(form: SettingsFormDescriptor): readonly { readonly key: string }[] {
+  return form.fields
+}
+=== file: packages/game-sdk/src/settings.ts ===
+// The validating half, shown for contrast: zod is entirely legal here, and this is the
+// direction the dependency is allowed to run — schemas import the descriptor's types, never
+// the reverse. A cycle would also be caught by no-circular, so the pair of rules is what keeps
+// the split one-way rather than merely separate.
+import { z } from 'zod'
+
+import type { SettingsFormDescriptor, SettingsValue } from './settings-form.js'
+
+const settingsValueSchema = z.union([z.string(), z.number(), z.boolean()])
+
+export function checkSettingsForm(form: SettingsFormDescriptor): SettingsValue[] {
+  void settingsValueSchema
+  void form
+  return []
+}
