@@ -92,6 +92,42 @@ applicable" and exit 0 while its step still says it asserted the tagged commit a
 merged PR. Production would deploy unaudited, and the first time anyone found out would be a
 real release. A tag is never exempt, whatever the event.
 
+### What the audit asserts: arrival, not PR membership
+
+The predicate is that the audited commit **arrived via** a merged PR — it is that PR's
+`merge_commit_sha`, or an ancestor of it. That is deliberately narrower than the obvious
+reading of `GET commits/{sha}/pulls`, and the difference is not academic
+([PER-130](/PER/issues/PER-130)). A commit that sat on a merged PR's head branch keeps its
+association with that PR forever, including when a squash-merge discarded it — so
+"associated with a merged PR" does not mean "was ever merged". Measured against the live API
+on 2026-09-30:
+
+| commit    | what it is                             | `merge_commit_sha` | `compare` | ancestor of `main`? | verdict |
+| --------- | -------------------------------------- | ------------------ | --------- | ------------------- | ------- |
+| `45aa812` | the squash commit of PR #43            | `45aa812`          | identical | yes                 | pass    |
+| `d79f02e` | head of PR #43 **before** its squash   | `45aa812`          | diverged  | **no**              | fail    |
+| `ee460b0` | head of PR #56, merged as merge commit | `1452723`          | ahead     | yes                 | pass    |
+
+`d79f02e` is the case the loose predicate got wrong: not on `main`, reported as landed.
+
+The comparison, rather than `merge_commit_sha === GITHUB_SHA`, is load-bearing. The repo
+allows squash, merge-commit **and** rebase merges, and under either of the latter two a PR
+puts several commits on `main` while only the tip equals `merge_commit_sha` — `ee460b0` above
+is a real commit on `main` that bare equality would fail. A detector that cries wolf gets
+ignored, which is the failure mode ADR-0004 exists to avoid, so the audit tolerates all three
+merge methods instead of requiring a repo-settings change to squash-only.
+
+**What it still does not prove.** That the PR was _reviewed_. There is no GitHub review
+record to check (one account, see below), so the audit proves the change went through a pull
+request, not that anyone approved it. The Paperclip issue thread is the review trail, and
+`pr-hygiene` is what makes the link to it mandatory.
+
+A **force-push to `main`** is reported separately and always fails, even when the arrival
+check passes: the `push` payload's `forced`/`before` say that whatever was on `main` before
+is gone, which no PR records. If the payload cannot be read the audit warns rather than
+failing — the arrival predicate independently catches the same residual path, so failing
+there would trade a real detection for a false one.
+
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
 
@@ -182,13 +218,13 @@ never matches would stop gating while the required check stayed green.
 Per ADR-0004, `main` is unprotected through M0–M4 and that is an accepted risk, not an
 open problem. The gate moved from **prevention** to **detection**:
 
-| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                   |
-| ------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                     |
-| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                 |
-| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                       |
-| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit is not reachable from a merged PR. `main` turns red within a minute and the commit list records it forever. |
-| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                       |
+| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                                                                                                          |
+| ------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                                                                                                            |
+| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                                                                                                        |
+| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                                                                                                              |
+| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit did not _arrive via_ a merged PR (not merely belong to one), and on a force-push to `main`. It does **not** prove review. `main` turns red within a minute and the commit list records it forever. |
+| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                                                                                                              |
 
 The linked-issue check has to be able to _fail_, which took two attempts. The first version
 matched any `\b[A-Z]+-\d+\b` anywhere in the body, so the unedited template satisfied it

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Behaviour tests for the CI gate runner: proves a PENDING gate passes, that CI_STRICT_GATES=1 turns it into a failure, that a live gate whose script went missing fails regardless, and that the registry matches the workflow.",
+  "description": "Behaviour tests for the scripts that decide whether CI gated a change. The gate runner: a PENDING gate passes, CI_STRICT_GATES=1 turns it into a failure, a live gate whose script went missing fails regardless, the registry matches the workflow. The push audit: a commit must have arrived via a merged PR, not merely belong to one, and a force-push to `main` always fails.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
