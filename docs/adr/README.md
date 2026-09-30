@@ -50,7 +50,7 @@ so per decision rather than downgrading the whole document.
 | [0006](./0006-unrecorded-match-results.md)          | Empty standings for a match that did not count  | Accepted                                                                                                                                                                 |
 | [0007](./0007-settings-form-descriptor.md)          | Settings-form descriptor contract               | Accepted                                                                                                                                                                 |
 | [0008](./0008-game-sdk-contract-v1.md)              | Fix the Game SDK contract at v1                 | Accepted                                                                                                                                                                 |
-| [0009](./0009-m0-websocket-transport-probe.md)      | M0's WebSocket criterion: a transport probe     | Accepted                                                                                                                                                                 |
+| [0009](./0009-m0-websocket-transport-probe.md)      | M0's WebSocket criterion: a transport probe     | Accepted (rev 2)                                                                                                                                                         |
 
 Numbers are reserved as soon as an ADR is assigned, so two people drafting concurrently cannot
 collide on one. A reserved row with no file means someone is writing it.
