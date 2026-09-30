@@ -16,7 +16,8 @@ See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 [Activating deploys](#activating-deploys) below.
 
 That carve-out is the only target in this document that may be switched on today, and it
-is **still not live** — the mechanics, and the one thing blocking it, are in
+**is live**: <https://playhall-web-staging.pages.dev>. It is published from an agent
+heartbeat rather than from CI, for a reason that is not a choice — see
 [The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
 
 ## What runs when
@@ -347,65 +348,67 @@ against this target by design. The staging link is for a human to open, not for 
 | Variable | `REALTIME_DEPLOY_PROVIDER` | `none` — must be set, or `apps/realtime` inherits the provider and the job throws  |
 | Variable | `CLOUDFLARE_PAGES_PROJECT` | optional; defaults to `playhall-web-staging`                                       |
 | Secret   | `CLOUDFLARE_ACCOUNT_ID`    | the board's account — verified live; the id is on PER-111, not in this public repo |
-| Secret   | `CLOUDFLARE_API_TOKEN`     | **the open item** — see below                                                      |
+| Secret   | `CLOUDFLARE_API_TOKEN`     | **the open item** — cannot be minted through the connection; see below             |
 
 `main.yml` then publishes on every push to `main`, after the gates and `push-audit`, to the
 project's production branch — which is what owns the durable `<project>.pages.dev` hostname.
 No code change at any step.
 
-This table is the **CI-owned** path. The board has chosen the other one (below), where the
-credential lives on the Paperclip connection instead of in a repo secret. GitHub Actions
-cannot read that, so on the chosen path `DEPLOY_PROVIDER` stays `none` and the publish is
-run by the Platform Engineer from a heartbeat. **The URL is durable either way — the Pages
-project owns the hostname — but only the CI path refreshes it automatically on push.**
+This table is the **CI-owned** path, and it is **not** what is running. The board chose the
+other one, where the credential lives on the Paperclip connection instead of in a repo
+secret; GitHub Actions cannot read that, so `DEPLOY_PROVIDER` stays `none` and the publish
+is run by the Platform Engineer from a heartbeat. **The URL is durable either way — the
+Pages project owns the hostname — but only the CI path refreshes it automatically on push.**
 Moving from one to the other later is a settings change, not a code change.
 
-#### What is blocking it, precisely
+#### How it is published today
 
-The connection the board made on 29 Sep **did** survive, and reads through it worked:
-`GET /accounts` returned the board's account (created `2026-09-29T19:47:07Z`) and
-`GET /accounts/{id}/pages/projects` returned an empty list. So the board's premise was
-correct.
+The link is **live**: <https://playhall-web-staging.pages.dev>. The board re-authorised the
+Cloudflare connection with its `mcp-api-key` method on 2026-09-30, which granted the Pages
+write the previous read-only OAuth grant lacked, and the Platform Engineer published
+`apps/web` from a heartbeat.
 
-**But the grant was read-only.** Measured against the live connection on 2026-09-30:
+The publish is **not** `wrangler pages deploy`, and the reason is worth recording because
+the next person will reach for wrangler first and it cannot work here:
 
-| Call                                                 | Result                                           |
-| ---------------------------------------------------- | ------------------------------------------------ |
-| `GET /accounts`, `GET .../pages/projects`            | `200`                                            |
-| `POST /accounts/{id}/pages/projects`                 | `10000 Authentication error`                     |
-| `POST .../workers/scripts/{n}/assets-upload-session` | `No access to the specified resource`            |
-| `GET /user/tokens/permission_groups`                 | `9109 Unauthorized to access requested resource` |
+| Capability through the connection    | Result                                           |
+| ------------------------------------ | ------------------------------------------------ |
+| `POST /accounts/{id}/pages/projects` | `200` — the project is created this way          |
+| `POST .../pages/.../deployments`     | `200` — the deployment is created this way       |
+| `GET /user/tokens/permission_groups` | `9109 Unauthorized to access requested resource` |
+| `POST /user/tokens`                  | `9109` — **no API token can be minted**          |
 
-The account user is a Super Administrator, so this is the OAuth grant on the MCP
-connection, not the account. No Pages project can be created through it, and no API token
-can be minted through it either. There is also no Cloudflare↔GitHub connection on the
-account (`GET /accounts/{id}/pages/connections` → `[]`), so the git-integrated Pages path
-is not available without an interactive install.
+No mintable API token means no `CLOUDFLARE_API_TOKEN`, so neither wrangler nor CI can
+authenticate. The credential exists only inside the connection's MCP session. So the deploy
+uses the **Pages Direct Upload API** directly — `GET .../upload-token` for a 30-minute JWT,
+`POST /pages/assets/upload` per file keyed by a 32-hex content hash, `POST
+/pages/assets/upsert-hashes`, then a deployment created from a `path → hash` manifest.
 
-The read-only OAuth grant then **lapsed**: later the same day `connections_search` returned
-`state: "needs_user_action"` with a null `connectionId`, and a call through the Cloudflare
-MCP server failed with `session expired`. So the connection needs re-establishing regardless
-of scope — which makes re-authorising it with a write-scoped credential strictly the cheaper
-of the two options, not an extra step.
+One wrinkle, because it cost time: the MCP session's sandbox can only `fetch` **`api.cloudflare.com`**
+— every other host, including `raw.githubusercontent.com` and `*.pages.dev`, is refused —
+and its request proxy mangles the `Authorization` header on `/pages/assets/*`, so the upload
+JWT is rejected with `8000013` when used from inside the sandbox. Assets are therefore
+relayed through a short-lived Worker that holds the JWT as a secret binding and calls the
+asset API directly. **The relay is torn down at the end of the deploy** — after the run,
+`GET /accounts/{id}/workers/scripts` is empty and the only resource on the account is the
+one Pages project. Keeping the JWT on the Worker is deliberate: it keeps a live credential
+out of the agent transcript and out of this repo.
 
-Either of two things unblocks it, both $0 and neither a signup:
+Consequence of the chosen path, and the one thing to remember: **the link is durable but
+its content is only as fresh as the last agent-run publish.** The Pages project owns the
+hostname, so the URL never changes — but CI does not redeploy it on push, because Actions
+cannot read a credential held on a Paperclip connection. `DEPLOY_PROVIDER` stays `none`.
 
-1. **Re-authorise the Cloudflare connection using its `mcp-api-key` method** with a
-   Pages-Edit token. **This is the board's choice (2026-09-30).** The credential stays in
-   Paperclip, never in the repo, and the Platform Engineer publishes from a heartbeat.
-   Consequence: the staging link is durable but its content is only as fresh as the last
-   agent-run publish — CI does not redeploy it on push.
-2. **A scoped API token, set as the `CLOUDFLARE_API_TOKEN` repo secret** — Cloudflare
-   dashboard → My Profile → API Tokens → Create Token, permission **Account › Cloudflare
-   Pages › Edit**, scoped to this one account, nothing else. This is what the
-   ["Switching it on"](#switching-it-on) table is written against, and the only path that
-   makes the deploy reproducible in CI. Worth adding later even on top of (1).
+Adding the `CLOUDFLARE_API_TOKEN` repo secret — Cloudflare dashboard → My Profile → API
+Tokens → Create Token, permission **Account › Cloudflare Pages › Edit**, scoped to this one
+account — is still worth doing on top, and is the only thing that makes the deploy
+reproducible in CI. It is a settings change, not a code change: the
+["Switching it on"](#switching-it-on) table is written against it.
 
-Until one of them lands, `DEPLOY_PROVIDER` stays `none`, the pipeline keeps reporting
-`not_configured`, and **M0 AC5's staging-link half is not met.** What is verified today is
-everything on this side of the credential: the export builds, and served locally it returns
-`200 text/html` on `/`, `200` on the hashed CSS chunk, and the `404.html` fallback on an
-unknown path.
+Verified on the live URL: `/` returns `200 text/html` and is **byte-identical** to the
+locally built `apps/web/out/index.html` (`sha256 74b00b47…`), `/dev/settings-form` returns
+`200`, an unknown path returns the `404.html` fallback, the hashed CSS chunk returns
+`200 text/css`, and `/api/health` returns `404` — expected, and explained above.
 
 ## What is still needed
 
@@ -425,10 +428,10 @@ the model and the board answered — but the answer was _authority without permi
    could not tell which change they were looking at. The gap is recorded rather than
    engineered around — and the `cloudflare-pages` adapter refuses `preview` so that the
    AC5 staging link cannot turn into a back door for it.
-4. **M0 AC5's staging-link half is also not met yet**, but for a smaller reason than the
-   rest of this list: one $0 Pages-Edit credential, not a board decision — the board has
-   already chosen how to supply it and a connection card is pending with the account holder.
-   See
+4. **M0 AC5's staging-link half is met** — <https://playhall-web-staging.pages.dev> serves
+   `apps/web` at $0. What remains on this item is not the link but its refresh: no API
+   token can be minted through the connection, so CI cannot republish on push and each
+   update is an agent-run publish. See
    [The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
 
 GitHub Actions itself is healthy again — [PER-55](/PER/issues/PER-55) (an account-level
