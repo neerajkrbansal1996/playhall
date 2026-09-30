@@ -20,7 +20,7 @@
     "boundaries:graph": "depcruise apps packages games --config .dependency-cruiser.cjs --output-type dot",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r test",
+    "test": "node scripts/ci/assert-test-scripts.mjs && pnpm -r test",
     "clean": "pnpm -r clean",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",

@@ -81,7 +81,7 @@ registry of gate name → root pnpm script → owning issue.
 | `lint`        | `pnpm lint`                 | Live.                                                                                              |
 | `typecheck`   | `pnpm typecheck`            | Live.                                                                                              |
 | `boundaries`  | `pnpm boundaries`           | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                 | Live.                                                                                              |
+| `unit`        | `pnpm test`                 | Live. Precondition check (below), then `pnpm -r test`.                                             |
 | `coverage`    | `pnpm test:coverage`        | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
 | `testkit`     | `pnpm test:testkit`         | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
 | `integration` | `pnpm test:integration`     | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
@@ -99,6 +99,35 @@ implemented".
 A gate name that is not in the registry exits `2`. That check uses `Object.hasOwn`, not a
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
 read an undefined `script`, land in the PENDING branch and pass as "owner: unassigned".
+
+### Why `unit` has a precondition
+
+`pnpm -r test` runs the script only in the packages that **declare** it, and exits `0` for
+the packages that do not. A package with zero tests is therefore indistinguishable from a
+passing one, so the gate's reach is whatever the branch happens to define rather than a
+floor. Measured on `main` @ `57162da` ([PER-99](/PER/issues/PER-99)): nine workspace
+projects in scope, five produced any test output, job conclusion `success` — and two of the
+packages the standards hold to `>= 80%`, `platform-core` and `netcode`, declared no `test`
+script at all.
+
+Root `pnpm test` therefore runs `scripts/ci/assert-test-scripts.mjs` first. It fails when:
+
+- a package under the `>= 80%` rule (`game-sdk`, `platform-core`, `netcode`, and every
+  `games/**` package, enrolled by directory so a new game needs no edit here) declares no
+  `test` script, or declares one but ships no spec files — an empty vitest run under
+  `passWithNoTests` reads exactly like a passing one;
+- any other package carries `*.test.*` files that no `test` script runs;
+- its own PENDING ledger has gone stale.
+
+This is about **presence**, not percentage. The percentage is `coverage`'s job, and the two
+failures deserve different messages: "nobody is measuring this package" is not "this package
+is at 41%", and it is the first one that hides.
+
+Known gaps sit in the script's `PENDING` map with the issue that closes them, using the same
+contract as the gate registry: they log a `::notice`, pass, and fail under
+`CI_STRICT_GATES=1`. A pending entry that is no longer true **fails**, so the ledger cannot
+become a second silent exemption — the mechanism caught `packages/game-sdk` the first time
+it ran, hours after its spec files landed.
 
 ### Why `coverage` is its own gate
 
