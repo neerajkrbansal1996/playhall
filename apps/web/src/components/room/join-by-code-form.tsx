@@ -111,7 +111,7 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
           <p
             id={messageId}
             role="alert"
-            className="flex items-center gap-1.5 text-sm text-destructive"
+            className="flex items-center gap-1.5 text-sm text-destructive [&_svg]:size-4"
           >
             <AlertCircle aria-hidden="true" />
             {message}

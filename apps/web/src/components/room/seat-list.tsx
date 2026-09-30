@@ -56,7 +56,12 @@ export function SeatList({ seats, spectatorCount, className }: SeatListProps) {
             data-occupied={seat.occupantName ? 'true' : 'false'}
             className="flex items-center gap-3 rounded-md border bg-card px-3 py-2"
           >
-            <span className="text-muted-foreground" aria-hidden="true">
+            {/*
+              lucide ships 24px icons and nothing here is inside a Button, so
+              every icon needs an explicit size or it dwarfs the label it sits
+              next to.
+            */}
+            <span className="text-muted-foreground [&_svg]:size-5" aria-hidden="true">
               {seat.occupantName ? <UserRound /> : <Circle />}
             </span>
 
@@ -78,7 +83,7 @@ export function SeatList({ seats, spectatorCount, className }: SeatListProps) {
         // parse "2 watching" and re-derive the count from a sentence we are
         // free to reword.
         data-count={String(spectatorCount)}
-        className="mt-3 flex items-center gap-1.5 text-sm text-muted-foreground"
+        className="mt-3 flex items-center gap-1.5 text-sm text-muted-foreground [&_svg]:size-4"
       >
         <Eye aria-hidden="true" />
         {spectatorCount === 1 ? '1 spectator' : `${spectatorCount} spectators`}
@@ -95,7 +100,7 @@ function SeatPresence({ seat }: { readonly seat: SeatView }) {
 
   if (!seat.connected) {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+      <span className="flex shrink-0 items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 [&_svg]:size-4">
         <WifiOff aria-hidden="true" />
         Reconnecting…
       </span>
@@ -103,7 +108,7 @@ function SeatPresence({ seat }: { readonly seat: SeatView }) {
   }
 
   return (
-    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground [&_svg]:size-2.5">
       <Circle aria-hidden="true" className="fill-current" />
       Ready
     </span>
