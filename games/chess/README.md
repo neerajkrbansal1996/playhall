@@ -4,15 +4,15 @@ The chess game module. Rules are decided here, on the server; the client only hi
 
 ## Layout
 
-| Path            | What it holds                                                    |
-| --------------- | ---------------------------------------------------------------- |
-| `src/rules/`    | Pure chess: positions, material, end conditions. No match state. |
-| `src/state.ts`  | The match reducer — the one place an action can change a game.   |
-| `src/result.ts` | Endings → the platform's standings shape.                        |
-| `src/view.ts`   | `getViewFor`, including redaction.                               |
-| `src/record.ts` | PGN export.                                                      |
-| `src/settings/` | Lobby settings: schema, presets, form descriptor.                |
-| `src/sdk/`      | **Temporary** shims for `packages/game-sdk` (see below).         |
+| Path            | What it holds                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/rules/`    | Pure chess: positions, material, end conditions. No match state.                                                                                    |
+| `src/state.ts`  | The match reducer — the one place an action can change a game.                                                                                      |
+| `src/result.ts` | Endings → the platform's standings shape.                                                                                                           |
+| `src/view.ts`   | `getViewFor`, including redaction.                                                                                                                  |
+| `src/record.ts` | PGN export.                                                                                                                                         |
+| `src/settings/` | Lobby settings: schema, presets, form descriptor.                                                                                                   |
+| `src/sdk/`      | `contract.ts`, and only that: the module's single, permanent point of contact with `@playhall/game-sdk`. See [The SDK boundary](#the-sdk-boundary). |
 
 ## Design rules this package holds itself to
 
@@ -74,7 +74,7 @@ no platform internals, no other game.
 ## Commands
 
 ```sh
-pnpm --filter @playhall/chess test        # 238 tests
+pnpm --filter @playhall/chess test        # the whole suite; vitest prints the count
 pnpm --filter @playhall/chess typecheck   # src and tests
 pnpm --filter @playhall/chess test:coverage
 ```
