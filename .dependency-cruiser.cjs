@@ -123,9 +123,20 @@ const GENERATED_REGISTRY = '^apps/[^/]+/src/games\\.generated\\.ts$'
 const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
 
 /**
- * The server framework. ADR-0001 §4 (rev 4) adopts Colyseus for `apps/realtime` by board
- * decision; ADR-0002 §2 keeps it out of `games/**`. That pairing is the whole point: the
- * platform may pick a framework, a game may never learn which one was picked.
+ * The platform's netcode framework. ADR-0001 §4 (rev 4) adopts Colyseus for `apps/realtime` by
+ * board decision; ADR-0001 §4.2 condition 2 makes "no game imports the framework" binding on that
+ * adoption, and ADR-0002 §2 is where it is enforced. That pairing is the whole point: the platform
+ * may pick a framework, a game may never learn which one was picked.
+ *
+ * This is a **denylist, not an allowlist** (ADR-0002 §2, rev-2 note). A game may depend on any
+ * third-party library it likes; this list names only packages whose presence inside `games/**`
+ * *is* the coupling condition 2 forbids. The asymmetry is deliberate — an allowlist would make
+ * the platform the gatekeeper of every game's library choices, which is a different and much
+ * worse rule.
+ *
+ * The list enumerates Colyseus's *published names*, not the one name the argument happened to be
+ * about (ADR-0002 §2 rev 2.1). There are three, and a pattern derived from the server packages
+ * alone misses the third.
  *
  * Two alternations, because a module's path in the graph depends on whether it resolved:
  *   - `^(colyseus|@colyseus/x)$` — declared but not installed, or imported without being
@@ -139,8 +150,8 @@ const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
  * client-side code reaches for first, so leaving it out would have left the likeliest
  * violation green.
  */
-const COLYSEUS_PACKAGES = 'colyseus|colyseus\\.js|@colyseus/[^/]+'
-const COLYSEUS_MODULES = `^(${COLYSEUS_PACKAGES})$|(^|/)node_modules/(${COLYSEUS_PACKAGES})/`
+const PLATFORM_FRAMEWORK_PACKAGES = 'colyseus|colyseus\\.js|@colyseus/[^/]+'
+const PLATFORM_FRAMEWORK_MODULES = `^(${PLATFORM_FRAMEWORK_PACKAGES})$|(^|/)node_modules/(${PLATFORM_FRAMEWORK_PACKAGES})/`
 
 module.exports = {
   forbidden: [
@@ -156,19 +167,23 @@ module.exports = {
       to: { path: PLATFORM_INTERNALS },
     },
     {
-      name: 'no-game-to-colyseus',
+      name: 'no-platform-framework-in-games',
       severity: 'error',
       comment:
-        "The server framework is a platform choice, never a game's. The board adopted Colyseus " +
-        'for apps/realtime (ADR-0001 §4); exactly one file names it, and that file is an ' +
-        'adapter. A game that imports colyseus or @colyseus/* — most likely @colyseus/schema to ' +
-        'express its state — makes the SDK contract Colyseus-shaped and pins every game to the ' +
-        "platform's netcode framework, which is the coupling the one rule forbids. It also " +
-        'hands the game to Colyseus state sync, which is default-broadcast: a hidden-information ' +
-        'leak is a correctness bug (ADR-0001 §4.5). Keep game state as plain TypeScript and let ' +
-        `${SDK_NAME} carry it.`,
+        'ADR-0001 §4.2 condition 2: no game imports the framework. The board adopted Colyseus ' +
+        'for apps/realtime (ADR-0001 §4 rev 4) on the binding condition that the choice stays ' +
+        'invisible to games — exactly one file names it, and that file is an adapter. A game ' +
+        'that imports colyseus, colyseus.js or @colyseus/* — most likely @colyseus/schema to ' +
+        "express its state — pins every game to the platform's netcode framework and makes the " +
+        'SDK contract Colyseus-shaped, which is the coupling condition 2 forbids. It also hands ' +
+        'the game to Colyseus state sync, which is default-broadcast: a field is visible unless ' +
+        'someone remembers to filter it, so a hidden-information leak becomes the default rather ' +
+        'than a bug (ADR-0001 §4.2 condition 1, §4.5). @colyseus/schema being in the tree is ' +
+        `availability, not permission. Keep game state as plain TypeScript and let ${SDK_NAME} ` +
+        'carry it; if you believe you need the capability, that is an SDK ADR for the CTO, not a ' +
+        'widening of this rule.',
       from: { path: '^games/' },
-      to: { path: COLYSEUS_MODULES },
+      to: { path: PLATFORM_FRAMEWORK_MODULES },
     },
     {
       name: 'no-game-to-app',
@@ -311,9 +326,9 @@ module.exports = {
      * `doNotFollow` keeps a third-party package in the graph as a leaf, so an edge *to* it is
      * visible to the rules; `exclude` deletes the module, and with it every edge pointing at it.
      * Excluding it left the gate unable to express any rule about a game's third-party
-     * dependencies at all — `no-game-to-colyseus` would have passed silently on the one case
-     * that matters most, a game importing an installed `@colyseus/schema`. Proven by the
-     * `no-game-to-colyseus.fixture` negative test, which fails without this line.
+     * dependencies at all — `no-platform-framework-in-games` would have passed silently on the
+     * one case that matters most, a game importing an installed `@colyseus/schema`. Proven by
+     * the `no-platform-framework-in-games.fixture` negative test, which fails without this line.
      *
      * Cost is bounded: each third-party package adds one leaf node and is never traversed.
      */

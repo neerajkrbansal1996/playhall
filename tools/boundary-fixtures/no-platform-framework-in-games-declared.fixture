@@ -1,0 +1,26 @@
+# expect: no-platform-framework-in-games
+# tool: declared-deps
+# why: the manifest half — literally `cd games/chess && pnpm add colyseus`, the easiest way to break ADR-0001 §4.2 condition 2 by accident, which produces no import edge and so is invisible to dependency-cruiser
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@scope/game-sdk": "workspace:*",
+    "colyseus": "^0.16.0",
+    "colyseus.js": "^0.16.0",
+    "@colyseus/schema": "^3.0.0",
+    "zod": "^3.24.1"
+  }
+}
+=== file: games/fx-a/src/index.ts ===
+// Deliberately clean. The violation is the manifest above and nothing else: a declaration with
+// no import yet is the state `pnpm add` leaves behind, and it is the state ADR-0002 §5 says must
+// be proven on its own. All three of Colyseus' published names are declared, because the manifest
+// half denylists names directly and a list proven on one of three names is proven on one
+// (ADR-0002 §2 rev 2.1). `zod` stays to show the denylist is a denylist — a game may depend on
+// any third-party library that is not a platform decision in disguise.
+export const NAME = 'fx-a'

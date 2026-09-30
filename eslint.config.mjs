@@ -118,11 +118,12 @@ export default tseslint.config(
               // `colyseus`, so it needs its own entry in every place this list is written.
               group: ['colyseus', 'colyseus.js', '@colyseus/*'],
               message:
-                "The server framework is a platform choice, never a game's. Colyseus is adopted " +
-                'for apps/realtime only (ADR-0001 §4); a game that names it pins every game to ' +
-                "the platform's netcode and opts into default-broadcast state sync, where a " +
-                'field is visible unless someone remembers to filter it. Keep game state as ' +
-                'plain TypeScript. Enforced for real by `pnpm boundaries` (ADR-0002).',
+                'no-platform-framework-in-games — ADR-0001 §4.2 condition 2: no game imports the ' +
+                'framework. Colyseus is adopted for apps/realtime only (ADR-0001 §4 rev 4); a ' +
+                "game that names it pins every game to the platform's netcode and opts into " +
+                'default-broadcast state sync, where a field is visible unless someone remembers ' +
+                'to filter it. Keep game state as plain TypeScript. Enforced for real by ' +
+                '`pnpm boundaries` (ADR-0002) — same rule name, so the editor and CI agree.',
             },
           ],
           paths: [],

@@ -1,4 +1,4 @@
-# expect: no-game-to-colyseus
+# expect: no-platform-framework-in-games
 # why: the same violation written before the package is installed, where the module resolves to nothing and a path-only rule would silently pass
 === file: games/fx-a/src/index.ts ===
 // `@colyseus/core` is deliberately NOT stubbed in the mini repo, so this import does not

@@ -22,7 +22,7 @@ import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { loadFixtures, type Fixture } from '../src/fixtures.js'
 import { applyScope, createMiniRepo, workspaceScope } from '../src/mini-repo.js'
@@ -66,15 +66,24 @@ const scope = workspaceScope(repoRoot)
 
 /**
  * Rules `check-declared-deps.mjs` enforces, mapped to the explanation it prints for each.
- * `no-illegal-declared-dep` lives there only; `no-game-to-colyseus` is enforced in both places —
- * dependency-cruiser catches the import, the script catches the manifest declaration — so it
- * appears here *and* in the dependency-cruiser rule set, with a fixture for each half.
+ * `no-illegal-declared-dep` lives there only; `no-platform-framework-in-games` is enforced in both
+ * places — dependency-cruiser catches the import, the script catches the manifest declaration — so
+ * it appears here *and* in the dependency-cruiser rule set, with a fixture for each half.
  */
 const SCRIPT_ENFORCED_EXPLANATIONS: Record<string, string> = {
   'no-illegal-declared-dep': `A game package may declare exactly one ${scope} dependency`,
-  'no-game-to-colyseus': 'The server framework is a platform choice, never a game',
+  'no-platform-framework-in-games': 'ADR-0001 §4.2 condition 2: no game imports the framework',
 }
 const SCRIPT_ENFORCED_RULES = Object.keys(SCRIPT_ENFORCED_EXPLANATIONS)
+
+/**
+ * Every rule name that can appear as `error <name>` in either checker's output. The precision
+ * assertion below has to consider both sets, not just dependency-cruiser's: a `declared-deps`
+ * fixture that tripped `no-illegal-declared-dep` as well as the rule it targets would otherwise
+ * pass, because `no-illegal-declared-dep` is not a dependency-cruiser rule and so is absent from
+ * `errorRules`. That is exactly the imprecision this assertion exists to catch.
+ */
+const ALL_ENFORCED_RULES = [...new Set([...errorRules, ...SCRIPT_ENFORCED_RULES])]
 
 interface RunResult {
   readonly status: number
@@ -131,7 +140,7 @@ function run(fixture: Fixture): RunResult {
 describe('boundary rule set', () => {
   it('has a fixture for every error-level rule', () => {
     const covered = new Set(fixtures.map((fixture) => fixture.expectRule))
-    const uncovered = [...errorRules, ...SCRIPT_ENFORCED_RULES].filter((rule) => !covered.has(rule))
+    const uncovered = ALL_ENFORCED_RULES.filter((rule) => !covered.has(rule))
     expect(
       uncovered,
       'every error-level rule needs a fixture in tools/boundary-fixtures — an unproven rule is a rule that may not fire at all',
@@ -139,7 +148,7 @@ describe('boundary rule set', () => {
   })
 
   it('has no fixture for a rule that no longer exists', () => {
-    const known = new Set([...errorRules, ...SCRIPT_ENFORCED_RULES])
+    const known = new Set(ALL_ENFORCED_RULES)
     const stale = fixtures
       .filter((fixture) => fixture.expectRule !== null && !known.has(fixture.expectRule))
       .map((fixture) => fixture.name)
@@ -165,10 +174,19 @@ describe.each(fixtures.filter((fixture) => fixture.expectRule !== null))(
   'illegal import: $name',
   (fixture) => {
     const expectedRule = fixture.expectRule as string
+
+    // One cruise per fixture, in `beforeAll` rather than assigned by the first `it`: three of the
+    // four assertions below read `result`, and a vitest run that filters or reorders tests (`-t`,
+    // `.only`, a future `sequence.shuffle`) would leave them reading an unassigned variable. The
+    // fixture is also the expensive part — a scratch repo plus a real depcruise — so running it
+    // once is both correct and faster.
     let result: RunResult
 
-    it(`fails the build (${fixture.why})`, () => {
+    beforeAll(() => {
       result = run(fixture)
+    })
+
+    it(`fails the build (${fixture.why})`, () => {
       expect(result.status, `expected a non-zero exit code, got ${result.status}`).not.toBe(0)
     })
 
@@ -177,7 +195,7 @@ describe.each(fixtures.filter((fixture) => fixture.expectRule !== null))(
     })
 
     it('does not trip any other error-level rule', () => {
-      const alsoFired = errorRules.filter(
+      const alsoFired = ALL_ENFORCED_RULES.filter(
         (rule) => rule !== expectedRule && result.output.includes(`error ${rule}`),
       )
       expect(alsoFired, `fixture is not precise; it also fired: ${alsoFired.join(', ')}`).toEqual(
