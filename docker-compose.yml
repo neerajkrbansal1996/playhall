@@ -23,8 +23,10 @@ services:
     image: redis:7-alpine
     container_name: playhall-redis
     restart: unless-stopped
-    # Live room state is authoritative in Redis between snapshots, so eviction
-    # must never silently drop a room: fail writes instead of evicting keys.
+    # Redis is a cache, never the tier of record (ADR-0001 §6.1): a lost keyspace
+    # costs a rehydrate from the Postgres match log, never a match. These flags are
+    # belt-and-braces to keep local dev quiet, NOT a correctness dependency — do not
+    # reintroduce one, and do not treat a managed tier lacking them as disqualified.
     command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
     ports:
       - '6379:6379'
