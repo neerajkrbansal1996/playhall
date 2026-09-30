@@ -46,7 +46,7 @@ process immediately rather than surfacing as a confusing runtime error later.
 | `GIT_SHA`                  | yes in staging/prod | `0000000`                      | CI injects `github.sha`. Becomes the release name                                                               |
 | `LOG_LEVEL`                | no                  | `debug` (`info` in production) | Host config; raise temporarily to debug an incident                                                             |
 | `LOG_SAMPLE_RATE`          | no                  | `1`                            | Host config. Fraction of **non-lifecycle** events kept                                                          |
-| `SENTRY_DSN`               | no                  | unset                          | Sentry project `playhall-realtime`. Injected, not committed                                                     |
+| `SENTRY_DSN`               | no                  | unset                          | Sentry project `playhall-realtime` — value in §3.1                                                              |
 | `ENABLE_DEBUG_THROW_ROUTE` | no                  | `false`                        | `true` on staging only, to evidence the source-map pipeline. **Never production**                               |
 
 ## 3. `apps/web`
@@ -58,25 +58,58 @@ process immediately rather than surfacing as a confusing runtime error later.
 | `NEXT_PUBLIC_BRAND_DOMAIN` | no                  | empty                   | Same                                                                              |
 | `DEPLOY_ENV`               | yes in staging/prod | `development`           | Same source as realtime                                                           |
 | `GIT_SHA`                  | yes in staging/prod | `0000000`               | CI injects `github.sha`                                                           |
-| `NEXT_PUBLIC_SENTRY_DSN`   | no                  | unset                   | Sentry project `playhall-web`. Public by design (browser ingest)                  |
+| `NEXT_PUBLIC_SENTRY_DSN`   | no                  | unset                   | Sentry project `playhall-web` — value in §3.1                                     |
 | `SENTRY_AUTH_TOKEN`        | CI only             | —                       | **Secret.** CI only, never in a runtime environment or a browser bundle           |
 
 `NEXT_PUBLIC_*` values are inlined into the client bundle. Nothing secret may ever carry
 that prefix. A Sentry DSN is a write-only ingest key, so it is safe there; an auth token
 is not, and lives only in CI.
 
+### 3.1 The DSNs
+
+Org `hashtrust-tz` (US region, `https://us.sentry.io`), team `playhall`, one project per
+service. A DSN grants **write-only ingest** — it cannot read an event back, list an issue
+or touch another project — so it belongs in config, in the open, not in secret storage.
+The web value ships inside the browser bundle by design; treating it as a secret would be
+theatre.
+
+| Service         | Variable                 | Value                                                                                             |
+| --------------- | ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `apps/web`      | `NEXT_PUBLIC_SENTRY_DSN` | `https://f9dac62ce1e63ffbaba975d070e81a2c@o4511157987573760.ingest.us.sentry.io/4512173853573120` |
+| `apps/realtime` | `SENTRY_DSN`             | `https://57c2b07e74de89106179e193f7cfa82a@o4511157987573760.ingest.us.sentry.io/4512173853966336` |
+
+Set in staging and production host config. **Deliberately unset in `development`**: a
+laptop reporting into a free-tier quota shared with an unrelated product spends someone
+else's headroom, and the logging fallback already makes the error visible locally.
+
 ## 4. CI-only
 
-| Variable            | Used by                                 | Source                                                                                                                                                |
-| ------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SENTRY_AUTH_TOKEN` | `sentry-cli` release + sourcemap upload | Paperclip secret `sentry_auth_token`, tracked on [PER-40](/PER/issues/PER-40). Scopes `org:read`, `project:read`, `project:releases`, `project:write` |
-| `SENTRY_ORG`        | `sentry-cli`                            | `hashtrust-tz` (shared org, team `playhall`)                                                                                                          |
-| `SENTRY_PROJECT`    | `sentry-cli`                            | `playhall-web` or `playhall-realtime`                                                                                                                 |
+| Variable            | Used by                              | Source                                                                             |
+| ------------------- | ------------------------------------ | ---------------------------------------------------------------------------------- |
+| `SENTRY_AUTH_TOKEN` | Release creation + source-map upload | Paperclip secret `sentry_auth_token` (PER-40), injected as an env var. **Secret.** |
+| `SENTRY_ORG`        | Same                                 | `hashtrust-tz` (shared org, team `playhall`)                                       |
+| `SENTRY_PROJECT`    | Same                                 | `playhall-web` or `playhall-realtime`                                              |
+
+**Measured scope coverage** (probed 2026-09-30, not assumed — the scopes a token was
+requested with and the scopes it has are different facts):
+
+| Endpoint                                        | Result | Needed for                      |
+| ----------------------------------------------- | ------ | ------------------------------- |
+| `POST /organizations/{org}/releases/`           | `201`  | Create the release              |
+| `POST /organizations/{org}/releases/{v}/files/` | `201`  | Upload bundle + source map      |
+| `GET /organizations/{org}/`                     | `403`  | — (`org:read`, not granted)     |
+| `GET /organizations/{org}/projects/`            | `403`  | — (`project:read`, not granted) |
+
+The token carries `project:releases` and not the two read scopes. That is **sufficient**:
+the release-and-upload path is the whole of what CI needs, and it is the path the
+acceptance criterion tests. Do not add a `sentry-cli info` style preflight to CI — it
+would fail on a token that is otherwise entirely adequate. Note also that Sentry auth
+token scopes are **fixed at creation**; widening them means minting a new token, not
+editing this one.
 
 Source-map upload is **gated on `SENTRY_AUTH_TOKEN` being present** and skipped with a
-loud warning when it is absent, so CI is not red on a missing credential. Skipped upload
-means minified stack traces; that is a known open criterion on
-[PER-7](/PER/issues/PER-7), not a silently-disabled step.
+loud warning when it is absent, so CI is not red on a missing credential — never silently
+disabled.
 
 ---
 
