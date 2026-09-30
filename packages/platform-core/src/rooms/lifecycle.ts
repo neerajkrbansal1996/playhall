@@ -46,6 +46,18 @@ export interface RoomLifecyclePolicy {
   readonly ttlGraceMs: number
 }
 
+/**
+ * The policy this platform ships with. The numbers in the table above.
+ *
+ * Every function below takes `policy` as a **required** parameter rather than
+ * defaulting to this. That is deliberate and the default is not coming back:
+ * an optional policy is how a caller silently computes a deadline under the
+ * shipped numbers while the rest of the system runs a configured policy, and
+ * the symptom is "the lifecycle timers are configured and nothing ever
+ * expires" — a wiring bug that no test catches unless it varies the policy.
+ * Required makes the next occurrence a typecheck error instead. Pass this
+ * constant explicitly when you do want the shipped numbers.
+ */
 export const DEFAULT_ROOM_LIFECYCLE: RoomLifecyclePolicy = Object.freeze({
   noOpponentMs: 30 * 60_000,
   emptyMs: 5 * 60_000,
@@ -102,10 +114,7 @@ interface Candidate {
  * whole list rather than just the winner keeps the precedence visible and
  * testable.
  */
-export function roomDeadlines(
-  room: Room,
-  policy: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
-): readonly Candidate[] {
+export function roomDeadlines(room: Room, policy: RoomLifecyclePolicy): readonly Candidate[] {
   // A closed room has exactly one deadline left: its own removal. Returning
   // `[]` here would take it out of the sweeper's range query entirely, which
   // is how a tombstone becomes a leaked key.
@@ -143,10 +152,7 @@ export function roomDeadlines(
 }
 
 /** The instant at which this room next needs the sweeper's attention. */
-export function nextRoomDeadline(
-  room: Room,
-  policy: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
-): number | null {
+export function nextRoomDeadline(room: Room, policy: RoomLifecyclePolicy): number | null {
   return roomDeadlines(room, policy)[0]?.at ?? null
 }
 
@@ -154,7 +160,7 @@ export function nextRoomDeadline(
 export function evaluateRoomLifecycle(
   room: Room,
   now: number,
-  policy: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
+  policy: RoomLifecyclePolicy,
 ): RoomLifecycleAction {
   const candidates = roomDeadlines(room, policy)
   const due = candidates.find((candidate) => candidate.at <= now)
@@ -182,11 +188,7 @@ export function evaluateRoomLifecycle(
  * loses its sweeper entry. The sweeper refreshes the TTL whenever it touches
  * the room, so a long match is never truncated.
  */
-export function roomKeyTtlMs(
-  room: Room,
-  now: number,
-  policy: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
-): number {
+export function roomKeyTtlMs(room: Room, now: number, policy: RoomLifecyclePolicy): number {
   const deadline = nextRoomDeadline(room, policy)
   const floor = policy.noOpponentMs + policy.ttlGraceMs
   if (deadline === null) return floor

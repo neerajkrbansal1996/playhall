@@ -32,11 +32,7 @@
 import { normalizeRoomCode } from '@playhall/shared'
 import type { GameCatalogEntry } from '@playhall/game-sdk'
 import { isValidRoomCode } from './code.js'
-import {
-  DEFAULT_ROOM_LIFECYCLE,
-  type RoomLifecyclePolicy,
-  evaluateRoomLifecycle,
-} from './lifecycle.js'
+import { type RoomLifecyclePolicy, evaluateRoomLifecycle } from './lifecycle.js'
 import { type Room, type RoomRevision, freeSeatIndex, reviseRoom, seatIndexOf } from './types.js'
 
 export const JOIN_REJECTION_CODES = [
@@ -118,7 +114,12 @@ export interface ResolveJoinInput {
   /** Null when the registry cannot resolve the room's game (unregistered, removed). */
   readonly game: GameCatalogEntry | null
   readonly now: number
-  readonly lifecycle?: RoomLifecyclePolicy
+  /**
+   * Required, not optional. A join that resolves under the shipped deadlines
+   * while the store sweeps under a configured policy admits players to rooms
+   * the sweeper considers dead — see `DEFAULT_ROOM_LIFECYCLE`.
+   */
+  readonly lifecycle: RoomLifecyclePolicy
 }
 
 /** Pure. Decides the outcome; applying it to the room is `applyJoin`. */
@@ -127,7 +128,7 @@ export function resolveJoin(input: ResolveJoinInput): JoinOutcome {
   if (room === null) return rejectJoin('room_not_found')
 
   if (room.status === 'closed') return rejectJoin('room_expired')
-  const lifecycle = evaluateRoomLifecycle(room, now, input.lifecycle ?? DEFAULT_ROOM_LIFECYCLE)
+  const lifecycle = evaluateRoomLifecycle(room, now, input.lifecycle)
   if (lifecycle.action !== 'keep') return rejectJoin('room_expired')
 
   if (game === null) return rejectJoin('game_unavailable')

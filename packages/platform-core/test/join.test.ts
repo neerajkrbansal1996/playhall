@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { toCatalogEntry, type GameCatalogEntry } from '@playhall/game-sdk'
 import {
   JOIN_REJECTION_CODES,
+  type ResolveJoinInput,
   applyJoin,
   canonicalizeRoomCode,
   chargesFailedJoinBudget,
   isTerminalRejection,
   resolveJoin,
 } from '../src/rooms/join.js'
-import { DEFAULT_ROOM_LIFECYCLE } from '../src/rooms/lifecycle.js'
+import { DEFAULT_ROOM_LIFECYCLE, type RoomLifecyclePolicy } from '../src/rooms/lifecycle.js'
 import { seatIndexOf } from '../src/rooms/types.js'
 import { makeGame } from './fixtures/games.js'
 import { T0, makeRoom } from './fixtures/rooms.js'
@@ -19,6 +20,19 @@ const noSpectators: GameCatalogEntry = toCatalogEntry(
 )
 
 const NOW = T0 + 60_000
+
+/**
+ * `resolveJoin` under the shipped deadlines, overridable per call.
+ *
+ * The join matrix is about seats and spectators, not about policy numbers, so
+ * naming the policy at all sixteen call sites would be noise. The cases that
+ * *do* vary it live in `lifecycle.test.ts` and `room-service.test.ts` — the
+ * policy is a required argument on `resolveJoin` itself precisely so a
+ * production caller cannot quietly inherit a default the store disagrees with.
+ */
+function join(input: Omit<ResolveJoinInput, 'lifecycle'> & { lifecycle?: RoomLifecyclePolicy }) {
+  return resolveJoin({ lifecycle: DEFAULT_ROOM_LIFECYCLE, ...input })
+}
 
 describe('code normalisation', () => {
   it('is case-insensitive and trims whitespace', () => {
@@ -57,7 +71,7 @@ describe('code normalisation', () => {
 
 describe('the join matrix', () => {
   it('rejects an unknown room', () => {
-    expect(resolveJoin({ room: null, playerId: 'p', game: spectatable, now: NOW })).toMatchObject({
+    expect(join({ room: null, playerId: 'p', game: spectatable, now: NOW })).toMatchObject({
       kind: 'rejected',
       code: 'room_not_found',
       terminal: true,
@@ -66,7 +80,7 @@ describe('the join matrix', () => {
 
   it('rejects a closed room', () => {
     const room = { ...makeRoom(), status: 'closed' as const }
-    expect(resolveJoin({ room, playerId: 'p', game: spectatable, now: NOW })).toMatchObject({
+    expect(join({ room, playerId: 'p', game: spectatable, now: NOW })).toMatchObject({
       code: 'room_expired',
       terminal: true,
     })
@@ -78,27 +92,27 @@ describe('the join matrix', () => {
     // the same rule rather than letting them into a dead room.
     const room = makeRoom({ presentPlayerIds: ['host'] })
     const past = T0 + DEFAULT_ROOM_LIFECYCLE.noOpponentMs + 1
-    expect(resolveJoin({ room, playerId: 'p', game: spectatable, now: past })).toMatchObject({
+    expect(join({ room, playerId: 'p', game: spectatable, now: past })).toMatchObject({
       code: 'room_expired',
       terminal: true,
     })
   })
 
   it('rejects a room whose game the registry cannot resolve', () => {
-    expect(resolveJoin({ room: makeRoom(), playerId: 'p', game: null, now: NOW })).toMatchObject({
+    expect(join({ room: makeRoom(), playerId: 'p', game: null, now: NOW })).toMatchObject({
       code: 'game_unavailable',
       terminal: false,
     })
   })
 
   it('takes a free seat in a lobby', () => {
-    const outcome = resolveJoin({ room: makeRoom(), playerId: 'p', game: spectatable, now: NOW })
+    const outcome = join({ room: makeRoom(), playerId: 'p', game: spectatable, now: NOW })
     expect(outcome).toEqual({ kind: 'seated', seatIndex: 1, isRejoin: false })
   })
 
   it('returns the same seat to a player who already holds one', () => {
     const room = makeRoom({ seats: ['host', 'guest'] })
-    expect(resolveJoin({ room, playerId: 'guest', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'guest', game: spectatable, now: NOW })).toEqual({
       kind: 'rejoined',
       seatIndex: 1,
       isRejoin: true,
@@ -107,7 +121,7 @@ describe('the join matrix', () => {
 
   it('returns a spectator to spectating rather than seating them', () => {
     const room = makeRoom({ seats: ['host', null], spectatorPlayerIds: ['watcher'] })
-    expect(resolveJoin({ room, playerId: 'watcher', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'watcher', game: spectatable, now: NOW })).toEqual({
       kind: 'spectating',
       isRejoin: true,
     })
@@ -115,7 +129,7 @@ describe('the join matrix', () => {
 
   it('spectates when the room is full and the game allows it', () => {
     const room = makeRoom({ seats: ['host', 'guest'], secondPlayerJoinedAt: T0 })
-    expect(resolveJoin({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
       kind: 'spectating',
       isRejoin: false,
     })
@@ -123,7 +137,7 @@ describe('the join matrix', () => {
 
   it('rejects as full when the game forbids spectators', () => {
     const room = makeRoom({ seats: ['host', 'guest'], secondPlayerJoinedAt: T0 })
-    expect(resolveJoin({ room, playerId: 'p', game: noSpectators, now: NOW })).toMatchObject({
+    expect(join({ room, playerId: 'p', game: noSpectators, now: NOW })).toMatchObject({
       code: 'room_full',
       terminal: false,
     })
@@ -137,7 +151,7 @@ describe('the join matrix', () => {
       seats: ['host', null],
       secondPlayerJoinedAt: T0,
     })
-    expect(resolveJoin({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
       kind: 'spectating',
       isRejoin: false,
     })
@@ -150,7 +164,7 @@ describe('the join matrix', () => {
       secondPlayerJoinedAt: T0,
       finishedAt: NOW - 1000,
     })
-    expect(resolveJoin({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'p', game: spectatable, now: NOW })).toEqual({
       kind: 'seated',
       seatIndex: 1,
       isRejoin: false,
@@ -164,7 +178,7 @@ describe('the join matrix', () => {
       secondPlayerJoinedAt: T0,
       presentPlayerIds: ['host'],
     })
-    expect(resolveJoin({ room, playerId: 'guest', game: spectatable, now: NOW })).toEqual({
+    expect(join({ room, playerId: 'guest', game: spectatable, now: NOW })).toEqual({
       kind: 'rejoined',
       seatIndex: 1,
       isRejoin: true,
@@ -194,7 +208,7 @@ describe('terminal classification', () => {
 describe('applyJoin', () => {
   it('seats the player, marks them present and clears the empty timer', () => {
     const room = makeRoom({ presentPlayerIds: [], emptySince: T0 + 1000 })
-    const outcome = resolveJoin({ room, playerId: 'guest', game: spectatable, now: NOW })
+    const outcome = join({ room, playerId: 'guest', game: spectatable, now: NOW })
     const next = applyJoin(room, 'guest', outcome, NOW)
 
     expect(seatIndexOf(next, 'guest')).toBe(1)
@@ -208,7 +222,7 @@ describe('applyJoin', () => {
     const next = applyJoin(
       room,
       'guest',
-      resolveJoin({ room, playerId: 'guest', game: spectatable, now: NOW }),
+      join({ room, playerId: 'guest', game: spectatable, now: NOW }),
       NOW,
     )
     expect(next.secondPlayerJoinedAt).toBe(NOW)
@@ -219,7 +233,7 @@ describe('applyJoin', () => {
     const next = applyJoin(
       empty,
       'host',
-      resolveJoin({ room: empty, playerId: 'host', game: spectatable, now: NOW }),
+      join({ room: empty, playerId: 'host', game: spectatable, now: NOW }),
       NOW,
     )
     expect(next.secondPlayerJoinedAt).toBeNull()
@@ -230,7 +244,7 @@ describe('applyJoin', () => {
     const next = applyJoin(
       room,
       'third',
-      resolveJoin({ room, playerId: 'third', game: spectatable, now: NOW }),
+      join({ room, playerId: 'third', game: spectatable, now: NOW }),
       NOW,
     )
     expect(next.secondPlayerJoinedAt).toBe(T0 + 5)

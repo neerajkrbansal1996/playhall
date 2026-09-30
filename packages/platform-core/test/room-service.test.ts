@@ -652,7 +652,9 @@ describe('a closed room is terminal', () => {
     // key holding a reserved code.
     const room = await h.store.get(roomId)
     if (room === null) throw new Error('tombstone vanished')
-    expect(nextRoomDeadline(room)).toBe(room.closedAt! + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    expect(nextRoomDeadline(room, DEFAULT_ROOM_LIFECYCLE)).toBe(
+      room.closedAt! + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs,
+    )
 
     h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
     expect(await h.service.sweep()).toMatchObject({ removed: 1 })
@@ -966,7 +968,9 @@ describe('a configured lifecycle policy is the one that runs', () => {
     // The property the two halves have to agree on: the deadline the store
     // scores a room by is the deadline the verdict is taken against.
     expect(nextRoomDeadline(created.room, f.store.lifecycle)).toBe(T0 + FAST.noOpponentMs)
-    expect(nextRoomDeadline(created.room)).not.toBe(T0 + FAST.noOpponentMs)
+    // And the shipped policy really does disagree, so the assertion above is
+    // pinning the configured numbers rather than passing by coincidence.
+    expect(nextRoomDeadline(created.room, DEFAULT_ROOM_LIFECYCLE)).not.toBe(T0 + FAST.noOpponentMs)
   })
 
   it('refuses to start when the service and the store disagree', async () => {
