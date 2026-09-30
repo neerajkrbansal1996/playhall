@@ -224,14 +224,32 @@ function fakeCli(binDir: string, name: string, url: string): void {
   chmodSync(path, 0o755)
 }
 
-function outputs(outputFile: string): Record<string, string> {
-  const parsed: Record<string, string> = {}
+/**
+ * `$GITHUB_OUTPUT` as the composite action would read it back.
+ *
+ * `get` throws on a missing key rather than returning `undefined`: an output
+ * the script never wrote is the failure these cases exist to catch, and
+ * `expect(undefined).toBe('/deploy-stamp.json')` reports it as a wrong value
+ * instead of an absent one.
+ */
+function outputs(outputFile: string): { get: (key: string) => string } {
+  const parsed = new Map<string, string>()
   for (const line of readFileSync(outputFile, 'utf8').split('\n')) {
     if (line === '') continue
     const separator = line.indexOf('=')
-    parsed[line.slice(0, separator)] = line.slice(separator + 1)
+    parsed.set(line.slice(0, separator), line.slice(separator + 1))
   }
-  return parsed
+  return {
+    get(key) {
+      const value = parsed.get(key)
+      if (value === undefined) {
+        throw new Error(
+          `deploy.mjs wrote no "${key}" output. Wrote: ${[...parsed.keys()].join(', ') || '(nothing)'}`,
+        )
+      }
+      return value
+    },
+  }
 }
 
 describe('deploy.mjs declares the path it actually served', () => {
@@ -257,12 +275,12 @@ describe('deploy.mjs declares the path it actually served', () => {
 
     expect(result.status).toBe(0)
     const out = outputs(outputFile)
-    expect(out.status).toBe('deployed')
+    expect(out.get('status')).toBe('deployed')
     // The assertion that is the whole issue: `deployed` opens the probe step's
     // guard, so the path it opens onto must not be the one that 404s.
-    expect(out['probe-path']).toBe('/deploy-stamp.json')
-    expect(out['probe-path']).not.toBe('/api/health')
-    expect(out['probe-commit']).toBe(DEPLOYED_SHA)
+    expect(out.get('probe-path')).toBe('/deploy-stamp.json')
+    expect(out.get('probe-path')).not.toBe('/api/health')
+    expect(out.get('probe-commit')).toBe(DEPLOYED_SHA)
   })
 
   it('writes the stamp into the uploaded artifact, satisfying the probe unchanged', async () => {
@@ -322,14 +340,14 @@ describe('deploy.mjs declares the path it actually served', () => {
       readFileSync(join(dir, 'apps', 'web', 'out', 'deploy-stamp.json'), 'utf8'),
     )
     const out = outputs(outputFile)
-    const host = await staticHost({ [out['probe-path']]: stamp })
+    const host = await staticHost({ [out.get('probe-path')]: stamp })
 
     const probe = await run(process.execPath, [
       probeScript,
-      `${host}${out['probe-path']}`,
+      `${host}${out.get('probe-path')}`,
       ...once,
       '--expect-commit',
-      out['probe-commit'],
+      out.get('probe-commit'),
     ])
 
     expect(probe.status).toBe(0)
@@ -362,9 +380,9 @@ describe('deploy.mjs declares the path it actually served', () => {
 
     expect(result.status).toBe(0)
     const out = outputs(outputFile)
-    expect(out.status).toBe('deployed')
-    expect(out['probe-path']).toBe('')
-    expect(out['probe-commit']).toBe('')
+    expect(out.get('status')).toBe('deployed')
+    expect(out.get('probe-path')).toBe('')
+    expect(out.get('probe-commit')).toBe('')
   })
 
   /**
@@ -388,7 +406,7 @@ describe('deploy.mjs declares the path it actually served', () => {
 
     expect(result.status).toBe(0)
     const out = outputs(outputFile)
-    expect(out.status).toBe('not_configured')
-    expect(out['probe-path']).toBe('')
+    expect(out.get('status')).toBe('not_configured')
+    expect(out.get('probe-path')).toBe('')
   })
 })
