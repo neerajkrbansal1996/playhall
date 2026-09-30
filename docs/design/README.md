@@ -14,3 +14,4 @@ Each spec names the issue it serves, the owner, and the evidence that proves it 
 | --------------------------------------------- | ---------------------------- | ----------------- |
 | [Colyseus transport](colyseus-transport.md)   | [PER-15](/PER/issues/PER-15) | Platform Engineer |
 | [Match log retention](match-log-retention.md) | [PER-15](/PER/issues/PER-15) | Platform Engineer |
+| [Timer stop reasons](timer-stop-reasons.md)   | [PER-15](/PER/issues/PER-15) | Platform Engineer |
