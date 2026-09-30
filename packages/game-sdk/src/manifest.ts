@@ -18,7 +18,7 @@ import type { TimerSpec } from './timers.js'
 import { isSemver } from './versioning.js'
 import { type Result, err, ok } from './errors.js'
 import type { JsonValue } from './json.js'
-import { canonicalSettingsKey, type SettingsFormDescriptor } from './settings-visibility.js'
+import { canonicalSettingsKey, type SettingsFormDescriptor } from './settings-form.js'
 import { checkSettingsForm, settingsFormDescriptorSchema } from './settings.js'
 
 export const GAME_CATEGORIES = ['board', 'card', 'dice', 'word', 'party', 'action'] as const

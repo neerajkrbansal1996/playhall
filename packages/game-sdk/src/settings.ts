@@ -25,11 +25,11 @@
  * ## This module is the validating half
  *
  * The descriptor's *shape* and its three pure readers live in
- * `./settings-visibility.ts`, which imports nothing. This module holds what
+ * `./settings-form.ts`, which imports nothing. This module holds what
  * needs zod: the structural schemas and `checkSettingsForm`. The package barrel
  * re-exports both, so nothing downstream changes — but a browser that only
  * needs `visibleFields` can import
- * `@playhall/game-sdk/settings-visibility` and leave zod on the server, which
+ * `@playhall/game-sdk/settings-form` and leave zod on the server, which
  * is the whole reason the line is drawn here.
  */
 
@@ -41,7 +41,7 @@ import {
   type SettingsField,
   type SettingsFormDescriptor,
   type SettingsValue,
-} from './settings-visibility.js'
+} from './settings-form.js'
 
 const settingsValueSchema = z.union([z.string(), z.number(), z.boolean()])
 

@@ -1,5 +1,6 @@
 /**
- * The create-lobby settings form descriptor — the half a **client** needs.
+ * The create-lobby settings form descriptor — the **presentation** half of the
+ * settings contract, and the half a client needs.
  *
  * Decision record: `docs/adr/0007-settings-form-descriptor.md` (PER-37).
  *
@@ -19,14 +20,18 @@
  * design on keeping the create-lobby path light, so paying that on an LCP path
  * would be self-defeating.
  *
- * So the client imports `@playhall/game-sdk/settings-visibility` and gets these
- * functions without the validator. The package barrel still re-exports
- * everything here, unchanged — server code and games need not know the split
- * exists.
+ * So the client imports `@playhall/game-sdk/settings-form` and gets these
+ * functions without the validator. The package is marked `sideEffects: false`,
+ * so the barrel is tree-shakeable too; the subpath makes the intent explicit at
+ * the import site. Either way the barrel still re-exports everything here,
+ * unchanged — server code and games need not know the split exists.
  *
  * **Keep this module dependency-free.** An import added here lands in the
- * browser bundle of every create-lobby page. Validation belongs in
- * `./settings.ts`.
+ * browser bundle of every create-lobby page. This is not left to discipline:
+ * the `no-zod-in-pure-settings` boundary rule fails the build on an edge from
+ * here to zod or to `./settings.ts`, because nothing else would go red if the
+ * split were quietly reversed. Validation belongs in `./settings.ts`; a new
+ * *pure* reader for this descriptor belongs here.
  */
 
 /**

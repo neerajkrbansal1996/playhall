@@ -117,7 +117,7 @@ export {
 // The settings surface is split across two modules so a browser can reach the
 // pure readers without the validator. Both halves are re-exported here, so the
 // barrel is unchanged for everyone who does not care — see
-// `settings-visibility.ts` for why the line is where it is.
+// `settings-form.ts` for why the line is where it is.
 export type {
   FieldVisibility,
   GameSettingsShape,
@@ -129,13 +129,13 @@ export type {
   SettingsFormDescriptor,
   SettingsValue,
   ToggleField,
-} from './settings-visibility.js'
+} from './settings-form.js'
 export {
   SETTINGS_FORM_VERSION,
   canonicalSettingsKey,
   isFieldVisible,
   visibleFields,
-} from './settings-visibility.js'
+} from './settings-form.js'
 
 export type { SettingsContract, SettingsFormIssue, SettingsFormIssueCode } from './settings.js'
 export { checkSettingsForm, settingsFieldSchema, settingsFormDescriptorSchema } from './settings.js'
