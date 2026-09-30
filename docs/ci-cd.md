@@ -74,6 +74,22 @@ tag. There is deliberately **no** "ref to deploy" input: a free-text ref would b
 way to put an arbitrary untagged commit into production, which is precisely what the tag
 trigger exists to prevent.
 
+`main.yml` can also be run by hand (`workflow_dispatch`), which is how staging gets
+re-deployed without landing a new commit. On a dispatch the commit has no merged PR by
+construction, so `push-audit` reports **not applicable** and passes rather than failing.
+The exemption is inside `scripts/ci/assert-merged-via-pr.mjs` rather than an `if:` on the
+job on purpose: the staging jobs list `push-audit` in `needs:`, and a skipped job skips its
+dependents, so guarding the job would take staging with it. A missing
+`GITHUB_EVENT_NAME`/`GITHUB_REF` is treated as a misconfiguration, not an exemption, so the
+control cannot fail open.
+
+The audit's scope is therefore **commits reaching `main`, plus every tag** — not "pushes to
+`main`". Writing it the narrower way is a trap worth naming: a `v*` tag push is `push` on
+`refs/tags/...`, so a `push`-to-`main`-only test makes `release.yml`'s audit report "not
+applicable" and exit 0 while its step still says it asserted the tagged commit arrived via a
+merged PR. Production would deploy unaudited, and the first time anyone found out would be a
+real release. A tag is never exempt, whatever the event.
+
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
 
