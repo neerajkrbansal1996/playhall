@@ -48,7 +48,7 @@ so per decision rather than downgrading the whole document.
 | [0004](./0004-pr-gate-without-branch-protection.md) | Enforcing the PR gate without branch protection | Accepted (rev 2)                                                                                                    |
 | [0005](./0005-the-real-time-path.md)                | The real-time path (design only, M6)            | Mixed — see its own status table; §9 board-gated                                                            |
 | 0006                                                | Empty standings for a match that did not count  | Reserved — drafting on [PER-42](/PER/issues/PER-42)                                                         |
-| 0007                                                | Settings-form descriptor contract               | Reserved — drafting on [PER-43](/PER/issues/PER-43)                                                         |
+| [0007](./0007-settings-form-descriptor.md)          | Settings-form descriptor contract               | Accepted                                                                                                    |
 | [0008](./0008-game-sdk-contract-v1.md)              | Fix the Game SDK contract at v1                 | Accepted                                                                                                    |
 | [0009](./0009-m0-websocket-transport-probe.md)      | M0's WebSocket criterion: a transport probe     | Accepted                                                                                                    |
 

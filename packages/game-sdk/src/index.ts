@@ -114,6 +114,31 @@ export {
   validateManifest,
 } from './manifest.js'
 
+export type {
+  FieldVisibility,
+  GameSettingsShape,
+  NumberField,
+  SelectField,
+  SelectOption,
+  SettingsContract,
+  SettingsField,
+  SettingsFieldKind,
+  SettingsFormDescriptor,
+  SettingsFormIssue,
+  SettingsFormIssueCode,
+  SettingsValue,
+  ToggleField,
+} from './settings.js'
+export {
+  SETTINGS_FORM_VERSION,
+  canonicalSettingsKey,
+  checkSettingsForm,
+  isFieldVisible,
+  settingsFieldSchema,
+  settingsFormDescriptorSchema,
+  visibleFields,
+} from './settings.js'
+
 export type { Semver, VersionPin, VersionPinFailure } from './versioning.js'
 export {
   SDK_CONTRACT_VERSION,
