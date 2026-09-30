@@ -33,6 +33,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
  */
 const GATES = {
   lint: { script: 'lint', pendingOwner: null },
+  // Live from the day it lands, not PENDING: `format:check` has existed in the
+  // root package.json since PER-6, it just was never called by anything. See
+  // ADR-0001 §9. `pnpm format` is the fix command for a failure here.
+  format: { script: 'format:check', pendingOwner: null },
   typecheck: { script: 'typecheck', pendingOwner: null },
   unit: { script: 'test', pendingOwner: null },
   // The >= 80% rule currently lives in each package's own vitest thresholds, so

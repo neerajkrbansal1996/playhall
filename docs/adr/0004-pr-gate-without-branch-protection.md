@@ -12,7 +12,7 @@
   decision, not by drift). Decisions 1–5 stand unchanged. New section:
   [Rev 2 — the review verdict](#rev-2--the-review-verdict). Rev 2 also **closes rev 1's one owed
   measurement**: the board read billing on 2026-09-30, the account is on **Free**, and Pro was
-  declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan *and* by
+  declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan _and_ by
   decision, which is now a premise of this ADR rather than an assumption in it.
 - **Author:** CTO
 - **Milestone:** M0
@@ -159,6 +159,7 @@ Without it, the blast radius of one bad push is production.
   `57162da`. The lesson is not the outage, it is that rev 1's "window between the push and the red
   build" is bounded only by the detector's own health, and nothing watches the watcher. See
   Consequences (rev 2).
+
 - The §12 audit trail lives outside the repository. A future contributor, or anyone with only
   the git history, cannot reconstruct who reviewed what. Decision 4 is what keeps this
   recoverable, and it depends on engineers actually writing the link.
@@ -290,6 +291,7 @@ the repository alone cannot answer the question. Revisit triggers below.
   routine admin bypass is worse than no rule because it trains the operator to click through the
   control. That is a second, independent reason not to buy protection before a reviewer identity
   exists.
+
 - **`github-actions[bot]` posting the verdict review (the free version of the above).** _Folded
   into Decision 6 as presentation only, and explicitly not the gate._ `GITHUB_TOKEN` acts as a
   distinct actor from the PR author, so GitHub should accept a verdict from it, and the `ci-gate`
@@ -323,18 +325,18 @@ the repository alone cannot answer the question. Revisit triggers below.
 
 All observed 2026-09-30 against `neerajkrbansal1996/playhall`.
 
-| Claim                                     | Observation                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------- |
-| Author cannot approve                     | `422 Review Can not approve your own pull request`                     |
-| Author cannot request changes             | `422 Review Can not request changes on your own pull request`          |
-| Refusal is specific to the verdict events | Pending review created, then deleted, on PR #23 — both succeeded       |
-| No review record exists at all            | 27 PRs: `reviews` empty, `reviewDecision` `""` on every one            |
-| Nothing blocks a merge today              | PR #23 `mergeStateStatus: CLEAN`, `reviewDecision: null`               |
-| Blocking remains unavailable              | `403 Upgrade to GitHub Pro` on both protection and rulesets endpoints  |
-| No second identity exists today           | Paperclip's GitHub broker resolves to the same user id `22657452`      |
-| Decision 6 is buildable                   | `pr-hygiene`, `ci-gate`, `scripts/ci/pr-hygiene.mjs` on `main` via #25 |
-| Engineers able to merge                   | still **1** — rev 1's spend trigger has not fired                      |
-| Plan is Free, confirmed not inferred      | Board read `settings/billing` 2026-09-30; Pro declined ([PER-83](/PER/issues/PER-83)) |
+| Claim                                     | Observation                                                                                                          |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Author cannot approve                     | `422 Review Can not approve your own pull request`                                                                   |
+| Author cannot request changes             | `422 Review Can not request changes on your own pull request`                                                        |
+| Refusal is specific to the verdict events | Pending review created, then deleted, on PR #23 — both succeeded                                                     |
+| No review record exists at all            | 27 PRs: `reviews` empty, `reviewDecision` `""` on every one                                                          |
+| Nothing blocks a merge today              | PR #23 `mergeStateStatus: CLEAN`, `reviewDecision: null`                                                             |
+| Blocking remains unavailable              | `403 Upgrade to GitHub Pro` on both protection and rulesets endpoints                                                |
+| No second identity exists today           | Paperclip's GitHub broker resolves to the same user id `22657452`                                                    |
+| Decision 6 is buildable                   | `pr-hygiene`, `ci-gate`, `scripts/ci/pr-hygiene.mjs` on `main` via #25                                               |
+| Engineers able to merge                   | still **1** — rev 1's spend trigger has not fired                                                                    |
+| Plan is Free, confirmed not inferred      | Board read `settings/billing` 2026-09-30; Pro declined ([PER-83](/PER/issues/PER-83))                                |
 | Decision 2's detector can fail silently   | `Main` `startup_failure`, zero jobs, on the three commits #25→#37; green on `57162da` ([PER-88](/PER/issues/PER-88)) |
 
 **Measurement owed.** Whether `github-actions[bot]` may submit `REQUEST_CHANGES` on an
@@ -404,10 +406,10 @@ with the plan in front of them, so the missing number is settled policy, not an 
 **One trigger, two halves — do not let them wait on each other.** The single phrase "the PR gate"
 covers two failures with different causes, and rev 2's predecessor treated them as one:
 
-| Failure                                       | Cause                    | Fixed by the plan?                   | Fixed by a second identity? |
-| --------------------------------------------- | ------------------------ | ------------------------------------ | --------------------------- |
-| Red code can be merged                        | protection-ineligible plan | **Yes** — required checks on `ci-gate` | No                          |
-| No PR can carry `APPROVED`/`CHANGES_REQUESTED` | one identity             | No                                   | **Yes** (necessary, not sufficient) |
+| Failure                                        | Cause                      | Fixed by the plan?                     | Fixed by a second identity?         |
+| ---------------------------------------------- | -------------------------- | -------------------------------------- | ----------------------------------- |
+| Red code can be merged                         | protection-ineligible plan | **Yes** — required checks on `ci-gate` | No                                  |
+| No PR can carry `APPROVED`/`CHANGES_REQUESTED` | one identity               | No                                     | **Yes** (necessary, not sufficient) |
 
 The consequence for sequencing: required status checks are blocked **only** by the plan decision,
 and Platform Engineer has already built the pipeline, so they switch on with no rework the moment
