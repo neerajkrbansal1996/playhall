@@ -134,26 +134,26 @@ environments, (2) a staging environment that holds a WebSocket, (3) minimum-size
 until M5.** Previews and staging are the reason the board reversed $0, so production sizing
 must not crowd them out. Sentry, PostHog and the uptime monitor stay on free tiers.
 
-| Provider           | Targets               | Notes                                                                                                                                                                                                                                     |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fly`              | both                  | **The board's choice.** Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app — this script never creates billable infrastructure. |
-| `none` (default)   | both                  | Clean skip with a notice naming what is missing.                                                                                                                                                                                          |
-| `cloudflare-pages` | web only              | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one.                |
-| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                             |
-| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                            |
+| Provider           | Targets               | Notes                                                                                                                                                                                                                                        |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fly`              | both                  | **The board's choice.** Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app — this script never creates billable infrastructure.    |
+| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong. |
+| `cloudflare-pages` | web only              | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one.                   |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                |
+| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                               |
 
 Set these in repository settings. No code change needed.
 
-| Kind     | Name                                              | Purpose                                                        |
-| -------- | ------------------------------------------------- | -------------------------------------------------------------- |
-| Variable | `DEPLOY_PROVIDER`                                 | `none` \| `fly` \| `cloudflare-pages` \| `render` \| `script`. |
-| Variable | `REALTIME_DEPLOY_PROVIDER`                        | Provider for `apps/realtime`; falls back to `DEPLOY_PROVIDER`. |
-| Variable | `FLY_APP_WEB_STAGING`, `FLY_APP_REALTIME_STAGING` | Fly app names for staging.                                     |
-| Variable | `FLY_APP_WEB_PROD`, `FLY_APP_REALTIME_PROD`       | Fly app names for production.                                  |
-| Variable | `PRODUCTION_WEB_URL`, `PRODUCTION_REALTIME_URL`   | Base URLs the uptime monitor probes.                           |
-| Secret   | `FLY_API_TOKEN`                                   | For `fly`.                                                     |
-| Secret   | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`   | For `cloudflare-pages`.                                        |
-| Secret   | `RENDER_API_KEY`, `RENDER_SERVICE_ID`             | For `render`.                                                  |
+| Kind     | Name                                              | Purpose                                                                                     |
+| -------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Variable | `DEPLOY_PROVIDER`                                 | `none` \| `fly` \| `cloudflare-pages` \| `render` \| `script`. Unset or empty means `none`. |
+| Variable | `REALTIME_DEPLOY_PROVIDER`                        | Provider for `apps/realtime`; falls back to `DEPLOY_PROVIDER`.                              |
+| Variable | `FLY_APP_WEB_STAGING`, `FLY_APP_REALTIME_STAGING` | Fly app names for staging.                                                                  |
+| Variable | `FLY_APP_WEB_PROD`, `FLY_APP_REALTIME_PROD`       | Fly app names for production.                                                               |
+| Variable | `PRODUCTION_WEB_URL`, `PRODUCTION_REALTIME_URL`   | Base URLs the uptime monitor probes.                                                        |
+| Secret   | `FLY_API_TOKEN`                                   | For `fly`.                                                                                  |
+| Secret   | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`   | For `cloudflare-pages`.                                                                     |
+| Secret   | `RENDER_API_KEY`, `RENDER_SERVICE_ID`             | For `render`.                                                                               |
 
 **Nothing in this pipeline provisions infrastructure.** Fly apps, `fly.toml`, Redis and
 Postgres belong to [PER-7](/PER/issues/PER-7). A deploy script that creates billable

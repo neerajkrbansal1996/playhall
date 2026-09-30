@@ -19,10 +19,12 @@
  * Contract:
  *   in  — env DEPLOY_PROVIDER, DEPLOY_ENV (preview|staging|production),
  *         DEPLOY_TARGET (web|realtime), plus whatever the provider needs.
+ *         An unset or empty DEPLOY_PROVIDER means `none`, not "misconfigured".
  *   out — `url` and `status` on $GITHUB_OUTPUT. `status` is one of
  *         `deployed` | `not_configured`. Exit code is non-zero only for a real
- *         deploy failure; "no provider configured" is a clean skip, because a
- *         board decision that has not been made is not a build break.
+ *         deploy failure or a provider name that is set but unrecognised;
+ *         "no provider configured" is a clean skip, because infrastructure that
+ *         has not been provisioned yet is not a build break.
  *
  * Adding a provider means adding one entry to PROVIDERS. Nothing else changes —
  * not the workflows, not the smoke test, not the uptime probe.
@@ -30,7 +32,13 @@
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync } from 'node:fs'
 
-const provider = (process.env.DEPLOY_PROVIDER ?? 'none').trim().toLowerCase()
+// `??` alone is not enough. `.github/actions/deploy` always sets
+// DEPLOY_PROVIDER, and sets it to the empty string when the `DEPLOY_PROVIDER`
+// repo variable is unset — so the value arrives as "" rather than undefined.
+// Unset, empty and whitespace all mean the same thing, "not configured yet",
+// and must resolve to `none`. A value that *is* set but unrecognised is a typo
+// and must still fail loudly; that distinction is unset vs. wrong.
+const provider = (process.env.DEPLOY_PROVIDER ?? '').trim().toLowerCase() || 'none'
 const environment = requireOneOf('DEPLOY_ENV', ['preview', 'staging', 'production'])
 const target = requireOneOf('DEPLOY_TARGET', ['web', 'realtime'])
 
@@ -42,10 +50,12 @@ const PROVIDERS = {
    */
   none() {
     console.log(
-      '::notice title=Deploy not configured::No hosting provider is configured, so the ' +
-        `${environment} deploy of "${target}" was skipped. The board chose Fly.io with ` +
-        '$120/month of spend authority (PER-2, detail on PER-38); what is missing is the ' +
-        'provisioned apps and secrets, which are PER-7. To activate: set DEPLOY_PROVIDER=fly ' +
+      '::notice title=Deploy not configured::DEPLOY_PROVIDER is not set; skipping the ' +
+        `${environment} deploy of "${target}". This is the expected state of the repo today, ` +
+        'not a broken build. Hosting is ADR-0003 (docs/adr/0003-hosting-and-cost-model.md): ' +
+        'the board chose Fly.io with $120/month of spend authority (PER-2, detail on PER-38), ' +
+        'and what is still missing is the provisioned apps and secrets, which are PER-7. ' +
+        'To activate: set DEPLOY_PROVIDER=fly ' +
         'plus FLY_API_TOKEN and the FLY_APP_* names (see docs/ci-cd.md, Activating deploys). ' +
         'No code change needed.',
     )
@@ -215,8 +225,11 @@ const PROVIDERS = {
 const impl = PROVIDERS[provider]
 if (!impl) {
   fail(
-    `Unknown DEPLOY_PROVIDER "${provider}". Known: ${Object.keys(PROVIDERS).join(', ')}. ` +
-      'Add a provider in scripts/deploy/deploy.mjs — do not special-case it in a workflow.',
+    `DEPLOY_PROVIDER is set to "${provider}", which is not a known provider. Known: ` +
+      `${Object.keys(PROVIDERS).join(', ')}. An unset or empty DEPLOY_PROVIDER is a clean ` +
+      'skip, so reaching this means the value is wrong rather than missing — fix the repo ' +
+      'variable, or add the provider in scripts/deploy/deploy.mjs. Do not special-case a ' +
+      'provider value in a workflow.',
   )
 }
 
