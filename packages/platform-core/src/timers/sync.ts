@@ -190,20 +190,48 @@ export class TimerSyncTracker {
     return view?.remainingMs ?? 0
   }
 
-  /** Every timer, as the SDK's `TimerView`. */
+  /**
+   * Every timer, as the SDK's `TimerView`.
+   *
+   * ## Why the deadline alone is not the answer for a delay clock
+   *
+   * `deadlineAtMs` is `startedAt + unspentDelay + remaining`, because a US-delay
+   * clock does not expire until the delay *and* the budget are gone. So for a
+   * `simple`-delay clock the deadline has the unspent delay baked into it, and
+   * rendering `deadline - now` shows the player budget + delay — up to `delayMs`
+   * too much, on every clock, for the first seconds of every turn.
+   *
+   * The frame carries `delayRemainingMs` as of `serverTime` for exactly this. Age
+   * it forward to the instant we are rendering, then take it back out of the
+   * deadline. Both terms are absolute, so this stays a subtraction and nothing
+   * counts down locally.
+   */
   views(clientNowMs?: number): readonly ClientTimerView[] {
-    if (this.#message === null) return []
+    const message = this.#message
+    if (message === null) return []
     const serverNow = this.#sync.serverNow(clientNowMs ?? this.#clock.now())
-    return this.#message.timers.map((timer) => {
+    const sinceFrameMs = Math.max(0, serverNow - message.serverTime)
+    return message.timers.map((timer) => {
       const running = timer.state === 'running' && timer.deadlineAtMs !== null
+      if (!running) {
+        return {
+          timerId: timer.timerId,
+          seatId: (timer.seatId as SeatId | null) ?? null,
+          kind: timer.kind,
+          remainingMs: timer.remainingMs,
+          isRunning: false,
+        }
+      }
+      const unspentDelayMs = Math.max(0, timer.delayRemainingMs - sinceFrameMs)
       return {
         timerId: timer.timerId,
         seatId: (timer.seatId as SeatId | null) ?? null,
         kind: timer.kind,
-        remainingMs: running
-          ? Math.max(0, Math.round((timer.deadlineAtMs as number) - serverNow))
-          : timer.remainingMs,
-        isRunning: running,
+        remainingMs: Math.max(
+          0,
+          Math.round((timer.deadlineAtMs as number) - serverNow - unspentDelayMs),
+        ),
+        isRunning: true,
       }
     })
   }

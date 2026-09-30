@@ -6,7 +6,7 @@
  * That makes the assertions exact too: the client either lands on the server's
  * number or it does not.
  */
-import { asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
+import { REPLAY, SPECTATOR, asMatchId, asSeatId, asTimerId, seatViewer } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
 import { type ManualClock, createManualClock } from '../src/timers/clock.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
@@ -193,6 +193,141 @@ describe('a joining client resolves the server’s remaining time', () => {
     const view = p.tracker.views().find((entry) => entry.timerId === WHITE_CLOCK)
     expect(view?.remainingMs).toBe(0)
     expect(view?.isRunning).toBe(false)
+  })
+})
+
+/**
+ * The agreement tests above all ran on `delayMode: 'none'`, which is why a
+ * `simple`-delay clock rendered ~`delayMs` too high for a whole release. The
+ * deadline on the wire is `startedAt + unspentDelay + budget`, so a client that
+ * only subtracts `now` from it shows budget *plus* the delay it has not spent.
+ *
+ * These walk a real US-delay turn from the first millisecond to past the end of
+ * the delay window and demand the client's number equal the server's at every
+ * step, with a skewed client clock and real latency so the offset estimate is
+ * genuinely in the path.
+ */
+describe('a simple-delay clock agrees with the server', () => {
+  it('agrees for every second of the delay window and past the end of it', () => {
+    // Symmetric latency, because a symmetric round trip is the only case where
+    // the offset estimate is exact — an asymmetric path is off by half the
+    // difference no matter what the delay formula does, and that error is
+    // already pinned by 'is wrong by only the path asymmetry' above. The clock
+    // skew stays enormous: the delay arithmetic must not depend on it.
+    const p = pair({ clientSkewMs: 1_234_567, upMs: 50, downMs: 50 })
+    p.service.declarePlayerClock(WHITE_CLOCK, WHITE, {
+      initialMs: 300_000,
+      incrementMs: 2_000,
+      delayMs: 5_000,
+      delayMode: 'simple',
+    })
+    p.service.declarePlayerClock(BLACK_CLOCK, BLACK, {
+      initialMs: 300_000,
+      incrementMs: 2_000,
+      delayMs: 5_000,
+      delayMode: 'simple',
+    })
+    p.service.switchTurnTo(WHITE)
+    p.exchange()
+
+    // Frame is 100 ms old by now, and `delayRemainingMs` in it is stale by that
+    // much — ageing it forward is the half of the fix a single assertion at
+    // t = 0 would not catch.
+    let atMs = 0
+    for (const targetMs of [0, 500, 1_000, 2_000, 4_000, 4_900, 5_000, 5_100, 8_000, 30_000]) {
+      p.elapse(targetMs - atMs)
+      atMs = targetMs
+      expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(p.service.remainingMs(WHITE_CLOCK))
+      // The non-mover is frozen at full budget throughout.
+      expect(clientRemaining(p.tracker, BLACK_CLOCK)).toBe(300_000)
+    }
+
+    // And the budget really was protected: 30 s of thinking behind a 5 s delay
+    // costs 25 s.
+    expect(p.service.remainingMs(WHITE_CLOCK)).toBeLessThan(300_000)
+    expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(p.service.remainingMs(WHITE_CLOCK))
+  })
+
+  it('agrees across a turn handover, where the next seat starts a fresh delay', () => {
+    const p = pair({ clientSkewMs: -450_000 })
+    for (const [timerId, seatId] of [
+      [WHITE_CLOCK, WHITE],
+      [BLACK_CLOCK, BLACK],
+    ] as const) {
+      p.service.declarePlayerClock(timerId, seatId, {
+        initialMs: 60_000,
+        delayMs: 3_000,
+        delayMode: 'simple',
+      })
+    }
+
+    p.service.switchTurnTo(WHITE)
+    p.elapse(1_000) // inside White's delay
+    p.exchange()
+    expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(p.service.remainingMs(WHITE_CLOCK))
+    expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(60_000)
+
+    p.service.switchTurnTo(BLACK)
+    p.elapse(1_500) // inside Black's fresh delay
+    p.exchange()
+
+    // Black's clock is running with an unspent delay; White's is frozen.
+    expect(clientRemaining(p.tracker, BLACK_CLOCK)).toBe(p.service.remainingMs(BLACK_CLOCK))
+    expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(p.service.remainingMs(WHITE_CLOCK))
+    expect(p.tracker.views().find((view) => view.timerId === WHITE_CLOCK)?.isRunning).toBe(false)
+  })
+
+  it('agrees for a bronstein clock too, which has no free window to subtract', () => {
+    const p = pair({ clientSkewMs: 77_000 })
+    p.service.declarePlayerClock(WHITE_CLOCK, WHITE, {
+      initialMs: 60_000,
+      delayMs: 3_000,
+      delayMode: 'bronstein',
+    })
+    p.service.switchTurnTo(WHITE)
+    p.elapse(1_000)
+    p.exchange()
+
+    // Bronstein charges from the first millisecond and refunds at the end of the
+    // turn, so `delayRemainingMs` is 0 and the client must not subtract anything.
+    expect(clientRemaining(p.tracker, WHITE_CLOCK)).toBe(p.service.remainingMs(WHITE_CLOCK))
+    expect(p.service.remainingMs(WHITE_CLOCK)).toBeLessThan(60_000)
+  })
+})
+
+/**
+ * `sync()` takes a `Viewer` it deliberately does not use: a remaining time is
+ * not hidden information in any game we support, and the parameter is there so a
+ * future game that *does* hide a clock has a place to say so instead of a new
+ * code path (and so the SDK fan-out signature does not have to change after M2).
+ *
+ * This turns "unused on purpose" into a checked invariant. The day someone adds
+ * redaction, this is the failing test that documents the change.
+ */
+describe('sync() ignores the viewer', () => {
+  it('produces an identical frame with and without one', () => {
+    const p = pair()
+    p.service.declarePlayerClock(WHITE_CLOCK, WHITE, {
+      initialMs: 300_000,
+      delayMs: 3_000,
+      delayMode: 'simple',
+    })
+    p.service.declarePlayerClock(BLACK_CLOCK, BLACK, { initialMs: 300_000 })
+    p.service.set(TURN, { delayMs: 30_000, kind: 'turn' })
+    p.service.switchTurnTo(WHITE)
+    p.elapse(1_500)
+
+    const atMs = p.serverClock.now()
+    const anonymous = p.service.sync({ atMs })
+
+    // Every viewer the SDK can construct, including the opponent — whose clock
+    // the frame carries in full, because a remaining time is not secret.
+    for (const viewer of [seatViewer(WHITE), seatViewer(BLACK), SPECTATOR, REPLAY]) {
+      const framed = p.service.sync({ viewer, atMs })
+      expect(framed).toEqual(anonymous)
+      expect(JSON.stringify(framed)).toBe(JSON.stringify(anonymous))
+    }
+    expect(anonymous.timers).toHaveLength(3)
   })
 })
 
