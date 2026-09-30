@@ -77,6 +77,19 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs lint
 
+  # Its own job rather than a step inside `lint` (PER-98): "your code is wrong"
+  # and "your code is unformatted" need different fixes — a real code change
+  # versus `pnpm format` — and folding them together hides which one a
+  # contributor is looking at. It is also the cheapest workspace gate here.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs format
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
@@ -247,6 +260,7 @@ jobs:
         pr-hygiene,
         workflows,
         lint,
+        format,
         typecheck,
         boundaries,
         unit,

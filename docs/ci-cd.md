@@ -17,7 +17,7 @@ of this pipeline is live and the deploy half is inert by design, not by omission
 
 | Workflow                        | Trigger                                                   | What it does                                                                            |
 | ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The nine gates plus the `ci-gate` aggregate.                                            |
+| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | Every gate in [The gates](#the-gates), plus the `ci-gate` aggregate.                    |
 | `.github/workflows/preview.yml` | PR opened / pushed / reopened                             | Preview deploy per target, health-probed, URL posted on the PR.                         |
 | `.github/workflows/main.yml`    | push to `main`                                            | Re-runs the gates, audits for a direct push, then deploys to **staging**.               |
 | `.github/workflows/release.yml` | push of a `v*` tag, manual                                | Asserts a tag, re-runs the gates, audits the tagged commit, then deploys to production. |
@@ -85,18 +85,19 @@ issue. `pr-hygiene` and `workflows` call their script directly instead: both are
 checks over files already on disk, so they skip `./.github/actions/setup` and still report
 when an install would not succeed.
 
-| Gate          | Runs                              | Status                                                                                             |
-| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                     |
-| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                    |
-| `lint`        | `pnpm lint`                       | Live.                                                                                              |
-| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                              |
-| `boundaries`  | `pnpm boundaries`                 | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                       | Live.                                                                                              |
-| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
-| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
-| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
-| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                  |
+| Gate          | Runs                              | Status                                                                                      |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                              |
+| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                             |
+| `lint`        | `pnpm lint`                       | Live.                                                                                       |
+| `format`      | `pnpm format:check`               | Live. Fix a failure with `pnpm format` — see below.                                         |
+| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                       |
+| `boundaries`  | `pnpm boundaries`                 | Live — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
+| `unit`        | `pnpm test`                       | Live.                                                                                       |
+| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                 |
+| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                 |
+| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                       |
+| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                           |
 
 A pending gate logs a `::notice` naming its owner and **passes**. This is deliberate: a
 workflow calling a script that does not exist fails with `ERR_PNPM_NO_SCRIPT`, which is
@@ -105,13 +106,21 @@ that same job becomes a hard gate with **no workflow edit**.
 
 To close the loophole once M1 lands, set `CI_STRICT_GATES=1` in the gate jobs' `env`. A
 pending gate then fails instead of passing, so a gate cannot silently regress to "not
-implemented". Owner and trigger: [PER-98](/PER/issues/PER-98) at M1 close — "set it once M1
-closes" in a code comment is not a commitment anything honours.
+implemented". Owner and trigger: [PER-98](/PER/issues/PER-98) at M1 close, and that issue is
+blocked on M1 ([PER-9](/PER/issues/PER-9)) so the switch has a wake behind it — "set it once
+M1 closes" in a code comment is not a commitment anything honours. It cannot go on earlier:
+`coverage`, `testkit`, `integration` and `e2e` have no root script yet and would all fail on
+the first run.
 
 A gate declared **live** (`pendingOwner: null`) whose root script is missing is a different
 case — a demotion, not an unwritten implementation — and it fails hard regardless of
 `CI_STRICT_GATES`. Rename the root `lint` script and CI says so, instead of reporting PENDING
 with owner `unassigned` and leaving `ci-gate` green while lint no longer runs.
+
+That check reads `pendingOwner`, which makes the field load-bearing rather than
+documentation: **a gate moves to `pendingOwner: null` the day its script lands.** A gate that
+runs but still names an owner is a gate a rename can silently switch off. `boundaries` was in
+exactly that state between #28 and the `format` gate landing.
 
 A gate name that is not in the registry exits `2`. That check uses `Object.hasOwn`, not a
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
@@ -286,10 +295,11 @@ so every gate here executes and ADR-0004's push detector can fire.
 **Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
-not a verdict. **Five of nine gates are PENDING stubs**, `integration` boots Redis and
-Postgres service containers with no tests in them, and there is no build caching. Re-measure
-when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
-the `coverage` job, so it is a nine-job number for a ten-job pipeline.
+not a verdict. **Four of the eleven gates are PENDING stubs** — `coverage`, `testkit`,
+`integration`, `e2e` — `integration` boots Redis and Postgres service containers with no
+tests in them, and there is no build caching. Re-measure when M1 closes before concluding
+Turborepo is unnecessary — and note the measurement predates the `coverage` and `format`
+jobs, so it is a nine-job number for a twelve-job pipeline.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 
@@ -312,15 +322,6 @@ on both services.
 
 ## Things deliberately not done
 
-- **`prettier --check` is not a CI gate.** PER-6 lists lint, typecheck, boundaries, unit,
-  testkit, integration and E2E; formatting is not among them. The figure previously given
-  here — "~24 unformatted files" — is stale: measured at this head, `prettier --check .`
-  reports **two**, `docs/adr/0004-pr-gate-without-branch-protection.md` and
-  `docs/adr/README.md`. So the "large mechanical diff" argument is mostly spent, and what is
-  left is one registry line, one job, and two documents to reformat.
-  [PER-98](/PER/issues/PER-98) owns it and must re-measure immediately before landing —
-  "clean" is a property of a head, not of the repo, and this number moves every time a
-  document lands.
 - **No `CODEOWNERS`.** Rejected by ADR-0004, and the reasoning is right: without branch
   protection it enforces nothing, and a file that looks like a control but is not one is
   worse than no file, because it invites the belief that the gate exists.

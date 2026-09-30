@@ -15,8 +15,12 @@
  * workflow edit. The job names never change, which is what lets required status
  * checks be switched on (see `docs/ci-cd.md`) without rework.
  *
- * `CI_STRICT_GATES=1` turns PENDING into a failure. Set it once M1 closes so a
- * gate can never silently regress back to "not implemented".
+ * `CI_STRICT_GATES=1` turns PENDING into a failure, so a gate cannot silently
+ * regress back to "not implemented". Owner and trigger: PER-98 at M1 close,
+ * which is blocked on M1 (PER-9) — so the switch has a wake behind it and not
+ * only this comment. It stays off until then because four registry gates
+ * (coverage, testkit, integration, e2e) have no root script yet and would all
+ * fail on the first run.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
@@ -31,6 +35,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
  */
 const GATES = {
   lint: { script: 'lint', pendingOwner: null },
+  // Live from the day it lands rather than PENDING: `format:check` has been in
+  // the root package.json since PER-6, it was just never called by anything.
+  // `pnpm format` is the fix for a failure here.
+  format: { script: 'format:check', pendingOwner: null },
   typecheck: { script: 'typecheck', pendingOwner: null },
   unit: { script: 'test', pendingOwner: null },
   // The >= 80% rule currently lives in each package's own vitest thresholds, so
@@ -40,10 +48,13 @@ const GATES = {
     script: 'test:coverage',
     pendingOwner: 'PER-89 — aggregate >= 80% check across the required packages',
   },
-  boundaries: {
-    script: 'boundaries',
-    pendingOwner: 'PER-5 — dependency-cruiser rule set (see docs/adr/0002)',
-  },
+  // Live since PER-5 landed the rule set in #28 (see docs/adr/0002). Declared
+  // live rather than left with a stale owner string, because that field is what
+  // the demotion check below reads: a gate still naming an owner is allowed to
+  // fall back to PENDING, so renaming `boundaries` would have quietly switched
+  // the plugin-boundary gate off. A gate moves to `null` the day its script
+  // lands.
+  boundaries: { script: 'boundaries', pendingOwner: null },
   testkit: {
     script: 'test:testkit',
     pendingOwner: 'PER-17 — game conformance testkit (first consumer: tic-tac-toe)',
