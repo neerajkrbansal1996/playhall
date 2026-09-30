@@ -6,10 +6,12 @@
   "description": "The only package a game may import. Manifest, server contracts and client contracts for Playhall games.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./realtime": "./src/realtime.ts"
+    "./realtime": "./src/realtime.ts",
+    "./settings-form": "./src/settings-form.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

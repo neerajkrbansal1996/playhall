@@ -1,4 +1,6 @@
-import { canonicalSettingsKey, type SettingsValue } from '@playhall/game-sdk'
+// The subpath, not the barrel — `canonicalSettingsKey` is a value, and the
+// barrel reaches zod. See `packages/game-sdk/src/settings-form.ts`.
+import { canonicalSettingsKey, type SettingsValue } from '@playhall/game-sdk/settings-form'
 
 import type { SettingsFormPreset, SettingsValues } from './types'
 
