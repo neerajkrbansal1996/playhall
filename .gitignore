@@ -22,6 +22,12 @@ pnpm-debug.log*
 # Agent harness local config (machine-specific absolute paths)
 .claude/settings.local.json
 
+# Playwright output (PER-131). The `e2e` CI job uploads both as an artifact.
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
 # The repo-root lockfile is the only one we track. A lockfile nested inside a
 # workspace package means `pnpm install` was run from inside that package, which
 # bypasses workspace resolution and can install a second copy of typescript or
