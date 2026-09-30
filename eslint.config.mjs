@@ -113,6 +113,17 @@ export default tseslint.config(
                 'Relative path out of your own game package. Games are independent plugins — ' +
                 'enforced by `pnpm boundaries` (ADR-0002).',
             },
+            {
+              // `colyseus.js` is the browser client: a separate npm name, not a subpath of
+              // `colyseus`, so it needs its own entry in every place this list is written.
+              group: ['colyseus', 'colyseus.js', '@colyseus/*'],
+              message:
+                "The server framework is a platform choice, never a game's. Colyseus is adopted " +
+                'for apps/realtime only (ADR-0001 §4); a game that names it pins every game to ' +
+                "the platform's netcode and opts into default-broadcast state sync, where a " +
+                'field is visible unless someone remembers to filter it. Keep game state as ' +
+                'plain TypeScript. Enforced for real by `pnpm boundaries` (ADR-0002).',
+            },
           ],
           paths: [],
         },

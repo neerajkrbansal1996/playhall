@@ -53,8 +53,12 @@ const ALLOWED = new Set([sdkName])
  * — a declared dependency is a stated intent to cross the boundary, and under pnpm's strict
  * `node_modules` it is also the only way the import would resolve at all. Catching it here means
  * the gate fires on the manifest line rather than on the import three commits later.
+ *
+ * `colyseus.js` is the browser client and is published under a name matching neither
+ * `^colyseus$` nor `@colyseus/*`, so it needs its own alternative or the likeliest
+ * client-side declaration slips through.
  */
-const FORBIDDEN_THIRD_PARTY = /^(colyseus|@colyseus\/[^/]+)$/
+const FORBIDDEN_THIRD_PARTY = /^(colyseus|colyseus\.js|@colyseus\/[^/]+)$/
 
 const COMMENTS = {
   'no-illegal-declared-dep':

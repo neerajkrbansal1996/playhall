@@ -55,9 +55,14 @@ const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
  *   - `.../node_modules/colyseus/...` — installed and resolved.
  * Matching only the resolved form would make the rule silently pass on the exact case a game
  * author is most likely to produce first: an import written before `pnpm install` runs.
+ *
+ * `colyseus.js` is listed explicitly because it is the browser *client*, published under a
+ * name that neither `^colyseus$` nor `@colyseus/*` matches. That is the form a game's
+ * client-side code reaches for first, so leaving it out would have left the likeliest
+ * violation green.
  */
-const COLYSEUS_MODULES =
-  '^(colyseus|@colyseus/[^/]+)$|(^|/)node_modules/(colyseus|@colyseus/[^/]+)/'
+const COLYSEUS_PACKAGES = 'colyseus|colyseus\\.js|@colyseus/[^/]+'
+const COLYSEUS_MODULES = `^(${COLYSEUS_PACKAGES})$|(^|/)node_modules/(${COLYSEUS_PACKAGES})/`
 
 module.exports = {
   forbidden: [
