@@ -286,6 +286,18 @@ importers:
         specifier: ^3.0.5
         version: 3.2.7(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0)
 
+  tools/ci-gate:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.6
+        version: 22.20.4
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0)
+
 packages:
 
   '@adobe/css-tools@4.5.0':
