@@ -16,6 +16,22 @@
  * the envelope is checked once, then each field independently. A field that
  * parses is rendered, a field that does not is dropped and left at its default,
  * and the rest of the form is unaffected.
+ *
+ * ## Run this on the server
+ *
+ * **This module is deliberately not part of the client entry point** and is not
+ * re-exported from `./index`. It imports zod, and zod measured **20.7 kB
+ * gzipped** in the create-lobby client bundle against the renderer's own 5.8 kB —
+ * 3.5× the component tree, to re-check 817 bytes of JSON that `checkSettingsForm`
+ * already validated against the game's schema at registry load. ADR-0004 justified
+ * the whole descriptor design on keeping the create-lobby path light, so paying
+ * that on the LCP path would be self-defeating.
+ *
+ * Call it where the catalogue entry is read — a server component, a route
+ * handler — and pass the resulting `form` to `useSettingsForm`. The renderer
+ * needs no validator: `SettingsFieldRow` switches on three known kinds and
+ * renders nothing for anything else, so an unnormalized descriptor degrades the
+ * same way rather than throwing.
  */
 
 import {
@@ -135,4 +151,24 @@ export function describeSkippedField(skipped: SkippedField): string {
     ? `[settings-form] skipping ${where}: unsupported field kind '${skipped.kind}'. ` +
         'It will keep its default value. Update @atrium/web to render it.'
     : `[settings-form] skipping ${where}: the field does not match the SETTINGS_FORM_VERSION ${SETTINGS_FORM_VERSION} shape.`
+}
+
+/**
+ * Report anything the descriptor asked for and this renderer will not draw.
+ *
+ * Dev-only and no-ops in production: a stale renderer meeting a newer descriptor
+ * is a deployment fact for us to notice, not something to shout about in a
+ * player's console. Call it next to `normalizeSettingsForm` — a skipped field
+ * should surface in the log of whoever served the page.
+ */
+export function warnAboutSkippedFields(normalized: NormalizedSettingsForm): void {
+  if (process.env.NODE_ENV === 'production') return
+  for (const skipped of normalized.skipped) console.warn(describeSkippedField(skipped))
+  if (normalized.unsupportedVersion !== null) {
+    console.warn(
+      `[settings-form] descriptor version ${normalized.unsupportedVersion} is newer than the ` +
+        `SETTINGS_FORM_VERSION ${SETTINGS_FORM_VERSION} this renderer implements. ` +
+        'Falling back to defaultSettings with no fields shown.',
+    )
+  }
 }

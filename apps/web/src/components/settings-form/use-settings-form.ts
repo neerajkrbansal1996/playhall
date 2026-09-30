@@ -1,29 +1,33 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { SettingsValue } from '@atrium/game-sdk'
 
-import { describeSkippedField, normalizeSettingsForm } from './normalize'
-import type { NormalizedSettingsForm } from './normalize'
-import type { SettingsFormPreset } from './types'
 import { presetMatching, settingsFromPreset } from './presets'
+import type { SettingsFormPreset, SettingsValues } from './types'
 
 export interface UseSettingsFormOptions {
-  /** `GameCatalogEntry.settingsForm`, straight from the catalogue JSON. */
-  readonly settingsForm: unknown
-  /** `GameCatalogEntry.defaultSettings`. */
+  /**
+   * `GameCatalogEntry.defaultSettings`.
+   *
+   * The descriptor is not needed here, and that is worth stating: values are
+   * seeded from `defaultSettings` so the payload stays total over every setting,
+   * including the ones the descriptor hides or this renderer cannot draw.
+   * Visibility is a render-time question, answered by `visibleFields` inside
+   * `SettingsForm`.
+   */
   readonly defaultSettings: unknown
   readonly presets?: readonly SettingsFormPreset[]
 }
 
-export interface UseSettingsFormResult extends NormalizedSettingsForm {
+export interface UseSettingsFormResult {
   /**
    * Every setting, including fields currently hidden by `visibleWhen` and fields
-   * whose kind this renderer skipped. ADR-0004 §2 requires the schema to accept
+   * whose kind the renderer skipped. ADR-0004 §2 requires the schema to accept
    * every combination reachable through the descriptor, so this is what gets
    * submitted verbatim — nothing is stripped.
    */
-  readonly values: Readonly<Record<string, SettingsValue>>
+  readonly values: SettingsValues
   readonly setValue: (key: string, value: SettingsValue) => void
   readonly applyPreset: (presetId: string) => void
   readonly reset: () => void
@@ -51,18 +55,15 @@ function toScalarRecord(raw: unknown): Record<string, SettingsValue> {
 /**
  * Form state for one game's create-lobby settings.
  *
- * Deliberately does **not** own submission, errors, or what a lobby is. Errors
- * are passed in because they come back from the server keyed by field, and the
+ * Deliberately does **not** own submission or errors. Errors are passed into
+ * `SettingsForm` because they come back from the server keyed by field, and the
  * server is the authority on whether a value is legal — a hook that validated
  * locally would be asserting a result the client does not own.
  */
 export function useSettingsForm({
-  settingsForm,
   defaultSettings,
   presets = [],
 }: UseSettingsFormOptions): UseSettingsFormResult {
-  const normalized = useMemo(() => normalizeSettingsForm(settingsForm), [settingsForm])
-
   // `defaultSettings` is the base every preset is applied over, so a preset that
   // names only `timeControl` leaves the rest at their defaults.
   const defaults = useMemo(() => toScalarRecord(defaultSettings), [defaultSettings])
@@ -76,21 +77,7 @@ export function useSettingsForm({
     return fallback === undefined ? defaults : { ...defaults, ...settingsFromPreset(fallback) }
   }, [defaults, presets])
 
-  const [values, setValues] = useState<Readonly<Record<string, SettingsValue>>>(initial)
-
-  // Dev-only, and once per descriptor: a skipped field is a forward-compatibility
-  // event worth seeing in a console, not a warning per render.
-  const warnedFor = useRef<unknown>(null)
-  if (process.env.NODE_ENV !== 'production' && warnedFor.current !== settingsForm) {
-    warnedFor.current = settingsForm
-    for (const skipped of normalized.skipped) console.warn(describeSkippedField(skipped))
-    if (normalized.unsupportedVersion !== null) {
-      console.warn(
-        `[settings-form] descriptor version ${normalized.unsupportedVersion} is newer than this renderer. ` +
-          'Falling back to defaultSettings with no fields shown.',
-      )
-    }
-  }
+  const [values, setValues] = useState<SettingsValues>(initial)
 
   const setValue = useCallback((key: string, value: SettingsValue) => {
     setValues((current) => ({ ...current, [key]: value }))
@@ -114,5 +101,5 @@ export function useSettingsForm({
     [defaults, presets, values],
   )
 
-  return { ...normalized, values, setValue, applyPreset, reset, activePresetId }
+  return { values, setValue, applyPreset, reset, activePresetId }
 }
