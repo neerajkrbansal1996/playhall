@@ -147,15 +147,25 @@ const PROVIDERS = {
    * Web only: Pages has no persistent-process runtime, so it cannot hold the
    * WebSocket connections `apps/realtime` needs.
    *
-   * **Untested, and known incomplete.** No Cloudflare account exists, so nothing
-   * here has ever run. Two things to fix before it does, stated here rather than
-   * left looking configured:
-   *   * it uploads `apps/web/.next` raw, which is not a deployable Pages
-   *     artifact for an App Router app — that needs `@cloudflare/next-on-pages`,
-   *     and `apps/web/src/app/api/health/route.ts` is `runtime = 'nodejs'` plus
-   *     `force-dynamic`, which Pages cannot serve without it;
-   *   * `wrangler@latest` below is unpinned, in a repo where every GitHub action
-   *     is SHA-pinned. Pin it the day this adapter is first exercised.
+   * The board carved one exception to the provisioning hold for this adapter
+   * (PER-111, board decision 2026-09-30): it connected Cloudflare on 29 Sep, the
+   * morning before it set the hold, and Pages hosts a static site with no card.
+   * So this is the one provider here that may be switched on for **staging web
+   * only** at $0. `fly` remains the ratified provider for M0–M5 production; the
+   * exception is a link, not a migration.
+   *
+   * **Still never executed.** The credential is the open item — see
+   * docs/ci-cd.md → "The free staging link on Cloudflare Pages". Treat the first
+   * run as a smoke test, not a deploy.
+   *
+   * What it uploads: `apps/web/out`, a real static export, built with
+   * `PLAYHALL_STATIC_EXPORT=1` (see `apps/web/next.config.ts`). It previously
+   * uploaded `apps/web/.next`, which is a build cache and not a servable Pages
+   * artifact at all. The export deliberately drops `/api/health`, because that
+   * route is `runtime = 'nodejs'` + `force-dynamic` on purpose and a prerendered
+   * health payload answers about the build rather than the process. **So do not
+   * point a health probe at a Pages URL** — `smoke` and `uptime.yml` expect
+   * `/api/health` and would fail against this target by design.
    */
   'cloudflare-pages'() {
     if (target !== 'web') {
@@ -166,24 +176,56 @@ const PROVIDERS = {
           'for the free path).',
       )
     }
+    if (environment === 'production') {
+      throw new Error(
+        'DEPLOY_PROVIDER=cloudflare-pages may not deploy production. The board approved ' +
+          'the existing Cloudflare connection as a $0 staging-link exception to the ' +
+          'provisioning hold (PER-111); Fly.io is the ratified provider for M0–M5 ' +
+          'production (ADR-0003). Widening this is a board decision, not a variable.',
+      )
+    }
+
+    // `staging` only — and this skip is the enforcement, not a caveat.
+    //
+    // `preview.yml` reads the same `DEPLOY_PROVIDER` variable, so without this
+    // branch, setting the variable for the staging link would silently switch
+    // per-PR web previews on too. The board recorded M0 AC1b as **not met**
+    // rather than accept a web-only preview with no isolated realtime, Redis or
+    // Postgres behind it, so turning one on as a side effect of a settings
+    // change would quietly overturn a board decision. A clean skip keeps PRs
+    // green and leaves the gap recorded where the board put it.
+    if (environment !== 'staging') {
+      console.log(
+        `::notice title=Preview deploy skipped::DEPLOY_PROVIDER=cloudflare-pages serves the ` +
+          `${'staging'} link only, so the ${environment} deploy of "${target}" is skipped. This ` +
+          'is deliberate: the board recorded M0 AC1b (a preview deploy per PR) as not met ' +
+          'because an isolated preview needs its own realtime service, Redis and Postgres, ' +
+          'and a web-only preview URL is not that. Do not "fix" this by widening the ' +
+          'adapter — see docs/ci-cd.md, "The free staging link on Cloudflare Pages".',
+      )
+      return { status: 'not_configured', url: '' }
+    }
+
     requireEnv(['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'])
 
-    const project = process.env.CLOUDFLARE_PAGES_PROJECT ?? 'playhall-web'
-    run('pnpm', ['--filter', './apps/web', 'build'])
+    const project = process.env.CLOUDFLARE_PAGES_PROJECT ?? 'playhall-web-staging'
+    run('pnpm', ['--filter', './apps/web', 'build'], { PLAYHALL_STATIC_EXPORT: '1' })
 
-    // `--branch` is what makes Pages treat this as a preview rather than a
-    // production deployment; its production branch is configured on the project.
-    const branch =
-      environment === 'production'
-        ? (process.env.CLOUDFLARE_PAGES_PRODUCTION_BRANCH ?? 'main')
-        : (process.env.GITHUB_HEAD_REF ?? process.env.GITHUB_REF_NAME ?? 'preview')
+    // `--branch` decides production-vs-preview *inside the Pages project*: a
+    // deployment on the project's production branch owns the durable
+    // `<project>.pages.dev` hostname, anything else gets a per-deployment one.
+    // Staging maps onto the Pages production branch because the one durable URL
+    // the board can keep open is the whole point of the exception.
+    const branch = process.env.CLOUDFLARE_PAGES_PRODUCTION_BRANCH ?? 'main'
 
+    // Pinned like every action in this repo: `@latest` means the thing that runs
+    // is not the thing that was reviewed.
     const out = run('pnpm', [
       'dlx',
-      'wrangler@latest',
+      'wrangler@4.144.0',
       'pages',
       'deploy',
-      'apps/web/.next',
+      'apps/web/out',
       `--project-name=${project}`,
       `--branch=${branch}`,
     ])
