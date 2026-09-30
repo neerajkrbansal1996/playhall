@@ -186,6 +186,11 @@ every row above must too. As of rev 3:
   describes), and `no-zod-in-pure-settings` belongs to
   [ADR-0007](./0007-settings-form-descriptor.md) (Consequences), which owns the
   `settings-form.ts` / `settings.ts` split it enforces.
+  `no-platform-core-node-builtins` (`^packages/platform-core/src/` → `core`, added in
+  [PER-162](/PER/issues/PER-162)) is the mechanical form of the edge-importability invariant stated
+  in `packages/platform-core/src/runtime.ts`, not a games boundary; whether that invariant survives
+  is [PER-164](/PER/issues/PER-164)'s ADR to decide, and that ADR owns the rule's single `pathNot`
+  exception for `identity/guest-token.ts`. Listed here so the config reconciles.
   `no-orphans` and `not-to-unresolvable` run at `warn` by design.
 - **Contract-only, not yet in the config** — `no-testkit-to-platform`, and the §2.3 retirement of
   `no-game-to-shared-internals`, which is still a live `error` rule in `.dependency-cruiser.cjs`
