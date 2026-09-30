@@ -15,13 +15,13 @@ of this pipeline is live and the deploy half is inert by design, not by omission
 
 ## What runs when
 
-| Workflow                        | Trigger                                                   | What it does                                                              |
-| ------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The seven gates plus the `ci-gate` aggregate.                             |
-| `.github/workflows/preview.yml` | PR opened / pushed / reopened                             | Preview deploy per target, health-probed, URL posted on the PR.           |
-| `.github/workflows/main.yml`    | push to `main`                                            | Re-runs the gates, audits for a direct push, then deploys to **staging**. |
-| `.github/workflows/release.yml` | push of a `v*` tag, manual                                | Re-runs the gates, then deploys web and realtime to production.           |
-| `.github/workflows/uptime.yml`  | cron every ~10 min, manual                                | Probes production health; opens/closes one GitHub issue per outage.       |
+| Workflow                        | Trigger                                                   | What it does                                                                            |
+| ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The nine gates plus the `ci-gate` aggregate.                                            |
+| `.github/workflows/preview.yml` | PR opened / pushed / reopened                             | Preview deploy per target, health-probed, URL posted on the PR.                         |
+| `.github/workflows/main.yml`    | push to `main`                                            | Re-runs the gates, audits for a direct push, then deploys to **staging**.               |
+| `.github/workflows/release.yml` | push of a `v*` tag, manual                                | Asserts a tag, re-runs the gates, audits the tagged commit, then deploys to production. |
+| `.github/workflows/uptime.yml`  | cron every ~10 min, manual                                | Probes production health; opens/closes one GitHub issue per outage.                     |
 
 `ci.yml` has no `push` trigger of its own. `main.yml` and `release.yml` call it as a
 reusable workflow, so adding one would run the whole suite twice and double the Actions
@@ -54,6 +54,19 @@ the way, a human has to cut `vX.Y.Z` first.
 Staging deploys additionally wait on `push-audit`, not just the gates: an unreviewed commit
 should not reach the environment the board clicks on either.
 
+**Production waits on `push-audit` too, and that is load-bearing.** A tag can point at any
+commit, so without it the split above has a complete bypass: push straight to `main`,
+ignore the red `main.yml` audit, tag that commit, ship it. Production is the one
+environment where a missing control is not recoverable by a revert, so `release.yml` runs
+its own copy of the audit against the tagged commit. The script reads `GITHUB_SHA` rather
+than a pull-request event, so it works on a tag ref unchanged.
+
+`release.yml` also asserts `github.ref_type == 'tag'` before anything else (`release-ref`).
+`workflow_dispatch` lets a human pick any ref, and production may only ever be cut from a
+tag. There is deliberately **no** "ref to deploy" input: a free-text ref would be the one
+way to put an arbitrary untagged commit into production, which is precisely what the tag
+trigger exists to prevent.
+
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
 
@@ -69,6 +82,7 @@ registry of gate name → root pnpm script → owning issue.
 | `typecheck`   | `pnpm typecheck`            | Live.                                                                                              |
 | `boundaries`  | `pnpm boundaries`           | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
 | `unit`        | `pnpm test`                 | Live.                                                                                              |
+| `coverage`    | `pnpm test:coverage`        | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
 | `testkit`     | `pnpm test:testkit`         | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
 | `integration` | `pnpm test:integration`     | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
 | `e2e`         | `pnpm test:e2e`             | **Pending** — M1/M3, QA Engineer.                                                                  |
@@ -81,6 +95,20 @@ that same job becomes a hard gate with **no workflow edit**.
 To close the loophole once M1 lands, set `CI_STRICT_GATES=1` in the gate jobs' `env`. A
 pending gate then fails instead of passing, so a gate cannot silently regress to "not
 implemented".
+
+A gate name that is not in the registry exits `2`. That check uses `Object.hasOwn`, not a
+plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
+read an undefined `script`, land in the PENDING branch and pass as "owner: unassigned".
+
+### Why `coverage` is its own gate
+
+The `>= 80%` rule is enforced today only _inside_ `pnpm test`, by each package's own vitest
+thresholds. A package that never configures one is therefore exempt by accident while
+`unit` stays green — which is exactly how `packages/game-sdk` sat at 0%
+([PER-53](/PER/issues/PER-53)) and `games/chess` at 41%
+([PER-82](/PER/issues/PER-82)). The `unit` job already uploads a `coverage` artifact, which
+implied a check that did not exist. [PER-89](/PER/issues/PER-89) lands the root script that
+fails on a missing threshold, not just a low one.
 
 ### Why one aggregate check
 
@@ -99,13 +127,32 @@ never matches would stop gating while the required check stayed green.
 Per ADR-0004, `main` is unprotected through M0–M4 and that is an accepted risk, not an
 open problem. The gate moved from **prevention** to **detection**:
 
-| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                                        |
-| ------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                                          |
-| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                                      |
-| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                                            |
-| No direct push to `main`              | **Detected, not prevented**      | `push-audit` in `main.yml` fails when the pushed commit is not reachable from a merged PR. `main` turns red within a minute and the commit list records it forever.                                            |
-| CTO review                            | **No** — Paperclip workflow only | Agents have no GitHub identity. ADR-0004 rejects a `CODEOWNERS` file for this: it is only enforced by branch protection and would name a non-existent user, so it would look like a control without being one. |
+| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                   |
+| ------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                     |
+| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                 |
+| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                       |
+| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit is not reachable from a merged PR. `main` turns red within a minute and the commit list records it forever. |
+| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                       |
+
+The linked-issue check has to be able to _fail_, which took two attempts. The first version
+matched any `\b[A-Z]+-\d+\b` anywhere in the body, so the unedited template satisfied it
+(its own HTML comment contains `PER-6`), and so did any `ADR-0004` reference. It now strips
+HTML comments first and requires a deliberate reference: the `Paperclip-Issue:` trailer, or
+a `/{PREFIX}/issues/{ID}` link. A bare id in prose no longer counts.
+
+**"CTO review on every PR" cannot be met on any plan the board has authorised, and is
+recorded as not met.** Two separate walls, and buying past one does not help:
+
+- Required _status checks_ need branch protection, which needs GitHub Pro. The board
+  answered `Free — buy nothing`, so this is a decision, not a missing task.
+- A required _review_ rule additionally needs a **second GitHub identity**. One account
+  cannot approve its own PR, so a single-identity repo would deadlock rather than gate —
+  Pro would not fix it. Tracked on [PER-78](/PER/issues/PER-78).
+
+Because prevention is now permanently unavailable rather than temporarily so, `push-audit`
+is not a stopgap — it is the _entire_ control on `main`, which is why it also guards the
+production path.
 
 The honest summary: there is a window between a direct push and the red build in which
 `main` is wrong and looks fine. ADR-0004 §Revisit triggers says re-raise the moment two or
