@@ -1,4 +1,6 @@
 node_modules
+# Sibling git worktrees — `pnpm format` must not rewrite another branch's files.
+.worktrees
 dist
 .next
 coverage

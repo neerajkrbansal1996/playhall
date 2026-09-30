@@ -148,28 +148,5 @@ export default tseslint.config(
     files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}', '**/*.cjs'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
-  {
-    // Build/CI/deploy scripts run under plain Node with no bundler and no
-    // `@types/node` in scope, so `js.configs.recommended`'s `no-undef` does not
-    // know about the runtime globals they legitimately use. Declared explicitly
-    // rather than pulling in `globals`: the list is short, and being forced to
-    // extend it is a useful prompt to ask whether a script is growing into
-    // something that belongs in a package.
-    files: ['scripts/**/*.{js,mjs,cjs}'],
-    languageOptions: {
-      globals: {
-        AbortController: 'readonly',
-        AbortSignal: 'readonly',
-        Buffer: 'readonly',
-        URL: 'readonly',
-        clearTimeout: 'readonly',
-        console: 'readonly',
-        fetch: 'readonly',
-        performance: 'readonly',
-        process: 'readonly',
-        setTimeout: 'readonly',
-      },
-    },
-  },
   prettier,
 )
