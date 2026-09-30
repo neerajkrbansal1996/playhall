@@ -10,24 +10,102 @@
  * is where an engineer meets one of these rules for the first time.
  */
 
+const { existsSync, readdirSync } = require('node:fs')
 const { join } = require('node:path')
 
 /**
- * Package names quoted in the `comment` strings below are read from the SDK's own manifest,
+ * Package names quoted in the `comment` strings below are read from each package's own manifest,
  * never typed as literals. Those comments are printed by the `err-long` reporter, so they are
  * the advice an engineer acts on when the gate stops them — advice naming a scope the workspace
- * no longer uses is worse than no advice. The rules themselves match paths, not package names,
- * so a scope rename cannot affect enforcement; this keeps the prose honest alongside it.
+ * no longer uses is worse than no advice.
  */
 const SDK_NAME = require(join(__dirname, 'packages/game-sdk/package.json')).name
 const SCOPE = SDK_NAME.startsWith('@') ? SDK_NAME.split('/')[0] : null
 if (SCOPE === null) {
   throw new Error(`.dependency-cruiser.cjs: SDK package name "${SDK_NAME}" is not scoped.`)
 }
-const SHARED_NAME = `${SCOPE}/shared`
 
-/** The platform internals a game may never reach. `game-sdk` and `shared` are handled separately. */
-const PLATFORM_INTERNALS = '^packages/(platform-core|netcode|game-testkit|ui)/'
+/** Regex-escapes a literal, so a `.` or `+` inside a package name cannot act as a metacharacter. */
+const escapeRe = (literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Workspace package directories directly under `parent` — those that carry a manifest.
+ *
+ * Enumerated rather than hard-listed so that a package added later is covered without editing
+ * this file. A boundary rule that quietly stops covering a new package is the same failure mode
+ * as a rule that never fired: green, and not enforcing anything.
+ */
+function workspacePackageDirs(parent) {
+  const base = join(__dirname, parent)
+  if (!existsSync(base)) return []
+  return readdirSync(base, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(base, entry.name, 'package.json')))
+    .map((entry) => `${parent}/${entry.name}`)
+}
+
+/** A workspace package's declared name, read from its manifest. */
+const packageName = (dir) => require(join(__dirname, dir, 'package.json')).name
+
+/**
+ * Matches an import of one of our own workspace packages, in **both** the forms it can take in
+ * the graph — written as a repo path, and written as a bare package specifier.
+ *
+ * This second form is not hypothetical, and leaving it out was a real hole rather than a
+ * theoretical one. dependency-cruiser only learns a module's repo-relative path once the import
+ * *resolves*, and pnpm links a workspace package into `node_modules` only when the importer
+ * *declares* it. A game may never declare a platform package — `no-illegal-declared-dep` forbids
+ * exactly that — so the realistic violation, `import { x } from '<scope>/platform-core'` inside a
+ * game with nothing added to its `package.json`, resolves to nothing. A path-only rule then sees
+ * no edge at all: it was reported as a `not-to-unresolvable` *warning* and CI stayed green, on
+ * the single most likely way to break the plugin boundary.
+ *
+ * So each pattern below carries three alternations, the same shape COLYSEUS_MODULES already uses
+ * for third-party packages, applied to our own:
+ *   - `^packages/platform-core/` — resolved through the workspace link, the declared case.
+ *   - `^@scope/platform-core($|/)` — the bare specifier dependency-cruiser keeps when the import
+ *     does not resolve, i.e. the undeclared case.
+ *   - `node_modules/@scope/platform-core/` — resolved through an installed (non-linked) copy.
+ * Which one appears depends only on whether the author happened to also declare the dependency
+ * they should not have, so all three have to be forbidden for the rule to mean anything.
+ */
+function packageTargets(dirs) {
+  const paths = dirs.map(escapeRe).join('|')
+  const names = dirs.map((dir) => escapeRe(packageName(dir))).join('|')
+  return [`^(${paths})/`, `^(${names})($|/)`, `(^|/)node_modules/(${names})/`]
+}
+
+/**
+ * The platform internals a game may never reach.
+ *
+ * `game-sdk` is the one package a game may import, and `shared` has its own rule (its published
+ * index is legal, a deep import is not), so both are excluded here. Everything else under
+ * `packages/` is a platform internal by default — which is the right default: a game reaches the
+ * platform through the SDK contract or not at all.
+ */
+const PLATFORM_PACKAGE_DIRS = workspacePackageDirs('packages').filter(
+  (dir) => dir !== 'packages/game-sdk' && dir !== 'packages/shared',
+)
+const PLATFORM_INTERNALS = packageTargets(PLATFORM_PACKAGE_DIRS)
+
+/** Every app. An app is a composition root, never a library a game or the SDK imports. */
+const APP_TARGETS = packageTargets(workspacePackageDirs('apps'))
+
+/** Every game package, across both the flat `games/*` and nested `games/_examples/*` layouts. */
+const GAME_TARGETS = packageTargets([
+  ...workspacePackageDirs('games'),
+  ...workspacePackageDirs('games/_examples'),
+])
+
+/** `shared` is legal through its published index and illegal by deep path — see the rule below. */
+const SHARED_DIR = 'packages/shared'
+const SHARED_NAME = packageName(SHARED_DIR)
+const SHARED_INTERNALS = [
+  // Resolved: any file under `src/` that is not the index.
+  '^packages/shared/src/(?!index)',
+  // Unresolved: a subpath specifier. The package's `exports` map publishes only `.`, so a deep
+  // import never resolves — meaning without this alternation the rule could not fire at all.
+  `^${escapeRe(SHARED_NAME)}/.+`,
+]
 
 /**
  * The single allowlisted platform->game edge (ADR-0002 §3). Generated by a script that
@@ -99,7 +177,7 @@ module.exports = {
         'A game may not reach into the web shell or the realtime server. Games are plugins ' +
         'loaded by an app; an app is never a library a game imports.',
       from: { path: '^games/' },
-      to: { path: '^apps/' },
+      to: { path: APP_TARGETS },
     },
     {
       name: 'no-game-to-game',
@@ -108,7 +186,11 @@ module.exports = {
         'Games are independent plugins. Chess is not a special case and neither is anything ' +
         'else. Shared game logic belongs in the SDK (if general) or duplicated (if not).',
       from: { path: ANY_GAME_DIR },
-      to: { path: '^games/', pathNot: '^games/$1/' },
+      // `pathNot` exempts the game's own directory via `$1` (dependency-cruiser group matching,
+      // not a regex backreference). It deliberately does not exempt the game's own *package
+      // name*: a game importing itself by bare specifier routes its own files through
+      // `node_modules` and is a cycle waiting to happen, so flagging it is correct.
+      to: { path: GAME_TARGETS, pathNot: '^games/$1/' },
     },
     {
       name: 'no-game-to-shared-internals',
@@ -117,7 +199,7 @@ module.exports = {
         `Import ${SHARED_NAME} through its published surface, not by deep path. A deep import ` +
         'bypasses the export map and pins the game to an internal file layout.',
       from: { path: '^games/' },
-      to: { path: '^packages/shared/src/(?!index)' },
+      to: { path: SHARED_INTERNALS },
     },
     {
       name: 'no-platform-to-game',
@@ -129,7 +211,7 @@ module.exports = {
         'at the app root. If you need a second such edge, the registry abstraction is wrong: ' +
         'escalate to the CTO, do not add yourself to this allowlist.',
       from: { path: '^(packages|apps)/', pathNot: GENERATED_REGISTRY },
-      to: { path: '^games/' },
+      to: { path: GAME_TARGETS },
     },
     {
       name: 'no-static-game-import-in-registry',
@@ -140,7 +222,7 @@ module.exports = {
         'every game into the shared chunk and breaks "adding a game adds zero bytes to other ' +
         'bundles".',
       from: { path: GENERATED_REGISTRY },
-      to: { path: '^games/', dynamic: false },
+      to: { path: GAME_TARGETS, dynamic: false },
     },
     {
       name: 'no-sdk-to-platform',
@@ -151,7 +233,7 @@ module.exports = {
         'If the SDK seems to need platform code, the logic belongs on the platform side of the ' +
         'contract instead.',
       from: { path: '^packages/game-sdk/' },
-      to: { path: ['^packages/(platform-core|netcode|game-testkit|ui)/', '^apps/', '^games/'] },
+      to: { path: [...PLATFORM_INTERNALS, ...APP_TARGETS, ...GAME_TARGETS] },
     },
     {
       name: 'no-game-node-builtins',

@@ -82,7 +82,7 @@ interface RunResult {
 }
 
 function run(fixture: Fixture): RunResult {
-  const miniRepo = createMiniRepo(repoRoot)
+  const miniRepo = createMiniRepo(repoRoot, fixture.unlink)
   try {
     for (const [relPath, contents] of fixture.files) {
       const target = join(miniRepo, relPath)

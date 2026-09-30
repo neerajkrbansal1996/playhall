@@ -1,0 +1,12 @@
+# expect: no-sdk-to-platform
+# why: the SDK reaching for platform-core by package name without declaring it, the same unresolved-specifier hole on the SDK side of the contract
+# unlink: platform-core
+=== file: packages/game-sdk/src/index.ts ===
+// game-sdk is a contract and declares almost nothing, so an illegal reach for platform internals
+// from here is unresolved for the same reason it is from a game. The rule shares
+// PLATFORM_INTERNALS with `no-game-to-platform`, so it shared the hole too — worth its own
+// fixture rather than assuming the shared constant is enough.
+import { brandKey } from '@scope/platform-core'
+
+export type GameId = string & { __brand: 'GameId' }
+export const brand = brandKey

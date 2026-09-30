@@ -129,8 +129,18 @@ function packageManifest(name: string): string {
  * dependency-cruiser resolves module paths through symlinks, so if cwd were the symlinked form
  * every resolved path would come back absolute instead of repo-relative and no rule would match.
  */
-export function createMiniRepo(repoRoot: string): string {
+export function createMiniRepo(repoRoot: string, unlink: readonly string[] = []): string {
   const scope = workspaceScope(repoRoot)
+  const unlinked = new Set(unlink)
+  const stubNames = new Set(STUB_PACKAGES.map(({ name }) => name))
+  for (const name of unlinked) {
+    if (!stubNames.has(name)) {
+      throw new Error(
+        `Fixture asks to unlink "${name}", which is not a stub package. ` +
+          `Known: ${[...stubNames].join(', ')}.`,
+      )
+    }
+  }
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'playhall-boundaries-')))
 
   for (const relPath of COPIED_FROM_REPO) {
@@ -156,9 +166,16 @@ export function createMiniRepo(repoRoot: string): string {
   // Workspace resolution: pnpm links workspace packages into node_modules, and that is how
   // `<scope>/platform-core` becomes the path `packages/platform-core/src/index.ts` in the graph.
   // Reproduce it with plain symlinks so the fixtures can use real package specifiers.
+  //
+  // A package named in `unlink` is deliberately left unlinked, which is what pnpm actually does
+  // for a dependency the importer never declared. An import of it then stays a bare specifier in
+  // the graph instead of becoming a repo path, so a fixture can prove a rule fires on the
+  // undeclared form too — the form a game author is most likely to produce, since declaring the
+  // dependency is itself forbidden by `no-illegal-declared-dep`.
   const scopeDir = join(root, 'node_modules', scope)
   mkdirSync(scopeDir, { recursive: true })
   for (const { dir, name } of STUB_PACKAGES) {
+    if (unlinked.has(name)) continue
     const link = join(scopeDir, name)
     symlinkSync(relative(dirname(link), join(root, dir)), link, 'dir')
   }
