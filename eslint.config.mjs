@@ -141,8 +141,22 @@ export default tseslint.config(
       'scripts/**/*.{js,mjs,cjs,ts,mts}',
       'tools/**/*.{js,mjs,cjs,ts,mts}',
       'apps/realtime/**/*.ts',
+      // Playwright specs are Node: `process.env` for the runner's own flags, and
+      // `console.log` is how a measurement reaches the CI log.
+      'e2e/**/*.ts',
+      'playwright.config.ts',
     ],
     languageOptions: { globals: { ...globals.node } },
+  },
+  {
+    /**
+     * The in-page half of `e2e/lib/overflow.ts` is serialised into the browser by
+     * `page.evaluate`, so it reads `document`, `Element` and `DOMRect` — browser
+     * globals the Node block above does not provide. That file is deliberately
+     * both at once, and no `.d.ts` shuffling changes it.
+     */
+    files: ['e2e/lib/*.ts'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
   {
     files: ['**/*.config.{js,mjs,cjs,ts}', 'scripts/**/*.{js,mjs,ts}', '**/*.cjs'],

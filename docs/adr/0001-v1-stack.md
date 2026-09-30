@@ -19,6 +19,25 @@
   mechanically by a new ADR-0002 rule, not by memory. **No decision in this ADR carries the
   `Board-gated` status any more** — the hosting provider noted in Context was never a decision in
   this ADR and remains [PER-38](/PER/issues/PER-38).
+- **Amended:** 2026-09-30 (rev 5) — **naming correction, no decision changes.** Rev 4 promised
+  §4.2 condition 2 would be "enforced mechanically by a new ADR-0002 rule" and named that rule
+  `no-platform-framework-in-games`. It landed as **`no-game-to-colyseus`** (`c50da31`,
+  [#28](https://github.com/neerajkrbansal1996/playhall/pull/28)), so rev 4 named a rule that does
+  not exist in `.dependency-cruiser.cjs` — a reader checking condition 2 grepped for it, found
+  nothing, and could reasonably conclude it was unenforced. §4.2 and the downstream-cost table now
+  record the rule as **landed**, under its real name, at `severity: 'error'` with four negative
+  fixtures. See [ADR-0002](./0002-dependency-boundary-enforcement.md) §2 rev 3 for why the
+  vendor-specific name was kept rather than renaming the gate. No decision, condition or
+  consequence in this ADR changes. Found on [PER-72](/PER/issues/PER-72).
+- **Amended:** 2026-09-30 (rev 6) — **§4.4 only; no decision changes.** Rev 4 left condition 1 —
+  the one answering the board's substantive objection, default-broadcast state sync — enforced by
+  "CTO review, there is no linter for it". That was too weak and, worse, inaccurate: most of
+  condition 1 **is** mechanical, and the design that makes it so was written on
+  [PER-72](/PER/issues/PER-72) and never landed anywhere a reader of this ADR would find it. §4.4
+  now records the **egress funnel** in full — what is structural, what is type-level, what is
+  lintable, and what is a test — and marks each layer `landed` or names the issue it lands with.
+  Condition 1 was the only condition whose enforcement this ADR described as discretionary; after
+  this revision none are. Found on [PER-72](/PER/issues/PER-72).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -167,7 +186,8 @@ These are **conditions, not preferences**. A pull request that breaks one does n
    the SDK contract, not in `@colyseus/schema` classes. Every byte a client receives is the
    return value of `getViewFor` / `getSnapshotFor`, sent as an explicit message. Using
    `this.state` + `@filter()` for game state requires a **new ADR** that demonstrates visibility
-   is opt-in rather than opt-out. _(Redaction completeness)_
+   is opt-in rather than opt-out. Enforced by the egress funnel in §4.4.1, not by review.
+   _(Redaction completeness)_
 2. **No game imports the framework.** A game module must run in `packages/game-testkit` with
    Colyseus **absent from the dependency tree**. That is the test — not a reviewer's opinion —
    and [PER-17](/PER/issues/PER-17) owns it. _(Plugin boundary)_
@@ -215,19 +235,49 @@ lenses:
 
 Conditions that live only in a decision record are not conditions.
 
-- **ADR-0002 gains a third-party denylist rule for `games/*`** —
-  `no-platform-framework-in-games`, covering both imports and declared `package.json`
-  dependencies. Without it, `pnpm add colyseus` inside `games/chess` fails **nothing** today: the
-  existing `no-illegal-declared-dep` rule denylists `@playhall/*` internals only, never a
-  third-party framework. This gap is why rev 4 is an ADR-0002 change and not just an ADR-0001
-  status flip. Owner: [PER-5](/PER/issues/PER-5). This is condition 2's mechanical half.
+- **ADR-0002 gained a third-party denylist rule for `games/*`** — shipped as
+  **`no-game-to-colyseus`**, covering both imports and declared `package.json` dependencies.
+  Without it, `pnpm add colyseus` inside `games/chess` failed **nothing**: the existing
+  `no-illegal-declared-dep` rule denylists `@playhall/*` internals only, never a third-party
+  framework. This gap is why rev 4 is an ADR-0002 change and not just an ADR-0001 status flip.
+  **Landed** on `main` in `c50da31` ([#28](https://github.com/neerajkrbansal1996/playhall/pull/28),
+  [PER-5](/PER/issues/PER-5)) at `severity: 'error'`, with four negative fixtures. This is
+  condition 2's mechanical half. Rev 4 drafted this rule under the name
+  `no-platform-framework-in-games`; the implementation named it for the framework it denylists,
+  and this ADR follows the code. See ADR-0002 §2 rev 3 for why the vendor-specific name was kept.
 - **Testkit conformance runs with no Colyseus in its dependency tree**
   ([PER-17](/PER/issues/PER-17)). Condition 2's behavioural half — the boundary rule catches the
   declaration, the testkit catches the reach.
-- **CTO review checks condition 1 on every PR that touches room state.** Judgement is the only
-  thing that catches "state moved into `this.state` because it was convenient"; there is no
-  linter for it. That is precisely why condition 1 escalates to a **new ADR** rather than to a
-  reviewer's discretion.
+- **Condition 1 is enforced by an egress funnel, not by review.** See §4.4.1. Review is the last
+  layer, not the first, and it escalates to a **new ADR** rather than to a reviewer's discretion.
+
+##### 4.4.1 The egress funnel — condition 1's mechanical half
+
+Colyseus state sync is default-broadcast with per-field opt-out (`@filter()`). Our contract is
+that every byte a client receives is the return value of `getViewFor` / `getSnapshotFor`. Those
+two postures are incompatible, **so we do not use Colyseus state sync at all.** "Remember to
+filter" is not a plan; the design below is arranged so that the first four layers cannot be
+forgotten, only deliberately removed.
+
+| #   | Layer                                                                                                                                                                                                                                                                                                         | Kind       | Status                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| 1   | **The room never assigns `this.state`.** A Colyseus room with no state runs no patch loop, so there is no unfiltered thing to forget to filter.                                                                                                                                                               | Structural | [PER-15](/PER/issues/PER-15)                                                      |
+| 2   | **One egress funnel, enforced by the type system.** `client.send` / `client.raw` / `broadcast` are reachable only from a single `colyseusEgress()` module, which accepts a branded `RedactedView<T>` that only `getViewFor` / `getSnapshotFor` output can produce. Passing raw game state does not typecheck. | Type-level | [PER-15](/PER/issues/PER-15)                                                      |
+| 3   | **`broadcast` banned outside that module** by `no-restricted-properties`, the same family as the `Date.now` / `Math.random` determinism bans in `eslint.config.mjs`.                                                                                                                                          | Lint       | [PER-15](/PER/issues/PER-15) — no source to lint until `apps/realtime` has a room |
+| 4   | **`@colyseus/schema` unreachable from a game**, so a game cannot express its state as framework state in the first place.                                                                                                                                                                                     | CI gate    | **Landed** — `no-game-to-colyseus`, `c50da31`                                     |
+| 5   | **Testkit hidden-information leak tests** — proves `getViewFor` returns the right bytes.                                                                                                                                                                                                                      | Test       | [PER-17](/PER/issues/PER-17)                                                      |
+| 6   | **Egress capture test** — asserts the server sent _nothing else_. Layer 5 proves the redactor is correct; only this proves no other code path writes to a socket.                                                                                                                                             | Test       | [PER-15](/PER/issues/PER-15) — **required deliverable, not optional**             |
+
+**Where this is weakest, stated plainly.** Layers 1–4 are mechanical, but only layer 4 exists
+today: Colyseus appears in no source file in the repo, so layers 1, 2, 3 and 6 all land with
+[PER-15](/PER/issues/PER-15) and are acceptance criteria on it. Until then condition 1 rests on
+layer 4 plus review — which is the position rev 4 described, and it is acceptable only because
+there is no room code to leak from yet. **The moment `apps/realtime` gains a room class, layers
+1, 2 and 6 are merge-blocking.** Layer 6 is the one that catches a leak through a path nobody
+thought to guard, and it is the layer most likely to be dropped for schedule; it is named here so
+that dropping it is a visible decision rather than an omission.
+
+A leak that reaches a client anyway does not get patched — per §4.5 it **reverses** the decision.
 
 #### 4.5 What would make us revisit
 
@@ -633,8 +683,7 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 - `getViewFor` / `getSnapshotFor` as the only path to a client.
 - **The four binding conditions in §4.2** (rev 4). Colyseus is platform-internal, absent from
   every game's dependency tree, never the redaction path, and never the source of time or
-  randomness. `no-platform-framework-in-games` in ADR-0002 is the mechanical half of that
-  commitment.
+  randomness. `no-game-to-colyseus` in ADR-0002 is the mechanical half of that commitment.
 - **Redis being safe to lose at any instant; Postgres as the sole tier of record** (§6.1,
   amended rev 2 — this replaces rev 1's "Redis configured `noeviction` in every environment").
 - A durable log append on the action hot path, budgeted at ≤ 10 ms p95 (§6.2).
@@ -706,7 +755,7 @@ layer — is now unblocked and builds Colyseus-hosted against §4.2.
 
 | Issue                        | Effect of the decision                                                                                                                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's `no-platform-framework-in-games` rule. **New work**, and it is not optional — condition 2 is unenforced without it                                                                                  |
+| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's game→framework denylist rule. **Done** — shipped as `no-game-to-colyseus` in `c50da31` (#28), `severity: 'error'`, four negative fixtures, green on `main`                                          |
 | [PER-15](/PER/issues/PER-15) | Design constraint lifted. Transport layer is Colyseus-hosted; the four §4.2 conditions are acceptance criteria. Still blocked on [PER-12](/PER/issues/PER-12) / [PER-14](/PER/issues/PER-14) for unrelated reasons |
 | [PER-17](/PER/issues/PER-17) | Add a conformance case: the testkit runs with Colyseus absent from the dependency tree                                                                                                                             |
 | [PER-21](/PER/issues/PER-21) | The M6 engine question is pre-answered. ADR-0005 shifts from _select an engine_ to _validate this one against the tick budget_                                                                                     |

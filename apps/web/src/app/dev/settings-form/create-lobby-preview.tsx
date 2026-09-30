@@ -88,8 +88,24 @@ export function CreateLobbyPreview({
         </Button>
       </form>
 
+      {/*
+        `toggle-server-error` and `submitted-settings` are the hooks the E2E
+        overflow gate uses to reach this page's non-default states
+        ([PER-131](/PER/issues/PER-131)); its third, `create-lobby-submit`, is on
+        the form's submit button above. They exist because the alternative is
+        selecting by the label text, and this copy is Product Designer's to
+        change — an English string in a selector breaks on the first rename and
+        on the first locale. Keep the attributes if you reword the buttons.
+
+        PER-131 landed `create-lobby-submit` on a standalone button here while
+        PER-141 was moving the same action into the `<form>` above. Only one may
+        carry the id: Playwright's strict mode throws on a two-match click, so
+        the duplicate was dropped rather than merged. The gate's click and proof
+        are unchanged — the submit button still sets `submitted`.
+      */}
       <div className="flex flex-col gap-2">
         <Button
+          data-testid="toggle-server-error"
           variant="outline"
           onClick={() =>
             setErrors((current): SettingsFieldErrors =>
@@ -104,7 +120,10 @@ export function CreateLobbyPreview({
       </div>
 
       {submitted === null ? null : (
-        <pre className="bg-muted overflow-x-auto rounded-md p-3 text-xs">
+        <pre
+          data-testid="submitted-settings"
+          className="bg-muted overflow-x-auto rounded-md p-3 text-xs"
+        >
           {JSON.stringify(submitted, null, 2)}
         </pre>
       )}
