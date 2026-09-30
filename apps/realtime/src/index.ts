@@ -16,7 +16,6 @@ import { liveness, readiness, type HealthContext } from './health'
 
 const env = loadEnv()
 const { logger, release, errors } = createTelemetry(env)
-const startedAt = new Date().toISOString()
 
 const healthContext: HealthContext = {
   service: release.service,
@@ -136,9 +135,15 @@ function sendHealth(res: ServerResponse, payload: HealthPayload): void {
     brandIsProvisional: BRAND.isProvisional,
     versions: platformBuildInfo(),
     // Telemetry identity, so one probe answers "which build is this, really".
+    //
+    // `startedAt` deliberately is NOT set here. `payload` already carries it,
+    // derived from the single `startedAtMs` in `healthContext`, and so is
+    // `uptimeSeconds`. Overriding it from a second, independently-captured
+    // ambient clock read gives one response two sources of truth for the same
+    // instant and lets `startedAt` and `uptimeSeconds` disagree about the boot
+    // time. `health.ts` takes the clock by injection for exactly this reason.
     release: release.release,
     environment: release.environment,
-    startedAt,
   })
 }
 
