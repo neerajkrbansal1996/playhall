@@ -7,10 +7,10 @@ import { parseMoveInput, tryMove } from '../src/rules/position.js'
  * Guards the `PieceSymbol` -> `PromotionPiece` narrowing in `position.ts`.
  *
  * chess.js types `Move.promotion` as the whole piece alphabet, including 'p' and
- * 'k'. `MoveInput.promotion` is the narrower q/r/b/n. The fix narrows through a
- * guard rather than a cast, so these tests exist to prove the guard preserves
- * every legal promotion instead of quietly dropping one — a cast would have
- * type-checked while letting a malformed value through.
+ * 'k'. `MoveInput.promotion` is the narrower q/r/b/n. `asPromotion` narrows
+ * through a guard rather than a cast, so these tests exist to prove the guard
+ * preserves every legal promotion instead of quietly dropping one — a cast would
+ * have type-checked while letting a malformed value through.
  */
 
 /** White pawn on e7, both kings clear of the promotion square. */
