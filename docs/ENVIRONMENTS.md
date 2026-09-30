@@ -28,12 +28,19 @@ the quota footprint in an org we share with an unrelated product.
 > $120/month (→ $250 at M5, $400 ceiling) and then separately answered the
 > payment-instrument question with _hold all provisioning_. Those are not in conflict: the
 > budget line is real and the means to spend it does not exist, so ADR-0003 §12.3 is a
-> costed, dormant plan. **Everything is back on free tiers — no vendor account, no card on
-> file, no paid tier, no trial, on any provider.** Sentry is unaffected; it is genuinely
-> $0. Free compute tiers sleep on idle, which for a room runner holding authoritative
-> state over a persistent socket is a _correctness_ failure, not a latency one. Nothing in
-> this document assumes a host. §12 records the conditions that bind the moment the hold
-> lifts, and what free-tier staging can and cannot prove.
+> costed, dormant plan. Sentry is unaffected; it is genuinely $0. Free compute tiers sleep
+> on idle, which for a room runner holding authoritative state over a persistent socket is
+> a _correctness_ failure, not a latency one. Nothing in this document assumes a host. §12
+> records the conditions that bind the moment the hold lifts, and what free-tier staging
+> can and cannot prove.
+>
+> **What the hold does and does not forbid** (ADR-0003 §8.7, resolved by the board). It
+> forbids a **paid** account, a card on file, a paid tier, and a trial — on any provider,
+> Fly and Hetzner included. It does **not** forbid a signup that completes with no payment
+> instrument, so free-tier accounts on the four §8.1 vendors — Cloudflare Pages, Render,
+> Upstash, Neon — are permitted, and the $0 topology may be stood up on them. If any of
+> them asks for a card "for verification", or auto-converts from a trial, that is outside
+> the permission: stop and escalate to the Chief of Staff rather than clicking through.
 
 ---
 
@@ -220,11 +227,9 @@ carrying the staging release identity rather than waiting on
 
 The pipeline, and the step that breaks each link if you get it wrong:
 
-1. **Build with a source map, from inside the repo.** Output must live in the tree
-   (`apps/realtime/dist`), because a bundler computes `sources` relative to the outfile —
-   build to a directory outside the repo and every source path in Sentry becomes the build
-   machine's absolute layout. Verified: an in-tree build yields
-   `../../../packages/shared/src/telemetry/correlation.ts`.
+1. **Build with `pnpm --filter @playhall/realtime build:release`**, which asserts its own
+   source-map paths. See §10.1 — this step used to be a written instruction, and the
+   instruction was broken by the first build that followed it.
 2. **Create the release as `<service>@<sha>`** — `POST /organizations/{org}/releases/`
    with `projects: ["playhall-realtime"]`.
 3. **Upload both files under `~/<path>` names** — `index.js` _and_ `index.js.map`. The
@@ -249,14 +254,69 @@ trace was not read back. The `sentry_auth_token` carries `project:releases` and 
 `project:read` (§4), so this agent cannot query an issue through the API, and the Sentry
 MCP session expired mid-run. What is proved is that Sentry holds the artifacts, accepted
 the event, and that the frame the event carries resolves against those exact artifacts.
-The remaining step is one look at the Sentry UI.
+
+**Since read back and confirmed** by the Chief of Staff in the Sentry UI:
+`PLAYHALL-REALTIME-1`, event `b4c67daee3b5d14bed0206f929963310` renders
+`apps/realtime/src/index.ts:81:19` with four lines of surrounding source context. Tags
+read `environment: staging`, `release: playhall-realtime@3dacaff…`. The render is the
+stronger evidence: Sentry can only turn `app:///dist/index.js 7:2423` into a named `.ts`
+line with source text if it read the map uploaded against that exact release. **The
+criterion is met, end to end, on the pipeline.**
+
+### 10.1 Why step 1 is a script and not an instruction
+
+The same read-back showed the frame's path as
+`../../../../../../../Users/<name>/…/.worktrees/per-7/apps/realtime/src/index.ts`, and
+Sentry used that string as the issue **culprit** — the one-line identity shown in every
+issue list, alert and digest. Two costs, neither recoverable after the fact: the trace is
+unreadable to anyone on a different machine, and a username plus an internal directory
+layout is now on a third-party record we do not delete.
+
+This section previously said "build from inside the repo … verified: an in-tree build
+yields `../../../packages/shared/…`". That instruction was correct about the mechanism —
+a bundler computes `sources` relative to the outfile — and useless as a control, because
+an out-of-tree build still succeeds. Nothing checked the outcome, so the very first build
+to follow the instruction broke it silently. There was also no release build script at all
+(`build` is `tsc --noEmit`), so the evidence bundle came from an ad-hoc `esbuild`
+invocation nobody could re-run.
+
+`apps/realtime/build.mjs` now owns the build and asserts, before anything can upload:
+
+| Property                                                    | Why it is the one that matters                                                                            |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Every `sources` entry is repo-root-relative                 | This is the string Sentry renders and uses as the culprit. `..` in a rewritten path is the escape signal. |
+| Every `sources` entry names a file that exists in this repo | A clean-looking path that resolves to nothing symbolicates nothing.                                       |
+| `apps/realtime/src/index.ts` is present                     | Makes the check falsifiable: a map can be clean and still not contain the module a reader will click.     |
+| `sourceRoot` is cleared                                     | Sentry joins it onto every source, so a leftover root silently undoes the rewrite for the whole release.  |
+| The bundle carries `//# sourceMappingURL=`                  | Sentry follows it to find the map. Missing it means every frame arrives minified, with no other symptom.  |
+
+Measured on this branch, `pnpm --filter @playhall/realtime build:release`:
+
+```
+✓ built apps/realtime/dist/index.js  (145.0 KB)
+✓ 25 sources, all repo-relative and present on disk
+✓ entry module resolves as apps/realtime/src/index.ts
+```
+
+`sourceRoot` is absent, 25 `sourcesContent` entries are embedded so context lines render,
+and `grep -c '/Users/<name>'` over the emitted `.map` returns **0**.
+
+**What this retires.** Normalising the map makes the outfile's location irrelevant:
+measured, building to a directory outside the repository now emits the same clean paths
+and the same zero home-directory occurrences. So "build in-tree" is no longer a rule
+anyone has to remember. The escape branch is covered by unit tests
+(`apps/realtime/test/sourcemap-paths.test.mjs`) rather than by a build, because no build
+can reach it any more — a guard nothing exercises is a comment.
+
+The same invariant lives once, in `scripts/release/sourcemap-paths.mjs`, because
+`apps/web` needs it too and must not re-derive it.
 
 ## 11. Still open on this issue
 
 | Item                                                                     | Owner                                         | Unblock action                                                                                            |
 | ------------------------------------------------------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Sentry adapter for `apps/web`                                            | Platform Engineer                             | Use `@sentry/nextjs` there — browser specifics earn the bytes; pass `scrubEventForVendor` as `beforeSend` |
-| Release + source-map upload as a CI step                                 | Platform Engineer, [PER-6](/PER/issues/PER-6) | The four steps in §10, gated on `SENTRY_AUTH_TOKEN`                                                       |
+| Release + source-map upload as a CI step                                 | Platform Engineer, [PER-6](/PER/issues/PER-6) | The four steps in §10, gated on `SENTRY_AUTH_TOKEN`. Step 1 is `build:release`, which self-checks (§10.1) |
 | Deployed staging/production environments, CDN wiring                     | Platform Engineer, [PER-6](/PER/issues/PER-6) | Needs the provisioning hold lifted (§12)                                                                  |
 | Measured staging action round-trip p95 (< 150 ms target)                 | Platform Engineer, ADR-0003 §9                | Needs a staging deploy — see §12.2, not discoverable without an account                                   |
 | Measured Sentry browser bundle cost (ADR-0001 §8 estimates ~25–30 KB gz) | Platform Engineer                             | Needs the browser SDK actually installed                                                                  |
@@ -315,3 +375,57 @@ Stated up front so a green staging demo is never read as evidence it does not ca
 naming: a chess clock has to keep running while nobody is moving, which is exactly the
 condition that sleeps a free instance. Timers are tested against the local
 `docker-compose` stack, and a green staging run is not evidence either way.
+
+---
+
+## 13. Measurement record: every number carries the provider and tier it came from
+
+A target and a measurement venue are different things, and conflating them is a mistake
+this project has now made three times — the `< 150 ms p95` turn-based target, the M5
+2,000-room load test, and ADR-0009's AC2b measurements. In each case the target is real
+and the venue is not what the document assumed. **Recording the venue is what stops a
+budget being read later as a measurement.**
+
+So the rule, for anything measured on this issue or downstream of it:
+
+> **No unqualified number.** Write `idle-socket survival: 14m 50s (Render free)`, never
+> `idle-socket survival: 14m 50s`. An unlabelled figure gets read as describing whichever
+> provider the reader has in mind, and outlives the context that produced it.
+
+### 13.1 AC2b — round-trip RTT, cold-start wake, idle-socket survival
+
+ADR-0009 §Evidence puts these three on [PER-7](/PER/issues/PER-7), and argues for buying
+them in M0 rather than M1 because the hosting choice is "still cheap to unwind" — that is,
+on the assumption they would describe **Fly.io**, which ADR-0003 chose. Under the
+provisioning hold they will not. The implemented topology is Cloudflare Pages + **Render
+free** + Upstash free + Neon free, so what is measurable today is Render's edge.
+
+| Measurement          | Venue when taken                  | Status                                                                                            |
+| -------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Round-trip RTT       | Render free (Cloudflare in front) | Not yet taken — needs the free topology stood up                                                  |
+| Cold-start wake time | Render free                       | Not yet taken                                                                                     |
+| Idle-socket survival | Render free                       | Not yet taken                                                                                     |
+| Round-trip RTT       | **Fly.io `sin`**                  | **Still owed.** Due when provisioning resumes — board revisit at M3, [PER-29](/PER/issues/PER-29) |
+| Cold-start wake time | **Fly.io `sin`**                  | **Still owed**, same gate                                                                         |
+| Idle-socket survival | **Fly.io `sin`**                  | **Still owed**, same gate                                                                         |
+
+The Fly rows are deferred, not dropped. They are written here rather than only in a
+comment so they survive this issue closing.
+
+### 13.2 On Render free, idle-socket survival is not an idle-timeout measurement
+
+Render free spins the **whole service** down after ~15 minutes without traffic. So a
+socket that dies silently near the 15-minute mark is the process being stopped, not an
+edge proxy closing an idle connection — two different failures with the same symptom, and
+only one of them is the thing AC2b is asking about.
+
+When the number is taken it must say which of the two it measured. **If the two cannot be
+distinguished from the client side, record that they could not be** rather than picking the
+more convenient reading. Distinguishing them needs a server-side signal: a log line at
+shutdown, or the close code and whether the service answers an HTTP probe immediately
+after. Fly is the cleaner venue precisely because its autostop is concurrency-driven
+rather than a wall-clock idle timer, which is why the Fly row above is the one that
+actually answers the question.
+
+Unaffected: AC2a ([PER-94](/PER/issues/PER-94)) is local and CI, against our own artifact,
+with no provider in the path.
