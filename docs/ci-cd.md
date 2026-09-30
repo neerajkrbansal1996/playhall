@@ -136,6 +136,21 @@ A gate name that is not in the registry exits `2`. That check uses `Object.hasOw
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
 read an undefined `script`, land in the PENDING branch and pass as "owner: unassigned".
 
+### What proves the gate runner itself
+
+`tools/ci-gate` is the gate runner's own test suite, and it runs under `unit`. Every branch
+above is asserted against a scratch repo root: PENDING passes and names its owner, PENDING
+under `CI_STRICT_GATES=1` fails, a live gate with a missing script fails in both modes, an
+unknown or prototype-chain gate name exits `2`, and a live gate's exit code is propagated.
+So the strict switch is proven **before** it is flipped rather than by the first red
+pipeline. It also checks statically that every registry gate has a job in `ci.yml` and sits
+in `ci-gate`'s `needs` — a registry entry with no job never runs, and a job missing from
+`needs` cannot fail the one required check.
+
+The same suite proves the `format` gate fails closed: `prettier --check` with this repo's
+config rejects a misformatted file and accepts the formatted equivalent. That belongs in a
+test rather than in a deliberately-red PR, which is only true of the run it happened on.
+
 ### Why `coverage` is its own gate
 
 The `>= 80%` rule is enforced today only _inside_ `pnpm test`, by each package's own vitest
