@@ -5,6 +5,9 @@
 - **Author:** CTO
 - **Milestone:** M1 (contract), consumed by M2
 - **Issue:** [PER-37](/PER/issues/PER-37) (requested from [PER-24](/PER/issues/PER-24), contract lives in [PER-10](/PER/issues/PER-10))
+- **Ratified into the v1 contract by** ADR-0008 §10 rev 2 ([PER-95](/PER/issues/PER-95)),
+  which confirms `settingsForm` is required at contract major 1 and updates v1's own
+  conformance fixtures to carry one.
 
 ## Context
 
