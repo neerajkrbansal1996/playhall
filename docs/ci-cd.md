@@ -15,6 +15,10 @@ pre-existing vendor connection exists and is carved out of the hold:** a board-c
 See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 [Activating deploys](#activating-deploys) below.
 
+That carve-out is the only target in this document that may be switched on today, and it
+is **still not live** — the mechanics, and the one thing blocking it, are in
+[The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
+
 ## What runs when
 
 | Workflow                        | Trigger                                                   | What it does                                                                            |
@@ -248,13 +252,13 @@ being stood up under [PER-111](/PER/issues/PER-111), which owns the deploy mecha
 number measured against that link is labelled with the provider and tier it came from, and the
 Fly.io equivalents stay owed** (ADR-0003 §9, §13.7).
 
-| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure.                                                                                                            |
-| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                                                                                                                                          |
-| `cloudflare-pages` | web only              | Free-egress static hosting. **The one target carved out of the hold** (ADR-0003 §13.7) — the board's pre-existing Cloudflare connection may host `apps/web` at $0, per [PER-111](/PER/issues/PER-111). Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
-| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                                                                                                                                         |
-| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                                                                                                                                        |
+| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure.                                                                                                                                                                                                                                                                                                                                 |
+| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                                                                                                                                                                                                                                                                                                                                                               |
+| `cloudflare-pages` | web **staging** only  | Free-egress static hosting. **The one target carved out of the hold** (ADR-0003 §13.7) — the board's pre-existing Cloudflare connection may host `apps/web` at $0, per [PER-111](/PER/issues/PER-111). The adapter throws on `production` (Fly is the ratified provider there) and _skips_ any environment other than `staging`, so switching the staging link on cannot switch per-PR previews on with it. Still relevant beyond the link: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Set these in repository settings **once the hold is lifted**, not before — with the single
 exception of the two `CLOUDFLARE_*` secrets, which the §13.7 carve-out permits for the
@@ -285,6 +289,108 @@ gets no secrets and no preview. That is the correct trade: these workflows execu
 scripts, and `pull_request_target` would run them with this repo's secrets against a
 contributor's code.
 
+### The free staging link on Cloudflare Pages
+
+Owner: Platform Engineer. Issue: [PER-111](/PER/issues/PER-111).
+
+**One durable URL serving `apps/web`, on Cloudflare's free tier, at $0.** It exists to
+satisfy the staging-link half of M0 **AC5** without touching the provisioning hold.
+
+#### Where the boundary is enforced, not just stated
+
+Why this is consistent with the hold is settled above and in **ADR-0003 §13.7** — $0 by
+construction, on an account the board created on 29 Sep before it set the hold, so no
+signup and no payment instrument. Not restated here. What this section adds is where each
+clause of that boundary is actually _held_, because a scope written only in prose is a
+scope that widens by accident:
+
+- **`apps/web` only** — `scripts/deploy/deploy.mjs` throws for `realtime`. Pages has no
+  persistent-process runtime, so this is a capability wall before a policy one. M0 **AC2b**
+  is unaffected.
+- **Staging only** — the adapter throws on `production`. Fly.io remains the ratified
+  provider there; a link is not a migration.
+- **Not a per-PR preview target** — and this is the one that needed code. `preview.yml`
+  reads the _same_ `DEPLOY_PROVIDER` variable, so setting the variable to get the staging
+  link would otherwise have switched per-PR web previews on with it, overturning the
+  board's own **AC1b** ruling as a side effect of a settings change. The adapter therefore
+  **skips**, with a notice, any environment other than `staging`. The gap in
+  ["What is still needed"](#what-is-still-needed) stays recorded where the board put it.
+- **No second provider** — if Cloudflare turns out to be unusable the answer is to report
+  it, not to substitute Render, Vercel or Netlify.
+
+#### The artifact: a static export, and what it deliberately omits
+
+`DEPLOY_PROVIDER=cloudflare-pages` builds `apps/web` with `PLAYHALL_STATIC_EXPORT=1` and
+uploads **`apps/web/out`**. That env var is the only switch; it is off everywhere else, so
+production, staging on Fly and `pnpm dev` all keep the normal Node build.
+
+It previously uploaded `apps/web/.next`, which is a build cache and not a servable Pages
+artifact at all — that was the known defect in the adapter and it is fixed.
+
+A static export cannot host a route handler, and `apps/web/src/app/api/health/route.ts` is
+`runtime = 'nodejs'` + `force-dynamic` **on purpose**: a prerendered health payload answers
+about the build, not about the running process, which is exactly the failure the probe
+exists to catch. Rather than weaken that contract for the benefit of a link, the export
+drops `.ts` from Next's `pageExtensions`, which excludes `route.ts` while `layout.tsx` and
+`page.tsx` still build.
+
+**Consequence, and it is the one thing to remember: a Pages URL has no `/api/health`.**
+Do not add it to `PRODUCTION_WEB_URL`, do not point `uptime.yml` at it, and do not extend
+the smoke probe to it — all three assert 2xx _and_ `ok: true` on that route and would fail
+against this target by design. The staging link is for a human to open, not for a monitor.
+
+#### Switching it on
+
+| Kind     | Name                       | Value                                                                              |
+| -------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| Variable | `DEPLOY_PROVIDER`          | `cloudflare-pages`                                                                 |
+| Variable | `REALTIME_DEPLOY_PROVIDER` | `none` — must be set, or `apps/realtime` inherits the provider and the job throws  |
+| Variable | `CLOUDFLARE_PAGES_PROJECT` | optional; defaults to `playhall-web-staging`                                       |
+| Secret   | `CLOUDFLARE_ACCOUNT_ID`    | the board's account — verified live; the id is on PER-111, not in this public repo |
+| Secret   | `CLOUDFLARE_API_TOKEN`     | **the open item** — see below                                                      |
+
+`main.yml` then publishes on every push to `main`, after the gates and `push-audit`, to the
+project's production branch — which is what owns the durable `<project>.pages.dev` hostname.
+No code change at any step.
+
+#### What is blocking it, precisely
+
+The connection is live. `connections_search` for Cloudflare returns `state: "ready"` —
+_"Connection is installed and usable by this agent"_ — and reads through it work:
+`GET /accounts` returns the board's account and `GET /accounts/{id}/pages/projects` returns
+an empty list. So the board's premise was correct and the 29 Sep connection did survive.
+
+**But the grant is read-only.** Measured against the live connection on 2026-09-30:
+
+| Call                                                 | Result                                           |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| `GET /accounts`, `GET .../pages/projects`            | `200`                                            |
+| `POST /accounts/{id}/pages/projects`                 | `10000 Authentication error`                     |
+| `POST .../workers/scripts/{n}/assets-upload-session` | `No access to the specified resource`            |
+| `GET /user/tokens/permission_groups`                 | `9109 Unauthorized to access requested resource` |
+
+The account user is a Super Administrator, so this is the OAuth grant on the MCP
+connection, not the account. No Pages project can be created through it, and no API token
+can be minted through it either. There is also no Cloudflare↔GitHub connection on the
+account (`GET /accounts/{id}/pages/connections` → `[]`), so the git-integrated Pages path
+is not available without an interactive install.
+
+Either of two things unblocks it, both $0 and neither a signup:
+
+1. **A scoped API token, set as the `CLOUDFLARE_API_TOKEN` repo secret.** Cloudflare
+   dashboard → My Profile → API Tokens → Create Token, permission **Account › Cloudflare
+   Pages › Edit**, scoped to this one account. Nothing else. This is the path the table
+   above is written against and the one that makes the deploy reproducible in CI.
+2. **Re-authorise the Cloudflare connection with write scope** — its catalog entry offers
+   an `mcp-api-key` method alongside `mcp-oauth`, which would carry whatever the supplied
+   token grants.
+
+Until one of them lands, `DEPLOY_PROVIDER` stays `none`, the pipeline keeps reporting
+`not_configured`, and **M0 AC5's staging-link half is not met.** What is verified today is
+everything on this side of the credential: the export builds, and served locally it returns
+`200 text/html` on `/`, `200` on the hashed CSS chunk, and the `404.html` fallback on an
+unknown path.
+
 ## What is still needed
 
 The cost question is discharged — [ADR-0003](adr/0003-hosting-and-cost-model.md) published
@@ -301,7 +407,11 @@ the model and the board answered — but the answer was _authority without permi
    every candidate we costed. A shared long-lived URL redeployed per PR is deliberately
    **not** substituted for it: two concurrent PRs would overwrite each other and a reviewer
    could not tell which change they were looking at. The gap is recorded rather than
-   engineered around.
+   engineered around — and the `cloudflare-pages` adapter refuses `preview` so that the
+   AC5 staging link cannot turn into a back door for it.
+4. **M0 AC5's staging-link half is also not met yet**, but for a smaller reason than the
+   rest of this list: one $0 API token, not a board decision. See
+   [The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
 
 GitHub Actions itself is healthy again — [PER-55](/PER/issues/PER-55) (an account-level
 payment failure that produced `startup_failure` with zero jobs on every workflow) is resolved,
