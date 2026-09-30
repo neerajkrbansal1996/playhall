@@ -22,6 +22,8 @@
     "format:check": "prettier --check .",
     "test": "pnpm -r test",
     "check:workflow-permissions": "node scripts/ci/assert-workflow-permissions.mjs",
+    "registry:generate": "node tools/generate-games-registry.mjs",
+    "registry:check": "node tools/generate-games-registry.mjs --check",
     "clean": "pnpm -r clean",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
