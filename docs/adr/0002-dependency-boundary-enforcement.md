@@ -9,6 +9,14 @@
   rev 1's rule set could not express that — it denylists `@playhall/*` internals only, so
   `pnpm add colyseus` in a game package failed nothing. The rule closes that gap. Nothing else in
   this ADR changes.
+- **Amended:** 2026-09-30 (rev 2.1) — the rev-2 row named **two** of Colyseus' three published
+  packages. `colyseus.js`, the browser client, matches neither `^colyseus$` nor `@colyseus/*`,
+  and it is the name a game's client code reaches for first. §2's row and §5's fixture
+  obligation are corrected; the rule, its severity and its scope are unchanged. Found while
+  reviewing [PER-75](/PER/issues/PER-75). The implementation on
+  [PR #28](https://github.com/neerajkrbansal1996/playhall/pull/28) already denylists all three;
+  the implementation on [PR #29](https://github.com/neerajkrbansal1996/playhall/pull/29) does
+  not, because it is stacked on an older lineage. This row is the contract both must match.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -82,7 +90,7 @@ CI output is where an engineer meets this rule for the first time.
 | `no-sdk-to-platform`             | `^packages/game-sdk/`                | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/` | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable. |
 | `no-game-node-builtins`          | `^games/`                            | `core` (`node:*`, `fs`, `net`, `crypto`, …)                   | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                     |
 | `no-illegal-declared-dep`        | `games/*/package.json`               | any `@playhall/*` except `@playhall/game-sdk`                 | A declared dependency is as much a violation as an import.                                                        |
-| `no-platform-framework-in-games` | `^games/` and `games/*/package.json` | `colyseus`, `@colyseus/schema`                                | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2.  |
+| `no-platform-framework-in-games` | `^games/` and `games/*/package.json` | `colyseus`, `colyseus.js`, `@colyseus/*`                      | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2.  |
 | `no-circular`                    | any                                  | itself (cycle)                                                | Cycles make version pinning and incremental build unreliable.                                                     |
 
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
@@ -102,6 +110,15 @@ what this ADR exists to eliminate. Two properties keep it honest:
 - **It covers the declaration and the import.** A game can couple itself either way, so both
   `from.path` and the `package.json` check are needed. This mirrors the split that already exists
   between `no-game-to-platform` and `no-illegal-declared-dep`.
+- **It names all three npm packages, including the browser client.** Colyseus publishes under
+  `colyseus` (server), `@colyseus/*` (`schema`, `core`, …) and `colyseus.js` (the browser
+  client). `colyseus.js` matches neither of the other two patterns, and it is the one a game's
+  _client_ code reaches for first — so a list written from the server package names leaves the
+  likeliest violation green. Rev 1 of this row named two of the three; the omission was found by
+  adding a real illegal import to `games/chess` on [PER-5](/PER/issues/PER-5), where it surfaced
+  only as a `not-to-unresolvable` **warning**. The lesson generalises past Colyseus: when this
+  list gains an entry, enumerate the package's **published names**, not the one the ADR happened
+  to be arguing about.
 
 The behavioural half of the same condition lives in the testkit: a game module must pass
 `packages/game-testkit` conformance with Colyseus **absent from the dependency tree**
@@ -190,10 +207,28 @@ breaks the build is not acceptable. The committed form is:
   it proves the _right_ rule fired, not merely that something failed.
 - One fixture per rule in §2. A rule with no fixture is a rule we have not proven works.
 
-**Rev 2 adds two fixtures, not one.** `no-platform-framework-in-games` can be violated by an
-import or by a `package.json` entry, and those are two different code paths in
-dependency-cruiser. A fixture for only the import half would leave the half that is easier to
-write by accident — `pnpm add colyseus` — unproven.
+**Rev 2: one fixture per _violation path_, not per rule.** `no-platform-framework-in-games` is
+the first rule where "one fixture per rule" is not enough, because the same rule is enforced
+through several code paths and a fixture only proves the path it exercises. All four are
+required:
+
+1. **Declared** in a game's `package.json` — caught by `check-declared-deps.mjs`, not by
+   dependency-cruiser, which sees no edge until something imports it. This is the half that is
+   easiest to write by accident (`pnpm add colyseus`), so it is the half least acceptable to
+   leave unproven.
+2. **Imported and resolving** — the installed case, where the module's path in the graph is
+   `node_modules/…`.
+3. **Imported but unresolved** — the same import written before `pnpm install`, where
+   dependency-cruiser keeps the bare specifier as the path. A pattern matching only form 2 is
+   green here, which is the worst failure mode a gate has: silent on the state an author is in
+   while writing the violation.
+4. **The browser client**, `colyseus.js` — the spelling that matches neither `^colyseus$` nor
+   `@colyseus/*`. See the rev-2 note in §2.
+
+The generalisation: a fixture proves one path through one rule. Where a rule is enforced in more
+than one tool, or over more than one package name, or against more than one resolution state,
+it needs a fixture for each — and the fixture must assert the **rule name**, so a pass means the
+right rule fired rather than something else failing nearby.
 
 This is also how we demonstrate epic acceptance criterion 3 to the board: the test output
 _is_ the evidence, and it is repeatable rather than a one-off broken build.
