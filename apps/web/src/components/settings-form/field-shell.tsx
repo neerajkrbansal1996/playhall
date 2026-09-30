@@ -39,9 +39,64 @@ export function fieldIds(idPrefix: string, key: string, help: unknown, error: un
   }
 }
 
+/**
+ * The DOM attributes that make a field observable to an E2E spec.
+ *
+ * Mechanical, and that is the whole point. The M2 E2E observable contract §2
+ * fixes the name as `setting-<formFieldKey>` where the key is the literal `key:`
+ * in the game's descriptor, so a new setting cannot ship without a testid and a
+ * renamed key breaks the spec rather than silently un-testing the field. Rev 2
+ * of that contract hand-named four of chess's six fields and lost `takebacks`
+ * and `autoQueen` exactly that way.
+ *
+ * `data-value` is the other half — the contract's proof-selector rule says a
+ * spec must assert the state it drove a form into *before* measuring anything,
+ * so every field has to publish its committed value, not just its existence.
+ * It is the value from `values`, never a re-read of the DOM, so what a spec
+ * asserts is what would be submitted.
+ *
+ * Nothing here knows a game id, a slug or a field's meaning — see ADR-0004 §1.
+ */
+export function fieldTestAttributes(
+  fieldKey: string,
+  value: unknown,
+): Record<`data-${string}`, string | undefined> {
+  return {
+    'data-testid': `setting-${fieldKey}`,
+    'data-field-key': fieldKey,
+    'data-value': settingTestValue(value),
+  }
+}
+
+/**
+ * Serialise a committed setting for `data-value`.
+ *
+ * `SettingsValue` is `string | number | boolean`; an attribute is a string. A
+ * value the form has not got yet (a descriptor field with no default) omits the
+ * attribute entirely rather than publishing `"undefined"`, so
+ * `[data-testid="setting-x"]:not([data-value])` is a meaningful selector.
+ *
+ * Unlike `optionToken` this carries no type prefix: a spec asserts the player's
+ * value (`custom`, `0.5`, `true`), not the renderer's internal lookup key.
+ */
+function settingTestValue(value: unknown): string | undefined {
+  switch (typeof value) {
+    case 'string':
+      return value
+    case 'number':
+      return Number.isFinite(value) ? String(value) : undefined
+    case 'boolean':
+      return value ? 'true' : 'false'
+    default:
+      return undefined
+  }
+}
+
 export interface FieldShellProps {
   readonly idPrefix: string
   readonly fieldKey: string
+  /** The committed value, published as `data-value`. See `fieldTestAttributes`. */
+  readonly value: unknown
   readonly label: string
   readonly help?: string
   readonly error?: string
@@ -63,6 +118,7 @@ export interface FieldShellProps {
 export function FieldShell({
   idPrefix,
   fieldKey,
+  value,
   label,
   help,
   error,
@@ -76,7 +132,7 @@ export function FieldShell({
   return (
     <Wrapper
       data-slot="settings-field"
-      data-field-key={fieldKey}
+      {...fieldTestAttributes(fieldKey, value)}
       className={cn('flex min-w-0 flex-col gap-2', className)}
     >
       {as === 'fieldset' ? (
