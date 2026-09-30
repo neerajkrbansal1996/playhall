@@ -844,6 +844,22 @@ export class TimerService {
    * The runner's options are to queue the expiry and process it after `restore`
    * returns, or to restore with no `onExpire` and drain `poll()` itself
    * immediately afterwards. The second is the shape the M1.6 runner uses.
+   *
+   * ## Required of the room runner: re-assert the seat to move
+   *
+   * **After `restore` returns, call `switchTurnTo` with the seat the game state
+   * says is on move.** On both snapshot versions, every time.
+   *
+   * `onMoveSeatId` is *game state*, and the game module is its authority; the
+   * snapshot persists it as a cache so a restart does not have to stall, not as
+   * a second source of truth. v2 stores it explicitly and infers nothing, but it
+   * can still be stale relative to a match log the runner replayed further. v1
+   * could not always express it at all and returns `null` when the snapshot is
+   * ambiguous — see `readV1Scopes` — so without this call a restored v1 match
+   * can sit with nobody's clock running.
+   *
+   * Re-asserting it is idempotent: `switchTurnTo` onto the seat already on move
+   * changes nothing and credits no increment.
    */
   static restore(snapshot: unknown, options: RestoreTimerServiceOptions): TimerService {
     const parsed = timerSnapshotSchema.parse(snapshot)
@@ -918,10 +934,38 @@ const NO_HOLDS: readonly TimerHold[] = []
  * and no more — which is the correct reading, because a hold the old build
  * never took is a hold that was not in force.
  *
- * `onMoveSeatId` is the seat whose clock was running, or, if the room was
- * frozen at the time, the frozen clock that carried a hold. That second case is
- * the only thing a v1 snapshot can say about a paused room, and it is right:
- * under the old model a stopped-and-held chess clock was the mover's.
+ * ## The seat to move is inferred narrowly, and otherwise fails closed
+ *
+ * A v1 snapshot genuinely cannot always identify the mover, so this does not
+ * try to. Guessing is the worse failure: v1's `applyHold` stamped any record
+ * that was running **or already held**, so a non-mover's clock that was already
+ * held from its own disconnect accumulated the `room` hold too when the host
+ * paused. "First held clock wins" therefore resolved to whichever seat was
+ * *declared* first, and under the normal white-first declaration order that
+ * misreads the common case — Black to move, White disconnected, host pauses,
+ * server restarts mid-deploy — as White on move. White's clock then burns on
+ * Black's turn and can flag there. The server would be asserting a clock the
+ * game state contradicts, which is the opposite of server-authoritative.
+ *
+ * Two narrow cases are accepted, and both must be unambiguous:
+ *
+ * 1. Exactly one non-expired chess clock is **running**. It names the mover
+ *    outright. More than one means v1 was already charging two players (the
+ *    pass-1 `resumeForSeat` defect did exactly that), so the snapshot is
+ *    corrupt and we stop rather than pick a victim.
+ * 2. Nothing is running and exactly one non-expired chess clock is held by
+ *    **`room` alone**. A non-mover's clock can only still be held because it
+ *    carried a non-`room` hold through the turn switch, so `['room']` on its
+ *    own does identify the clock that was running when the room froze.
+ *
+ * Anything else yields `null`: nobody's clock runs until someone says whose
+ * turn it is. Losing a turn's worth of clock start is recoverable; charging the
+ * wrong player is not.
+ *
+ * This is safe to fail closed on because `restore` requires the room runner to
+ * re-assert `switchTurnTo` from game state — the authority for whose turn it is
+ * has always been the game module, never the clock. With that in place a `null`
+ * here is a non-event.
  */
 function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerScopes {
   const scopes: TimerScopes = {
@@ -930,7 +974,8 @@ function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerS
     heldSeats: new Set<string>(),
     heldTimers: new Set<string>(),
   }
-  let heldMover: string | null = null
+  const running: SeatId[] = []
+  const roomHeldAlone: SeatId[] = []
   for (const timer of parsed.timers) {
     if (timer.holds.includes('room')) scopes.roomHeld = true
     if (timer.holds.includes('seat-disconnect') && timer.seatId !== null) {
@@ -939,11 +984,18 @@ function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerS
     if (timer.holds.includes('timer')) scopes.heldTimers.add(timer.timerId)
 
     if (timer.kind !== 'chess-clock' || timer.seatId === null || timer.expired) continue
-    if (timer.startedAtMs !== null) scopes.onMoveSeatId = timer.seatId as SeatId
-    else if (heldMover === null && timer.holds.length > 0) heldMover = timer.seatId
+    if (timer.startedAtMs !== null) running.push(timer.seatId as SeatId)
+    else if (timer.holds.length === 1 && timer.holds[0] === 'room') {
+      roomHeldAlone.push(timer.seatId as SeatId)
+    }
   }
-  if (scopes.onMoveSeatId === null) scopes.onMoveSeatId = heldMover as SeatId | null
+  scopes.onMoveSeatId = onlyMember(running) ?? onlyMember(roomHeldAlone)
   return scopes
+}
+
+/** The single element of `seats`, or null when it is empty or ambiguous. */
+function onlyMember(seats: readonly SeatId[]): SeatId | null {
+  return seats.length === 1 ? (seats[0] as SeatId) : null
 }
 
 interface TimerScopes {

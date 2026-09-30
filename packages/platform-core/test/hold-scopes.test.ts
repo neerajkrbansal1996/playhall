@@ -318,6 +318,118 @@ describe('the scopes survive Redis', () => {
     expect(restored.isRunning(TURN)).toBe(true)
   })
 
+  // The v1 read path must fail closed rather than guess. Pass 3 found the
+  // guess: v1 stamped a hold on any record that was running *or already held*,
+  // so more than one clock could carry one, and "first held clock wins" resolved
+  // to declaration order. Each case below is a shape v1 could actually emit
+  // where the mover is not recoverable; `null` is the only safe answer, and the
+  // runner re-asserts `switchTurnTo` from game state after `restore` anyway.
+  it('reads no seat to move when two version 1 clocks are held by room alone', () => {
+    const restored = restoreTimerService(
+      {
+        version: 1,
+        matchId: 'm1',
+        savedAtMs: 1_000_000,
+        timers: [
+          v1Record({
+            timerId: 'clock:white',
+            seatId: 'white',
+            kind: 'chess-clock',
+            holds: ['room'],
+          }),
+          v1Record({
+            timerId: 'clock:black',
+            seatId: 'black',
+            kind: 'chess-clock',
+            holds: ['room'],
+          }),
+        ],
+      },
+      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+    )
+
+    expect(restored.onMoveSeatId).toBeNull()
+    // And no clock burns on the strength of a guess, before or after the unpause.
+    restored.resumeAll()
+    expect(restored.isRunning(WHITE_CLOCK)).toBe(false)
+    expect(restored.isRunning(BLACK_CLOCK)).toBe(false)
+  })
+
+  it('reads no seat to move when a version 1 snapshot had two clocks running', () => {
+    // v1's `resumeForSeat` started the clock of the seat that was not to move
+    // (pass-1 BLOCKING 1), so a v1 snapshot can genuinely show two running
+    // clocks. The state is already corrupt; picking one of them charges a victim.
+    const restored = restoreTimerService(
+      {
+        version: 1,
+        matchId: 'm1',
+        savedAtMs: 1_000_000,
+        timers: [
+          v1Record({
+            timerId: 'clock:white',
+            seatId: 'white',
+            kind: 'chess-clock',
+            startedAtMs: 1_000_000,
+          }),
+          v1Record({
+            timerId: 'clock:black',
+            seatId: 'black',
+            kind: 'chess-clock',
+            startedAtMs: 1_000_000,
+          }),
+        ],
+      },
+      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+    )
+
+    expect(restored.onMoveSeatId).toBeNull()
+    expect(restored.isRunning(WHITE_CLOCK)).toBe(false)
+    expect(restored.isRunning(BLACK_CLOCK)).toBe(false)
+  })
+
+  it('recovers fully once the runner re-asserts the seat to move', () => {
+    // The contract `restore`'s docstring states, on the worst v1 shape: an
+    // ambiguous snapshot costs nothing, because the game module is the authority
+    // for whose turn it is and the runner replays it.
+    const restored = restoreTimerService(
+      {
+        version: 1,
+        matchId: 'm1',
+        savedAtMs: 1_000_000,
+        timers: [
+          v1Record({
+            timerId: 'clock:white',
+            seatId: 'white',
+            kind: 'chess-clock',
+            remainingMs: 290_000,
+            holds: ['room'],
+          }),
+          v1Record({
+            timerId: 'clock:black',
+            seatId: 'black',
+            kind: 'chess-clock',
+            remainingMs: 295_000,
+            holds: ['seat-disconnect', 'room'],
+          }),
+        ],
+      },
+      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+    )
+
+    // White alone carries `['room']`, so this one *is* recoverable.
+    expect(restored.onMoveSeatId).toBe(WHITE)
+    // Re-asserting the same seat is idempotent: no increment, no clock movement.
+    restored.switchTurnTo(WHITE)
+    expect(restored.remainingMs(WHITE_CLOCK)).toBe(290_000)
+
+    restored.resumeAll()
+    expect(restored.isRunning(WHITE_CLOCK)).toBe(true)
+    // Black stays stopped on both counts: not to move, and still disconnected.
+    expect(restored.isRunning(BLACK_CLOCK)).toBe(false)
+    restored.resumeForSeat(BLACK)
+    expect(restored.isRunning(BLACK_CLOCK)).toBe(false)
+  })
+
   it('reads no seat to move from a version 1 snapshot that had none', () => {
     const restored = restoreTimerService(
       {
