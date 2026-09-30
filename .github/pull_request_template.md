@@ -1,6 +1,9 @@
 <!--
   The `pr-hygiene` CI job fails this PR unless:
-    * the description below contains a Paperclip issue id (e.g. PER-6), and
+    * the `Paperclip-Issue:` trailer below carries a real issue id, or the
+      description links one as `[PER-6](/PER/issues/PER-6)`. Everything in an
+      HTML comment is stripped before that check, so leaving this template
+      untouched fails — which is the point.
     * the PR *title* is a conventional commit (`type(scope): summary`) — the
       squash-merge subject comes from the title, so commitlint cannot catch it.
 -->
