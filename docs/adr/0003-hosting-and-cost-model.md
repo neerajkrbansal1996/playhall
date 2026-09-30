@@ -33,7 +33,11 @@
   returns to the board**, recorded as a standing instruction on the M3 epic
   ([PER-29](/PER/issues/PER-29)). §8.6, §8.7, §10.4, §13.5 and §13.6 changed; nothing about the
   provider, the arithmetic or the dormancy of §12 moved. See
-  [What changed in rev 5](#what-changed-in-rev-5).
+  [What changed in rev 5](#what-changed-in-rev-5). Rev 5 also corrects **a defect of my own in
+  §11.1**: this ADR carried two different costs for per-PR previews — a stale rev-2-era
+  ~$25/month and §12.2's costed $8.78/month — and the wrong one reached the board's M0 sign-off
+  minute. **$8.78 is correct**, and the cheaper design still satisfies AC1b. No board action
+  changes.
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -152,10 +156,10 @@ a free tier that sleeps. Recorded, deliberately not solved, so **M3 does not red
 Rev 4 ended with two questions and no answers. Both came back on 2026-09-30 and neither reopens
 anything, so rev 5 is a narrow amendment rather than a rewrite.
 
-| Question rev 4 asked                                                          | Answer                                                                                                                                                                    |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **§8.7** — does "no vendor account on any provider" forbid a free-tier signup? | **No. Reading A.** Free-tier signups are permitted; no card on file, no paid tier, no trial. §8.1's four accounts may be created.                                          |
-| **§13.6** — is M3 the right point to bring the hold back?                      | **Yes, M3**, recorded as a standing instruction on [PER-29](/PER/issues/PER-29). Escalate sooner if the free topology makes something in M1 or M2 _unachievable_.          |
+| Question rev 4 asked                                                           | Answer                                                                                                                                                            |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **§8.7** — does "no vendor account on any provider" forbid a free-tier signup? | **No. Reading A.** Free-tier signups are permitted; no card on file, no paid tier, no trial. §8.1's four accounts may be created.                                 |
+| **§13.6** — is M3 the right point to bring the hold back?                      | **Yes, M3**, recorded as a standing instruction on [PER-29](/PER/issues/PER-29). Escalate sooner if the free topology makes something in M1 or M2 _unachievable_. |
 
 **What reading A buys, precisely.** It converts §8's topology from a costed description into
 something that can be built: **AC2 (WebSocket round trip on staging), AC5 (a staging link for the
@@ -1508,10 +1512,10 @@ than "partially met" when it signed off M0.
 Two follow-up questions from rev 4, both now closed. Neither changes the provider, the arithmetic,
 or the dormancy of §12.
 
-| Question                                                     | Answer                                                            | Where it lands                                                             |
-| ------------------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Does the hold forbid a free-tier signup that needs no card?  | **No — reading A.** Free-tier accounts are permitted.             | §8.7. M0 goes from two of five criteria reachable to **three of five**.    |
-| When does the hold come back to the board?                   | **M3**, as a standing instruction on [PER-29](/PER/issues/PER-29). | §13.5, §13.6. Escalate sooner only on an M1/M2 _unachievability_, not a gap. |
+| Question                                                    | Answer                                                             | Where it lands                                                               |
+| ----------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Does the hold forbid a free-tier signup that needs no card? | **No — reading A.** Free-tier accounts are permitted.              | §8.7. M0 goes from two of five criteria reachable to **three of five**.      |
+| When does the hold come back to the board?                  | **M3**, as a standing instruction on [PER-29](/PER/issues/PER-29). | §13.5, §13.6. Escalate sooner only on an M1/M2 _unachievability_, not a gap. |
 
 **Also recorded by the board at sign-off:** M0 is accepted with **AC1 recorded as not met**. That
 is the stricter of the two available records and it is the right one — naming an unmeetable
@@ -1550,8 +1554,29 @@ and — via Fly Managed Postgres in the same region — the ≤ 10 ms p95 log ap
 Decision 4 option (a) available for free inside this same ask.
 
 **What it does not buy:** anything about the < 150 ms p95 target at scale (that is §11.2), per-PR
-preview isolation for AC1 (that needs a preview environment per PR, ~$25/month on Fly, **not
-requested here**), or any M6 capability.
+preview isolation for AC1 (that needs a preview environment per PR — **$8.78/month on Fly per
+§12.2**, **not requested here**), or any M6 capability.
+
+> **Rev 5 correction — two numbers for one line item, and the board's minute took the wrong one.**
+> This paragraph previously said **~$25/month**, written in the rev-2 era when "a preview
+> environment per PR" was scoped as a _fully dedicated_ environment including **its own Postgres
+> instance**. §12.2 later costed the line properly at **$8.78/month**: ~20 PRs/month, scale-to-zero
+> preview Machines, and **one shared Postgres instance with a separate database per PR**. Both
+> numbers then sat in this ADR at once, and the ~$25 figure is the one that reached the board — it
+> is quoted in the M0 sign-off relay on [PER-3](/PER/issues/PER-3). **$8.78 is the correct figure.**
+>
+> **The cheaper design still satisfies AC1b, which is why this is a correction and not a
+> downgrade.** AC1b exists so that one PR's schema change cannot break another PR's preview; a
+> separate _database_ per PR gives exactly that isolation. A dedicated Postgres _instance_ per PR
+> additionally isolates resource contention between concurrent previews, which is not what the
+> criterion is about at ~20 PRs/month. If preview load ever makes contention real, the revisit
+> trigger is a preview run whose timings are distorted by a neighbouring preview.
+>
+> **This changes nothing the board must do.** The board accepted M0 with AC1 recorded as not met
+> and declined to fund previews; nothing here reopens that. It is recorded so that _if_ the
+> decision is ever revisited, it is revisited against **$8.78 of an authorised $120** — which makes
+> AC1b the cheapest open criterion on the list by an order of magnitude, and it was the board's own
+> stated #1 spend priority.
 
 **The $0 alternative, honestly stated:** port the room runner to Cloudflare Workers + Durable
 Objects — genuinely $0, genuinely always-on, no payment card, ~230 concurrent players on the free
