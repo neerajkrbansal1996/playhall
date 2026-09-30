@@ -198,6 +198,19 @@ importers:
       '@playhall/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^2.1.8
+        version: 2.1.9(vitest@2.1.9(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0))
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0)
 
   packages/netcode:
     dependencies:

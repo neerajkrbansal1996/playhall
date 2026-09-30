@@ -12,7 +12,7 @@
     "./realtime": "./src/realtime.ts"
   },
   "scripts": {
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "build": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
