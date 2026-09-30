@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
+- **Amended:** 2026-09-30 — §2 gains `no-game-to-colyseus`. The board adopted Colyseus as the
+  server framework ([ADR-0001](./0001-v1-stack.md) §4, rev 4), so the framework now has to be
+  held out of `games/**` mechanically rather than by convention. [PER-72](/PER/issues/PER-72).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -68,6 +71,7 @@ CI output is where an engineer meets this rule for the first time.
 | Rule name                     | From                   | To (forbidden)                                                | Why                                                                                                               |
 | ----------------------------- | ---------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `no-game-to-platform`         | `^games/`              | `^packages/(platform-core\|netcode\|game-testkit\|ui)`        | A game talks to the platform **only** through `game-sdk`.                                                         |
+| `no-game-to-colyseus`         | `^games/`              | `colyseus`, `@colyseus/*` (import **and** declaration)        | The server framework is a platform choice. A game may never learn which one was picked. See the note below.       |
 | `no-game-to-app`              | `^games/`              | `^apps/`                                                      | A game may not reach into the web shell or the server.                                                            |
 | `no-game-to-game`             | `^games/([^/]+)/`      | `^games/` **except** `^games/$1/` (see note)                  | Games are independent plugins. Chess is not a special case.                                                       |
 | `no-game-to-shared-internals` | `^games/`              | `^packages/shared/src/(?!index)`                              | Deep imports bypass the published surface.                                                                        |
@@ -79,6 +83,46 @@ CI output is where an engineer meets this rule for the first time.
 
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
 is not a boundary violation and failing the build on it trains people to ignore the tool.
+
+**Note on `no-game-to-colyseus`:** this is the only rule in the set that names a third-party
+package, so it needs its reason written down rather than assumed.
+
+The board adopted Colyseus as the server framework (ADR-0001 §4). ADR-0001 §4.2's sharpest
+objection to Colyseus survives that decision unchanged: Colyseus state sync wants game state
+expressed as `@colyseus/schema` classes, and a game that _can_ reach that package will
+eventually use it. The moment one does, the SDK contract is Colyseus-shaped, every game is
+pinned to the platform's netcode framework, and the game's state is default-broadcast by a
+framework whose safe path is opt-in — a hidden-information leak, which is a correctness bug.
+ADR-0001 §4.5 answers that objection with six layers; **this rule is layer 4, and it is the
+only one a game author can run into.** The guard is what makes "exactly one adapter file in
+`apps/realtime` names Colyseus" a build failure instead of a convention.
+
+**Enforced in both halves of the gate**, because either alone has a hole:
+
+- dependency-cruiser catches the **import**, matching both the resolved path
+  (`node_modules/colyseus/…`) and the bare specifier. The second alternation is not
+  belt-and-braces: an import written before `pnpm install` has the package resolves to nothing,
+  and a rule matching only the resolved form would pass on the first form a game author
+  actually produces.
+- `check-declared-deps.mjs` catches the **manifest declaration**, which under pnpm's strict
+  `node_modules` is the only thing that would make the import resolve at all. Firing on the
+  manifest line beats firing on the import three commits later.
+
+**A prerequisite the new rule exposed, fixed with it.** `options.exclude` previously dropped
+`node_modules` from the graph. `exclude` deletes a module _and every edge pointing at it_,
+which meant **no rule in this set could constrain a game's third-party dependencies at all** —
+`no-game-to-colyseus` would have been green and doing nothing on the case that matters most, a
+game importing an installed `@colyseus/schema`. `doNotFollow` alone gives the same "we do not
+audit inside libraries" behaviour while keeping the edge visible. Measured on the M0.1 graph:
+48 → 53 modules, 55 → 61 dependencies, 0.46 s → 0.33 s wall clock — inside noise, and far
+inside the 20 s budget below. This is stated here because a silently-blind gate is the worst
+failure mode this ADR has, and it was one line of config away.
+
+**This rule is a denylist of one framework, and that is deliberate.** Third-party dependencies
+in games stay otherwise unrestricted (§2, `no-illegal-declared-dep`); games need libraries. The
+generalisation is not "games may not use libraries", it is **"a game may not import the
+platform's own infrastructure choices."** The next entry here would be a second such choice,
+not a second library someone dislikes.
 
 **Note on `no-game-to-game`:** dependency-cruiser supports _group matching_ — a capture group
 in `from.path` is referenced as `$1` in `to.path` / `to.pathNot` (dependency-cruiser's own
@@ -211,3 +255,10 @@ supported or not.
   a signal the registry abstraction is wrong. Escalate to me for an SDK ADR.
 - A game needs a `node:*` builtin → the game is doing I/O it should not. The capability belongs
   behind an SDK-provided `ctx` facility, decided by ADR, or it belongs nowhere.
+- A game asks to import `colyseus` or `@colyseus/*` → **the answer is no, and the rule does not
+  move.** The need is real but misplaced: the game wants a capability the SDK does not expose
+  yet. Escalate to me, and the outcome is an SDK addition (an ADR) or "put it in the game" —
+  never a widened denylist. The one thing that would reopen this rule is the board replacing
+  Colyseus, in which case the rule's package list changes with ADR-0001 §4, not on its own.
+- The server framework changes → ADR-0001 §4 is the deciding document; this rule's package list
+  follows it in the same PR, and the fixtures follow the rule.

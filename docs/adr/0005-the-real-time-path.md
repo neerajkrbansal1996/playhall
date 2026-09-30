@@ -330,10 +330,16 @@ most of it: when two seats return the same key the platform encodes once and sen
 bytes to both, so "all four hunters see the same world" collapses 12 encodes to ~2.
 
 The direction of the default is the whole design. **Sharing is opt-in; hiding is the default.**
-This is the exact inversion of the `@filter()`-decorator model ADR-0001 §4.2 rejected Colyseus
-for: there, a new field is visible unless someone remembers to hide it. Here, a new field is
-per-seat unless the game deliberately declares two seats identical. A game that forgets to set a
-`viewKey` pays CPU. A game that forgets a `@filter()` leaks the location of a hidden player.
+This is the exact inversion of the `@filter()` / `@view()` model of Colyseus state sync: there, a
+new field is visible unless someone remembers to hide it. Here, a new field is per-seat unless
+the game deliberately declares two seats identical. A game that forgets to set a `viewKey` pays
+CPU. A game that forgets a `@filter()` leaks the location of a hidden player.
+
+**The board adopted Colyseus** as the server framework (ADR-0001 §4, rev 4), which does not
+weaken this. We adopt Colyseus's rooms, transport and matchmaking and **not** its state sync:
+`PlayhallRoom` never sets `this.state`, so there is no default broadcast to invert. ADR-0001
+§4.5 is the full posture. This contract is unchanged by that decision — it was designed against
+the risk, not against the framework.
 
 **The game declares a field schema; the platform writes the bytes.** `snapshotCodec` is a
 declarative description of entity archetypes and their fields — type, range, quantisation — not
@@ -508,13 +514,13 @@ touching this format.
 **Codec choice: a hand-rolled `DataView` encoder generated from the game's `snapshotCodec`
 schema**, writing into a preallocated reused `ArrayBuffer`.
 
-| Alternative            | Why it lost                                                                                                                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| msgpackr               | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule.                                                                 |
-| Protobuf               | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand.                                                              |
-| FlatBuffers            | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick.                 |
-| `@colyseus/schema`     | Solves binary + delta well, and is rejected by ADR-0001 §4.2 for the same reason here: it puts a framework type hierarchy inside game state. A game would depend on the platform's netcode library.          |
-| Bit-packing everything | Squeezing the 10 B entity to ~6 B is possible. Rejected on **budget before optimisation**: we are at 21% of the ceiling. Spending CPU in the tick loop to save bytes we are not short of is the wrong trade. |
+| Alternative            | Why it lost                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| msgpackr               | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule.                                                                                                                                                                                                                             |
+| Protobuf               | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand.                                                                                                                                                                                                                          |
+| FlatBuffers            | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick.                                                                                                                                                                             |
+| `@colyseus/schema`     | Solves binary + delta well, and loses here for the reason ADR-0001 §4.2 gave and §4.5 now enforces: it puts a framework type hierarchy inside game state. Adopting Colyseus as the framework does not change this — `no-game-to-colyseus` (ADR-0002 §2) makes it a build failure inside a game. Revisit at M6 only with a measured comparison against the encoder below. |
+| Bit-packing everything | Squeezing the 10 B entity to ~6 B is possible. Rejected on **budget before optimisation**: we are at 21% of the ceiling. Spending CPU in the tick loop to save bytes we are not short of is the wrong trade.                                                                                                                                                             |
 
 ### 4.5 Clock sync
 
