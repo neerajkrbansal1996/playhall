@@ -76,6 +76,11 @@ The invariant, enforced by `validateMatchResult` and by a new conformance check:
 Plus the ranking rules that were previously only prose: ranks start at 1, ties share a rank
 and the next rank skips (1, 1, 3), and a seat id must appear at most once.
 
+The conformance gate (`result-standings-well-formed`) drives the unrecorded half from the
+game's declared `abortScenarios`, and an unrecorded ending gated on a **deadline** — a
+first-move timeout, a lobby idle-kick — is reached by setting `AbortScenario.advanceMs` on that
+scenario, which offsets `ctx.now` for the abort dispatch only ([PER-136](/PER/issues/PER-136)).
+
 `SeatOutcome` does **not** grow a `'no_result'` / `'void'` member. Rejection reasoning is
 under _Alternatives_; the short version is that a sentinel is silently mis-read by default and
 an empty array cannot be.

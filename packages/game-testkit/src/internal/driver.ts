@@ -56,14 +56,19 @@ export interface ContextOptions extends ClockOptions {
  * The single place a context is built for a conformance run. `now` is derived
  * from `sequence`, so two runs of the same action log see the same clock and
  * a game that reads `ctx.now` is still deterministic.
+ *
+ * `advanceMs` pushes `now` forward for **this one context** without touching
+ * the step size. It exists so a single dispatch can land past a deadline the
+ * step counter would never reach (see `AbortScenario.advanceMs`); it is a
+ * declared constant, so `now` stays a pure function of its arguments.
  */
-export function contextAt(options: ContextOptions, sequence: number): GameContext {
+export function contextAt(options: ContextOptions, sequence: number, advanceMs = 0): GameContext {
   return createGameContext({
     matchId: FAKE_MATCH_ID,
     gameId: asGameId(options.gameId),
     gameVersion: options.gameVersion,
     sdkContractVersion: options.sdkContractVersion,
-    now: options.startNow + sequence * options.nowStepMs,
+    now: options.startNow + sequence * options.nowStepMs + advanceMs,
     seed: options.seed,
     sequence,
   })
@@ -289,6 +294,12 @@ export interface AbortRunOptions<
 > extends PlayoutOptions<TState, TAction, TSettings, TEvent> {
   /** Normal moves to play before the abort action. */
   readonly afterSteps: number
+  /**
+   * Milliseconds added to `ctx.now` for the abort dispatch only. The
+   * `afterSteps` plies before it keep the subject's `nowStepMs` clock, so a
+   * deadline-gated abort becomes reachable without stretching the playout.
+   */
+  readonly advanceMs?: number
   /** The action that ends the match without recording a result. */
   abortAction(
     state: TState,
@@ -301,6 +312,12 @@ export interface AbortRun<TState> {
   readonly result: MatchResult | null
   /** Normal moves actually played before the abort was attempted. */
   readonly stepsPlayed: number
+  /**
+   * The `ctx.now` the abort was dispatched at, or `null` if it never ran. A
+   * deadline-gated abort that silently did nothing is indistinguishable from a
+   * broken abort action without this number.
+   */
+  readonly abortNow: number | null
   /**
    * Why the abort never happened, or `null` if it did. A scenario that cannot
    * reach its own abort is a hole in the gate, not a pass, so the caller
@@ -359,6 +376,7 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
       state,
       result: early,
       stepsPlayed,
+      abortNow: null,
       unreachable: `the match was already over after ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves`,
     }
   }
@@ -373,6 +391,7 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
       state,
       result: null,
       stepsPlayed,
+      abortNow: null,
       unreachable: `played ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves before the driver ran out of moves`,
     }
   }
@@ -383,16 +402,22 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
       state,
       result: null,
       stepsPlayed,
+      abortNow: null,
       unreachable: `abortAction returned null after ${String(stepsPlayed)} moves`,
     }
   }
+
+  // The one dispatch the scenario's `advanceMs` applies to. Everything above
+  // ran on the plain step clock, which is the whole point of scoping it here.
+  // Validate and apply share it, because the real runner does both at one
+  // instant and a deadline-gated abort reads that instant.
+  const ctx = contextAt(context, sequence, options.advanceMs ?? 0)
 
   // The abort is deliberately outside `getLegalActions`, so it is the one
   // action in the suite that no other check cross-references against
   // `validateAction`. The real runner validates before it applies, and it is
   // this call that keeps the driver on the runner's call sequence: without it
   // a game can ship green conformance and an abort production refuses.
-  const ctx = contextAt(context, sequence)
   let verdict: ValidationResult<string>
   try {
     verdict = run(() => server.validateAction(ctx, state, chosen.seatId, chosen.action))
@@ -401,6 +426,7 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
       state,
       result: null,
       stepsPlayed,
+      abortNow: ctx.now,
       unreachable: `validateAction threw on the abort action instead of returning a typed rejection: ${error instanceof Error ? error.message : String(error)}`,
     }
   }
@@ -409,14 +435,21 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
       state,
       result: null,
       stepsPlayed,
-      unreachable: `the game's own validateAction rejected the abort action with '${verdict.error.code}'`,
+      abortNow: ctx.now,
+      unreachable: `the game's own validateAction rejected the abort action with '${verdict.error.code}' at ctx.now=${String(ctx.now)} (${String(options.advanceMs ?? 0)} ms of declared advanceMs); an abort that only opens after a deadline needs AbortScenario.advanceMs`,
     }
   }
 
   const before = state
   state = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action)).state
 
-  return { state, result: run(() => server.getResult(state)), stepsPlayed, unreachable: null }
+  return {
+    state,
+    result: run(() => server.getResult(state)),
+    stepsPlayed,
+    abortNow: ctx.now,
+    unreachable: null,
+  }
 }
 
 /**
