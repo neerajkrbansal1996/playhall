@@ -92,19 +92,5 @@ export {
   stableStringify,
 } from './internal/value.js'
 
-/**
- * The check ids, kept for the M0 contract stub that named them. Prefer
- * `TURN_BASED_CHECKS`, which is the authoritative list.
- */
-export const CONFORMANCE_CHECKS = [
-  'determinism',
-  'no-hidden-info-leak',
-  'illegal-action-rejected',
-  'serialization-round-trip',
-  'reconnect-snapshot-matches-live',
-  'random-playout-terminates',
-  'result-standings-well-formed',
-] as const
-
 /** The SDK version this testkit build conforms to. Recorded on every run. */
 export const TESTKIT_SDK_VERSION = SDK_VERSION

@@ -15,6 +15,11 @@ pre-existing vendor connection exists and is carved out of the hold:** a board-c
 See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 [Activating deploys](#activating-deploys) below.
 
+That carve-out is the only target in this document that may be switched on today, and it
+**is live**: <https://playhall-web-staging.pages.dev>. It is published from an agent
+heartbeat rather than from CI, for a reason that is not a choice — see
+[The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
+
 ## What runs when
 
 | Workflow                        | Trigger                                                   | What it does                                                                            |
@@ -90,7 +95,46 @@ The audit's scope is therefore **commits reaching `main`, plus every tag** — n
 `refs/tags/...`, so a `push`-to-`main`-only test makes `release.yml`'s audit report "not
 applicable" and exit 0 while its step still says it asserted the tagged commit arrived via a
 merged PR. Production would deploy unaudited, and the first time anyone found out would be a
-real release. A tag is never exempt, whatever the event.
+real release. A tag is never exempt, whatever the event. This scope is
+[ADR-0004 §Decision 8](adr/0004-pr-gate-without-branch-protection.md#decision-8--the-audits-scope-is-deploy-bearing-refs-and-a-tag-is-never-exempt)
+(rev 3); Decision 2's older "push to `main`" wording is corrected there rather than left to be
+read as the scope.
+
+### What the audit asserts: arrival, not PR membership
+
+The predicate is that the audited commit **arrived via** a merged PR — it is that PR's
+`merge_commit_sha`, or an ancestor of it. That is deliberately narrower than the obvious
+reading of `GET commits/{sha}/pulls`, and the difference is not academic
+([PER-130](/PER/issues/PER-130)). A commit that sat on a merged PR's head branch keeps its
+association with that PR forever, including when a squash-merge discarded it — so
+"associated with a merged PR" does not mean "was ever merged". Measured against the live API
+on 2026-09-30:
+
+| commit    | what it is                             | `merge_commit_sha` | `compare` | ancestor of `main`? | verdict |
+| --------- | -------------------------------------- | ------------------ | --------- | ------------------- | ------- |
+| `45aa812` | the squash commit of PR #43            | `45aa812`          | identical | yes                 | pass    |
+| `d79f02e` | head of PR #43 **before** its squash   | `45aa812`          | diverged  | **no**              | fail    |
+| `ee460b0` | head of PR #56, merged as merge commit | `1452723`          | ahead     | yes                 | pass    |
+
+`d79f02e` is the case the loose predicate got wrong: not on `main`, reported as landed.
+
+The comparison, rather than `merge_commit_sha === GITHUB_SHA`, is load-bearing. The repo
+allows squash, merge-commit **and** rebase merges, and under either of the latter two a PR
+puts several commits on `main` while only the tip equals `merge_commit_sha` — `ee460b0` above
+is a real commit on `main` that bare equality would fail. A detector that cries wolf gets
+ignored, which is the failure mode ADR-0004 exists to avoid, so the audit tolerates all three
+merge methods instead of requiring a repo-settings change to squash-only.
+
+**What it still does not prove.** That the PR was _reviewed_. There is no GitHub review
+record to check (one account, see below), so the audit proves the change went through a pull
+request, not that anyone approved it. The Paperclip issue thread is the review trail, and
+`pr-hygiene` is what makes the link to it mandatory.
+
+A **force-push to `main`** is reported separately and always fails, even when the arrival
+check passes: the `push` payload's `forced`/`before` say that whatever was on `main` before
+is gone, which no PR records. If the payload cannot be read the audit warns rather than
+failing — the arrival predicate independently catches the same residual path, so failing
+there would trade a real detection for a false one.
 
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
@@ -136,6 +180,21 @@ A gate name that is not in the registry exits `2`. That check uses `Object.hasOw
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
 read an undefined `script`, land in the PENDING branch and pass as "owner: unassigned".
 
+### What proves the gate runner itself
+
+`tools/ci-gate` is the gate runner's own test suite, and it runs under `unit`. Every branch
+above is asserted against a scratch repo root: PENDING passes and names its owner, PENDING
+under `CI_STRICT_GATES=1` fails, a live gate with a missing script fails in both modes, an
+unknown or prototype-chain gate name exits `2`, and a live gate's exit code is propagated.
+So the strict switch is proven **before** it is flipped rather than by the first red
+pipeline. It also checks statically that every registry gate has a job in `ci.yml` and sits
+in `ci-gate`'s `needs` — a registry entry with no job never runs, and a job missing from
+`needs` cannot fail the one required check.
+
+The same suite proves the `format` gate fails closed: `prettier --check` with this repo's
+config rejects a misformatted file and accepts the formatted equivalent. That belongs in a
+test rather than in a deliberately-red PR, which is only true of the run it happened on.
+
 ### Why `coverage` is its own gate
 
 The `>= 80%` rule is enforced today only _inside_ `pnpm test`, by each package's own vitest
@@ -167,13 +226,13 @@ never matches would stop gating while the required check stayed green.
 Per ADR-0004, `main` is unprotected through M0–M4 and that is an accepted risk, not an
 open problem. The gate moved from **prevention** to **detection**:
 
-| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                   |
-| ------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                     |
-| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                 |
-| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                       |
-| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit is not reachable from a merged PR. `main` turns red within a minute and the commit list records it forever. |
-| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                       |
+| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                                                                                                          |
+| ------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                                                                                                            |
+| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                                                                                                        |
+| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                                                                                                              |
+| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit did not _arrive via_ a merged PR (not merely belong to one), and on a force-push to `main`. It does **not** prove review. `main` turns red within a minute and the commit list records it forever. |
+| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                                                                                                              |
 
 The linked-issue check has to be able to _fail_, which took two attempts. The first version
 matched any `\b[A-Z]+-\d+\b` anywhere in the body, so the unedited template satisfied it
@@ -218,6 +277,35 @@ loop. Readiness failure only removes the instance from rotation.
 `apps/realtime` has an empty `DEPENDENCY_CHECKS` registry today, so `/ready` currently
 answers the same question as `/health`. M1 appends a Redis check and a Postgres check —
 one entry each, with no change to the endpoints, the probe script, or the uptime workflow.
+
+### What each deploy probe asks
+
+`.github/workflows/*` all pass `health-path: /api/health`. That is a **request, not the
+last word**: `scripts/deploy/deploy.mjs` may return its own `probe-path`, and
+`.github/actions/deploy` prefers it. Only the adapter knows what it actually served, and
+the alternative — a provider conditional in three workflows — would mean a workflow naming
+a vendor, which none of them do.
+
+| Deployed by                        | Probed at            | Passes when                               |
+| ---------------------------------- | -------------------- | ----------------------------------------- |
+| any process-backed provider        | `/api/health`        | 2xx **and** `ok: true`                    |
+| `cloudflare-pages` (static `out/`) | `/deploy-stamp.json` | 2xx, `ok: true`, **and** `commit` matches |
+
+The static case is not a weaker substitute for the route that cannot exist there — it asks
+a different and better question. A static host runs no process that could be alive or dead,
+so `ok: true` is a constant; the artifact _is_ the deployment. What can actually be wrong is
+that the edge is still serving the **previous** upload, and `--expect-commit` is what turns
+that into a red job instead of a silent one. A mismatch is retried rather than failed
+outright, because an edge mid-propagation looks identical to a stale one for the first few
+seconds and only the stale one is still wrong at the last attempt.
+
+`deploy-stamp.json` is written into `apps/web/out` after the export and before the upload,
+so it ships as one more static asset. It carries `ok: true` and `service` deliberately:
+that is the existing probe contract, so a static target needed no second probe script and
+no "expect mode" switch — just one extra field to pin.
+
+An adapter that declares nothing leaves the caller's path standing, so this is additive and
+every existing deploy still probes `/api/health`. Covered by `tools/ci-gate`.
 
 ## Activating deploys
 
@@ -265,13 +353,13 @@ being stood up under [PER-111](/PER/issues/PER-111), which owns the deploy mecha
 number measured against that link is labelled with the provider and tier it came from, and the
 Fly.io equivalents stay owed** (ADR-0003 §9, §13.7).
 
-| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure.                                                                                                            |
-| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                                                                                                                                          |
-| `cloudflare-pages` | web only              | Free-egress static hosting. **The one target carved out of the hold** (ADR-0003 §13.7) — the board's pre-existing Cloudflare connection may host `apps/web` at $0, per [PER-111](/PER/issues/PER-111). Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
-| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                                                                                                                                         |
-| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                                                                                                                                        |
+| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure.                                                                                                                                                                                                                                                                                                                                 |
+| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                                                                                                                                                                                                                                                                                                                                                               |
+| `cloudflare-pages` | web **staging** only  | Free-egress static hosting. **The one target carved out of the hold** (ADR-0003 §13.7) — the board's pre-existing Cloudflare connection may host `apps/web` at $0, per [PER-111](/PER/issues/PER-111). The adapter throws on `production` (Fly is the ratified provider there) and _skips_ any environment other than `staging`, so switching the staging link on cannot switch per-PR previews on with it. Still relevant beyond the link: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one. |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Set these in repository settings **once the hold is lifted**, not before — with the single
 exception of the two `CLOUDFLARE_*` secrets, which the §13.7 carve-out permits for the
@@ -302,6 +390,139 @@ gets no secrets and no preview. That is the correct trade: these workflows execu
 scripts, and `pull_request_target` would run them with this repo's secrets against a
 contributor's code.
 
+### The free staging link on Cloudflare Pages
+
+Owner: Platform Engineer. Issue: [PER-111](/PER/issues/PER-111).
+
+**One durable URL serving `apps/web`, on Cloudflare's free tier, at $0.** It exists to
+satisfy the staging-link half of M0 **AC5** without touching the provisioning hold.
+
+#### Where the boundary is enforced, not just stated
+
+Why this is consistent with the hold is settled above and in **ADR-0003 §13.7** — $0 by
+construction, on an account the board created on 29 Sep before it set the hold, so no
+signup and no payment instrument. Not restated here. What this section adds is where each
+clause of that boundary is actually _held_, because a scope written only in prose is a
+scope that widens by accident:
+
+- **`apps/web` only** — `scripts/deploy/deploy.mjs` throws for `realtime`. Pages has no
+  persistent-process runtime, so this is a capability wall before a policy one. M0 **AC2b**
+  is unaffected.
+- **Staging only** — the adapter throws on `production`. Fly.io remains the ratified
+  provider there; a link is not a migration.
+- **Not a per-PR preview target** — and this is the one that needed code. `preview.yml`
+  reads the _same_ `DEPLOY_PROVIDER` variable, so setting the variable to get the staging
+  link would otherwise have switched per-PR web previews on with it, overturning the
+  board's own **AC1b** ruling as a side effect of a settings change. The adapter therefore
+  **skips**, with a notice, any environment other than `staging`. The gap in
+  ["What is still needed"](#what-is-still-needed) stays recorded where the board put it.
+- **No second provider** — if Cloudflare turns out to be unusable the answer is to report
+  it, not to substitute Render, Vercel or Netlify.
+
+#### The artifact: a static export, and what it deliberately omits
+
+`DEPLOY_PROVIDER=cloudflare-pages` builds `apps/web` with `PLAYHALL_STATIC_EXPORT=1` and
+uploads **`apps/web/out`**. That env var is the only switch; it is off everywhere else, so
+production, staging on Fly and `pnpm dev` all keep the normal Node build.
+
+It previously uploaded `apps/web/.next`, which is a build cache and not a servable Pages
+artifact at all — that was the known defect in the adapter and it is fixed.
+
+A static export cannot host a route handler, and `apps/web/src/app/api/health/route.ts` is
+`runtime = 'nodejs'` + `force-dynamic` **on purpose**: a prerendered health payload answers
+about the build, not about the running process, which is exactly the failure the probe
+exists to catch. Rather than weaken that contract for the benefit of a link, the export
+drops `.ts` from Next's `pageExtensions`, which excludes `route.ts` while `layout.tsx` and
+`page.tsx` still build.
+
+**Consequence: a Pages URL has no `/api/health`, so it is not probed there.** Every
+workflow passes `health-path: /api/health`, which is right for a provider running a Node
+process and a guaranteed 404 here. That mismatch used to be recorded only in a comment on
+the adapter, and a comment does not fail a build: with `DEPLOY_PROVIDER=cloudflare-pages`
+the deploy reported `deployed`, which opens the probe step's guard, and the probe then
+retried a 404 thirty times and failed `staging (web)` on every push to `main`
+([PER-144](/PER/issues/PER-144)).
+
+So the adapter now **declares** what it served and the probe follows it, rather than the
+workflow guessing — see ["What each deploy probe asks"](#what-each-deploy-probe-asks). The
+static target is probed at `/deploy-stamp.json`, pinned to the deployed commit.
+
+Still true, and still the thing to remember: **do not put a Pages URL in
+`PRODUCTION_WEB_URL` and do not point `uptime.yml` at it.** Those probe `/api/health`
+directly rather than through the adapter, so they would fail against this target by design.
+There is no path by which that happens accidentally — the adapter throws on `production`,
+which is where `PRODUCTION_WEB_URL` comes from.
+
+#### Switching it on
+
+| Kind     | Name                       | Value                                                                              |
+| -------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| Variable | `DEPLOY_PROVIDER`          | `cloudflare-pages`                                                                 |
+| Variable | `REALTIME_DEPLOY_PROVIDER` | `none` — must be set, or `apps/realtime` inherits the provider and the job throws  |
+| Variable | `CLOUDFLARE_PAGES_PROJECT` | optional; defaults to `playhall-web-staging`                                       |
+| Secret   | `CLOUDFLARE_ACCOUNT_ID`    | the board's account — verified live; the id is on PER-111, not in this public repo |
+| Secret   | `CLOUDFLARE_API_TOKEN`     | **the open item** — cannot be minted through the connection; see below             |
+
+`main.yml` then publishes on every push to `main`, after the gates and `push-audit`, to the
+project's production branch — which is what owns the durable `<project>.pages.dev` hostname.
+No code change at any step.
+
+This table is the **CI-owned** path, and it is **not** what is running. The board chose the
+other one, where the credential lives on the Paperclip connection instead of in a repo
+secret; GitHub Actions cannot read that, so `DEPLOY_PROVIDER` stays `none` and the publish
+is run by the Platform Engineer from a heartbeat. **The URL is durable either way — the
+Pages project owns the hostname — but only the CI path refreshes it automatically on push.**
+Moving from one to the other later is a settings change, not a code change.
+
+#### How it is published today
+
+The link is **live**: <https://playhall-web-staging.pages.dev>. The board re-authorised the
+Cloudflare connection with its `mcp-api-key` method on 2026-09-30, which granted the Pages
+write the previous read-only OAuth grant lacked, and the Platform Engineer published
+`apps/web` from a heartbeat.
+
+The publish is **not** `wrangler pages deploy`, and the reason is worth recording because
+the next person will reach for wrangler first and it cannot work here:
+
+| Capability through the connection    | Result                                           |
+| ------------------------------------ | ------------------------------------------------ |
+| `POST /accounts/{id}/pages/projects` | `200` — the project is created this way          |
+| `POST .../pages/.../deployments`     | `200` — the deployment is created this way       |
+| `GET /user/tokens/permission_groups` | `9109 Unauthorized to access requested resource` |
+| `POST /user/tokens`                  | `9109` — **no API token can be minted**          |
+
+No mintable API token means no `CLOUDFLARE_API_TOKEN`, so neither wrangler nor CI can
+authenticate. The credential exists only inside the connection's MCP session. So the deploy
+uses the **Pages Direct Upload API** directly — `GET .../upload-token` for a 30-minute JWT,
+`POST /pages/assets/upload` per file keyed by a 32-hex content hash, `POST
+/pages/assets/upsert-hashes`, then a deployment created from a `path → hash` manifest.
+
+One wrinkle, because it cost time: the MCP session's sandbox can only `fetch` **`api.cloudflare.com`**
+— every other host, including `raw.githubusercontent.com` and `*.pages.dev`, is refused —
+and its request proxy mangles the `Authorization` header on `/pages/assets/*`, so the upload
+JWT is rejected with `8000013` when used from inside the sandbox. Assets are therefore
+relayed through a short-lived Worker that holds the JWT as a secret binding and calls the
+asset API directly. **The relay is torn down at the end of the deploy** — after the run,
+`GET /accounts/{id}/workers/scripts` is empty and the only resource on the account is the
+one Pages project. Keeping the JWT on the Worker is deliberate: it keeps a live credential
+out of the agent transcript and out of this repo.
+
+Consequence of the chosen path, and the one thing to remember: **the link is durable but
+its content is only as fresh as the last agent-run publish.** The Pages project owns the
+hostname, so the URL never changes — but CI does not redeploy it on push, because Actions
+cannot read a credential held on a Paperclip connection. `DEPLOY_PROVIDER` stays `none`.
+
+Adding the `CLOUDFLARE_API_TOKEN` repo secret — Cloudflare dashboard → My Profile → API
+Tokens → Create Token, permission **Account › Cloudflare Pages › Edit**, scoped to this one
+account — is still worth doing on top, and is the only thing that makes the deploy
+reproducible in CI. It is a settings change, not a code change: the
+["Switching it on"](#switching-it-on) table is written against it.
+
+Verified on the live URL: `/` returns `200 text/html` and is **byte-identical** to the
+locally built `apps/web/out/index.html` (`sha256 74b00b47…`), `/dev/settings-form` returns
+`200`, an unknown path returns the `404.html` fallback, the hashed CSS chunk returns
+`200 text/css`, and `/api/health` returns `404` — expected, and explained above.
+
 ## What is still needed
 
 The cost question is discharged — [ADR-0003](adr/0003-hosting-and-cost-model.md) published
@@ -318,7 +539,13 @@ the model and the board answered — but the answer was _authority without permi
    every candidate we costed. A shared long-lived URL redeployed per PR is deliberately
    **not** substituted for it: two concurrent PRs would overwrite each other and a reviewer
    could not tell which change they were looking at. The gap is recorded rather than
-   engineered around.
+   engineered around — and the `cloudflare-pages` adapter refuses `preview` so that the
+   AC5 staging link cannot turn into a back door for it.
+4. **M0 AC5's staging-link half is met** — <https://playhall-web-staging.pages.dev> serves
+   `apps/web` at $0. What remains on this item is not the link but its refresh: no API
+   token can be minted through the connection, so CI cannot republish on push and each
+   update is an agent-run publish. See
+   [The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
 
 GitHub Actions itself is healthy again — [PER-55](/PER/issues/PER-55) (an account-level
 payment failure that produced `startup_failure` with zero jobs on every workflow) is resolved,
@@ -328,10 +555,11 @@ so every gate here executes and ADR-0004's push detector can fire.
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
 not a verdict. **Four of the eleven gates are PENDING stubs** — `coverage`, `testkit`,
-`integration` and `e2e` — `integration` boots Redis and
-Postgres service containers with no tests in them, and there is no build caching. Re-measure
-when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
-the `coverage` job, so it is a nine-job number for a ten-job pipeline.
+`integration` and `e2e` — `integration` boots Redis and Postgres service containers with no tests
+in them, and there is no build caching. Re-measure when M1 closes before concluding Turborepo is
+unnecessary — and note the measurement predates the `coverage` job, so it is a nine-job number for
+a ten-job pipeline. The floor rises as each pending gate acquires real work; do not quote this
+number as the pipeline's steady-state cost.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 

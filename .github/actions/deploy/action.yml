@@ -3,6 +3,8 @@ description: >-
   Deploys one target to one environment through scripts/deploy/deploy.mjs, then
   proves the result is reachable by probing its health endpoint. Shared by the
   preview and production workflows so "deployed" means the same thing in both.
+  The endpoint probed is whatever the adapter says it served — see the
+  `health-path` input.
 
 inputs:
   environment:
@@ -12,7 +14,12 @@ inputs:
     description: web | realtime
     required: true
   health-path:
-    description: Path appended to the deployed URL for the health probe.
+    description: >-
+      Path appended to the deployed URL for the health probe. This is the
+      caller's request, not the last word: an adapter that serves a different
+      health contract returns its own `probe-path` and that wins. Only the
+      adapter knows what it actually served, and no workflow may name a vendor
+      in order to guess. See scripts/deploy/deploy.mjs.
     required: true
   provider:
     description: Value of the DEPLOY_PROVIDER repo variable. Empty means "not configured".
@@ -30,6 +37,12 @@ outputs:
   status:
     description: deployed | not_configured
     value: ${{ steps.deploy.outputs.status }}
+  probe-path:
+    description: >-
+      The path actually probed — the adapter's own if it declared one, otherwise
+      the `health-path` input. Exposed so a caller can report what was checked
+      rather than what it asked for.
+    value: ${{ steps.probe.outputs.path || inputs.health-path }}
 
 runs:
   using: composite
@@ -46,13 +59,42 @@ runs:
     # A URL nobody probed is a claim, not evidence. This step is what makes
     # "a reachable preview URL" and "a merge to main reaches production"
     # checkable rather than asserted.
+    #
+    # The path probed is the adapter's if it declared one, else the caller's.
+    # That indirection is the fix for PER-144: `health-path` is `/api/health` at
+    # every call site, which is right for a provider running a Node process and
+    # a guaranteed 404 for one serving a static export. Resolving it here keeps
+    # the vendor knowledge in `scripts/deploy/deploy.mjs`, where it already
+    # lives, instead of adding a provider conditional to three workflows.
+    #
+    # Values go through `env`, not `${{ }}` interpolation inside the script, so
+    # a URL echoed back by a provider CLI cannot become shell.
     - name: Probe ${{ inputs.target }} health
+      id: probe
       if: steps.deploy.outputs.status == 'deployed'
       shell: bash
+      env:
+        DEPLOYED_URL: ${{ steps.deploy.outputs.url }}
+        ADAPTER_PROBE_PATH: ${{ steps.deploy.outputs.probe-path }}
+        ADAPTER_PROBE_COMMIT: ${{ steps.deploy.outputs.probe-commit }}
+        REQUESTED_HEALTH_PATH: ${{ inputs.health-path }}
+        PROBE_ATTEMPTS: ${{ inputs.probe-attempts }}
       run: |
+        set -euo pipefail
+        probe_path="${ADAPTER_PROBE_PATH:-}"
+        if [[ -z "$probe_path" ]]; then
+          probe_path="$REQUESTED_HEALTH_PATH"
+        elif [[ "$probe_path" != "$REQUESTED_HEALTH_PATH" ]]; then
+          echo "::notice title=Probe path overridden by adapter::The deploy adapter serves its health contract at ${probe_path}, not the requested ${REQUESTED_HEALTH_PATH}; probing ${probe_path}."
+        fi
+        echo "path=${probe_path}" >> "$GITHUB_OUTPUT"
+
+        # An empty --expect-commit means "do not check", so passing it
+        # unconditionally is safe and keeps one call site instead of two.
         node scripts/ci/health-probe.mjs \
-          "${{ steps.deploy.outputs.url }}${{ inputs.health-path }}" \
-          --attempts "${{ inputs.probe-attempts }}" --delay-ms 5000
+          "${DEPLOYED_URL}${probe_path}" \
+          --attempts "$PROBE_ATTEMPTS" --delay-ms 5000 \
+          --expect-commit "${ADAPTER_PROBE_COMMIT:-}"
 
     - name: Summarise
       shell: bash
@@ -62,7 +104,9 @@ runs:
             echo "### ${{ inputs.environment }} / ${{ inputs.target }}"
             echo ""
             echo "- URL: ${{ steps.deploy.outputs.url }}"
-            echo "- Health: \`${{ inputs.health-path }}\` responded \`ok: true\`."
+            # The resolved path, not the requested one: a summary that names a
+            # path nobody probed is the failure mode this whole change fixes.
+            echo "- Health: \`${{ steps.probe.outputs.path }}\` responded \`ok: true\`."
           } >> "$GITHUB_STEP_SUMMARY"
         else
           {

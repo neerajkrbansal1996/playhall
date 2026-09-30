@@ -3,10 +3,11 @@
  * Runs one CI gate by name.
  *
  * Why this exists: PER-6 must stand up the *shape* of the pipeline (lint,
- * typecheck, boundaries, unit, testkit, integration, e2e) before every gate's
- * implementation exists — the conformance testkit lands with PER-17, integration
- * and E2E with M1/M3. A workflow that calls a missing pnpm script fails with
- * `ERR_PNPM_NO_SCRIPT`, which is indistinguishable from a real regression.
+ * format, typecheck, boundaries, unit, coverage, testkit, integration, e2e)
+ * before every gate's implementation exists — the conformance testkit lands with
+ * PER-17, integration and E2E with M1/M3. A workflow that calls a missing pnpm
+ * script fails with `ERR_PNPM_NO_SCRIPT`, which is indistinguishable from a real
+ * regression.
  *
  * So each gate is declared here once, with the issue that owns it. A gate whose
  * script is not defined yet is reported as PENDING and passes; the day the
@@ -21,8 +22,21 @@
  * downloaded, and `playwright install --with-deps` runs `apt-get`, which has no
  * business inside a pnpm script a developer might run.
  *
- * `CI_STRICT_GATES=1` turns PENDING into a failure. Set it once M1 closes so a
- * gate can never silently regress back to "not implemented".
+ * `CI_STRICT_GATES=1` turns PENDING into a failure, so a gate cannot sit
+ * unimplemented behind a green `ci-gate` indefinitely. It is not set yet.
+ *
+ * Owner and trigger: PER-98, at M1 close (PER-9) — the same commitment
+ * `docs/ci-cd.md` records, rather than an unowned "someday" in a comment. The
+ * reason it cannot go on today is measurable, not a preference: `coverage`,
+ * `testkit`, `integration` and `e2e` still have no root script, so the switch
+ * would fail four jobs on its first run and take every PR red. The unblock is
+ * exact — when those four root scripts exist, add `CI_STRICT_GATES: '1'` to the
+ * gate jobs' `env` in `.github/workflows/ci.yml`. If one of them is still
+ * missing at M1 close, the move is not to delay again: give that gate a real
+ * `pendingOwner` issue, which is what the field is for.
+ *
+ * Both branches below are covered by `tools/ci-gate` — the strict failure is
+ * proven before the switch is flipped, not by the first red pipeline.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'

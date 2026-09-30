@@ -8,10 +8,41 @@
  * "require CTO review", because the CTO is a Paperclip agent with no GitHub
  * identity. So the gate cannot prevent a direct push.
  *
- * It can, however, make one loud. This fails the build when the commit pushed
- * to `main` is not reachable from a merged pull request, which turns `main` red
- * within a minute and leaves a permanent marker in the commit list. Detection
- * instead of prevention, stated as such rather than dressed up as a gate.
+ * It can, however, make one loud. This fails the build when the audited commit
+ * did not *arrive* via a merged pull request, which turns `main` red within a
+ * minute and leaves a permanent marker in the commit list. Detection instead of
+ * prevention, stated as such rather than dressed up as a gate.
+ *
+ * **"Arrived via", not "belongs to" (PER-130).** The obvious predicate — any
+ * associated PR with a non-null `merged_at` — answers the wrong question. It
+ * asks "does this commit *belong* to a merged PR?", and under squash-merge the
+ * two questions come apart: every commit that sat on a merged PR's head branch
+ * keeps its association forever, even though the squash threw it away and it
+ * never reached `main`. Measured against the live API on 2026-09-30:
+ *
+ *   d79f02e  head of PR #43 before its squash
+ *     commits/d79f02e/pulls  ->  #43, merged, merge_commit_sha 45aa812
+ *     ancestor of origin/main?  ->  NO
+ *
+ * So the loose predicate calls `d79f02e` reviewed-and-landed when it is neither.
+ * `merge_commit_sha` is the discriminator and it is already in the response:
+ * a commit arrived via PR *p* exactly when it is `p.merge_commit_sha` or an
+ * ancestor of it. That is checked with `compare/{sha}...{merge_commit_sha}` —
+ * `identical` or `ahead` means arrival.
+ *
+ * Bare equality (`merge_commit_sha === GITHUB_SHA`) is the tempting one-liner
+ * and it false-fails real history. This repo allows squash, merge-commit *and*
+ * rebase merges, and under either of the latter two a PR puts several commits on
+ * `main` while only the tip equals `merge_commit_sha`. Measured, same repo:
+ *
+ *   ee460b0  head of PR #56, which was merged as the merge commit 1452723
+ *     ancestor of origin/main?                 ->  YES
+ *     merge_commit_sha === ee460b0?            ->  no  (would false-fail)
+ *     compare ee460b0...1452723                ->  ahead  (arrival, correct)
+ *
+ * A detector that cries wolf gets ignored, which is the failure mode ADR-0004
+ * exists to avoid — so the ancestry test is the predicate, and no restriction of
+ * the repo's merge methods is needed to make it correct.
  *
  * Scope: the two deploy-bearing refs — a `push` to `main` (staging) and *any*
  * tag, on any event (production). Narrowing this to `push`-to-`main` alone
@@ -22,13 +53,15 @@
  *
  * Needs `GITHUB_TOKEN` with `contents: read` and `pull-requests: read`.
  */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 
 const repo = process.env.GITHUB_REPOSITORY
 const sha = process.env.GITHUB_SHA
 const token = process.env.GITHUB_TOKEN
 const apiUrl = process.env.GITHUB_API_URL ?? 'https://api.github.com'
-const actor = process.env.GITHUB_ACTOR ?? 'unknown'
+// `||`, not `??`: Actions sets this to the empty string rather than unsetting it
+// in some contexts, and `@` is not a name anyone can act on.
+const actor = process.env.GITHUB_ACTOR || 'unknown'
 const eventName = process.env.GITHUB_EVENT_NAME
 const ref = process.env.GITHUB_REF
 
@@ -91,6 +124,57 @@ if (!repo || !sha || !token) {
   process.exit(2)
 }
 
+// The residual path PER-130 named: a *force*-push to `main`. A squashed-away
+// PR-head commit can only land on `main` as-is if its parent is already `main`'s
+// tip, which after a squash it is not — so the push has to be non-fast-forward.
+// `forced` and `before` are in the `push` event payload and the audit used to
+// ignore them entirely.
+//
+// Reported as its own failure rather than folded into the PR verdict, because it
+// is a different fact with a different remedy: the arrival check says "this
+// commit did not come from a PR", this says "whatever was on `main` before is
+// gone". Nothing in this repo's conventions force-pushes `main` — merging a PR
+// never does — so there is no legitimate case to false-fail.
+//
+// A payload that cannot be read is a `::warning`, not a failure. The arrival
+// predicate below is the hard control and it independently catches this same
+// residual path (a force-pushed PR-head commit is not an ancestor of its PR's
+// `merge_commit_sha`), so treating an unreadable payload as a violation would
+// trade a real detection for a false one.
+let forcedPush = false
+if (isPushToMain) {
+  const eventPath = process.env.GITHUB_EVENT_PATH
+  let event = null
+  try {
+    event = eventPath ? JSON.parse(readFileSync(eventPath, 'utf8')) : null
+  } catch {
+    event = null
+  }
+
+  if (!event || typeof event.forced !== 'boolean') {
+    console.log(
+      '::warning title=Force-push check skipped::Could not read `forced` from the `push` event ' +
+        'payload (GITHUB_EVENT_PATH), so this run cannot say whether `main` was force-pushed. ' +
+        'The arrival check below still ran.',
+    )
+  } else if (event.forced) {
+    forcedPush = true
+    const before = typeof event.before === 'string' ? event.before : 'unknown'
+    console.error(
+      `::error title=Force-push to main::@${actor} force-pushed \`main\`; it previously pointed ` +
+        `at ${before}. History on the one deploy-bearing branch was rewritten, so the commits ` +
+        'between there and now are no longer on `main` and no PR records their removal ' +
+        '(ADR-0004). Restore `main` to ' +
+        `${before.slice(0, 7)} and land the change as a PR instead.`,
+    )
+    summarise(
+      `## Force-push to \`main\`\n\n@${actor} force-pushed \`main\` from ` +
+        `\`${before.slice(0, 7)}\` to \`${sha.slice(0, 7)}\`. ` +
+        `See [ADR-0004](../blob/main/docs/adr/0004-pr-gate-without-branch-protection.md).\n`,
+    )
+  }
+}
+
 const response = await fetch(`${apiUrl}/repos/${repo}/commits/${sha}/pulls`, {
   headers: {
     accept: 'application/vnd.github+json',
@@ -125,7 +209,7 @@ const commit = await fetch(`${apiUrl}/repos/${repo}/commits/${sha}`, {
 
 if (commit && Array.isArray(commit.parents) && commit.parents.length === 0) {
   console.log(`::notice title=Push audit skipped::${sha} is the root commit and predates any PR.`)
-  process.exit(0)
+  finish(0)
 }
 
 if (merged.length === 0) {
@@ -146,9 +230,96 @@ if (merged.length === 0) {
   process.exit(1)
 }
 
-const via = merged.map((pull) => `#${pull.number}`).join(', ')
+// A merged association is necessary but not sufficient — see the header. Now ask
+// the question the control is cited for: did this commit arrive *via* one of
+// them? Equality is checked first so the overwhelmingly common case (the squash
+// or merge commit itself) costs no extra API call.
+const arrived = []
+const stranded = []
+
+for (const pull of merged) {
+  if (typeof pull.merge_commit_sha !== 'string' || pull.merge_commit_sha.length === 0) {
+    // A merged PR always has one. Its absence means the response is not the
+    // shape this predicate reasons about, and guessing "arrived" would be the
+    // fail-open the rest of this script refuses.
+    stranded.push({ pull, status: 'no merge_commit_sha' })
+    continue
+  }
+  if (pull.merge_commit_sha === sha) {
+    arrived.push(pull)
+    continue
+  }
+
+  const status = await compareStatus(pull.merge_commit_sha)
+  if (status === null) {
+    console.error(
+      `::error title=Push audit could not run::GitHub would not compare ${sha.slice(0, 7)} with ` +
+        `#${pull.number}'s merge commit ${pull.merge_commit_sha.slice(0, 7)}. Without that the ` +
+        'audit cannot tell arrival from mere PR membership, which is inconclusive — and an ' +
+        'inconclusive audit is a failure, not a pass (ADR-0004).',
+    )
+    process.exit(1)
+  }
+  // `ahead` = the merge commit is ahead of this commit, i.e. this commit is an
+  // ancestor of it: exactly the rebase-merge and merge-commit cases.
+  if (status === 'identical' || status === 'ahead') arrived.push(pull)
+  else stranded.push({ pull, status })
+}
+
+if (arrived.length === 0) {
+  const detail = stranded
+    .map(
+      ({ pull, status }) =>
+        `#${pull.number} (merged as ${String(pull.merge_commit_sha).slice(0, 7)}, ` +
+        `compare: ${status})`,
+    )
+    .join(', ')
+  console.error(
+    `::error title=Unreviewed push to main::Commit ${sha} belongs to a merged pull request but ` +
+      `did not arrive on this ref through it (pushed by @${actor}): ${detail}. A commit that sat ` +
+      "on a merged PR's head branch keeps that association even when the squash discarded it, so " +
+      'PR membership alone does not mean the commit was ever merged. Every change to `main` goes ' +
+      'through a PR with a linked Paperclip issue and CTO review (ADR-0004). `main` cannot be ' +
+      'protected on this plan, so this check is the record. Land this commit through a PR — do ' +
+      'not simply re-push.',
+  )
+  summarise(
+    `## Unreviewed push to \`main\`\n\n` +
+      `Commit \`${sha.slice(0, 7)}\` by @${actor} is associated with ${detail} but did not arrive ` +
+      'via any of them. ' +
+      `See [ADR-0004](../blob/main/docs/adr/0004-pr-gate-without-branch-protection.md).\n`,
+  )
+  process.exit(1)
+}
+
+const via = arrived.map((pull) => `#${pull.number}`).join(', ')
 console.log(`Push audit OK — ${sha.slice(0, 7)} arrived via merged PR ${via}.`)
 summarise(`## Push audit\n\n\`${sha.slice(0, 7)}\` arrived via merged PR ${via}.\n`)
+finish(0)
+
+/**
+ * `identical` / `ahead` / `behind` / `diverged` for `sha...head`, or `null` when
+ * GitHub would not answer. `ahead` means `head` is ahead of `sha`.
+ *
+ * @param {string} head
+ */
+async function compareStatus(head) {
+  const result = await fetch(`${apiUrl}/repos/${repo}/compare/${sha}...${head}`, {
+    headers: {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${token}`,
+      'x-github-api-version': '2022-11-28',
+    },
+  })
+  if (!result.ok) return null
+  const body = await result.json()
+  return typeof body.status === 'string' ? body.status : null
+}
+
+/** Exits, but never with 0 while an unreported force-push to `main` stands. */
+function finish(code) {
+  process.exit(code === 0 && forcedPush ? 1 : code)
+}
 
 function summarise(markdown) {
   if (!process.env.GITHUB_STEP_SUMMARY) return

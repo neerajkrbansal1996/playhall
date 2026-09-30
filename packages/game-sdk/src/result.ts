@@ -130,10 +130,13 @@ export function validateMatchResult(
 
   const seen = new Set<SeatId>()
   for (const standing of result.standings) {
-    if (!seatIds.includes(standing.seatId)) {
-      problems.push({ code: 'unknown_seat', seatId: standing.seatId })
-    } else if (seen.has(standing.seatId)) {
+    // Repetition first, membership second: a seat that is both repeated and
+    // unknown is two distinct problems, and reporting `unknown_seat` twice
+    // tells the game author the wrong thing about the second entry.
+    if (seen.has(standing.seatId)) {
       problems.push({ code: 'duplicate_seat', seatId: standing.seatId })
+    } else if (!seatIds.includes(standing.seatId)) {
+      problems.push({ code: 'unknown_seat', seatId: standing.seatId })
     }
     seen.add(standing.seatId)
 

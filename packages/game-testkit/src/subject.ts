@@ -127,7 +127,10 @@ export interface AbortScenario<TState, TAction> {
   /**
    * Normal moves to play before aborting. Default 0 — abort from the opening
    * position. Use a small number for a game whose abort window opens after a
-   * move; the suite fails the scenario if the match ends before it gets there.
+   * move; the suite fails the scenario if the driver cannot play exactly this
+   * many moves first — whether the match ended early or the driver ran out of
+   * moves (no `getLegalActions`, or a `chooseAction` that declined). An abort
+   * from a position the scenario did not ask for is a different abort.
    */
   readonly afterSteps?: number
   /**
