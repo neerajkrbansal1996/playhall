@@ -1,0 +1,10 @@
+{
+  "//": "Resolution-only tsconfig for the boundary gate. dependency-cruiser takes ONE tsconfig for the whole cruise, but path aliases live in per-app tsconfigs — so the aliases the gate must be able to follow are mirrored here. Without this, an `@/...` import is unresolvable and therefore invisible to every boundary rule, which would let a game be reached through an alias. Keep in step with the `paths` of each app tsconfig; the `not-to-unresolvable` warning in .dependency-cruiser.cjs is what tells you it has drifted. This file is never used to compile anything.",
+  "files": ["./resolve-anchor.d.ts"],
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["apps/web/src/*"]
+    }
+  }
+}

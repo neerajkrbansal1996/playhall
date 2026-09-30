@@ -3,16 +3,12 @@
  *
  * The platform reads this and renders the form generically: `apps/web` contains
  * no chess-specific field, no time-control list, and no knowledge that
- * `customInitialMinutes` exists. The field types live in
- * `../sdk/settings-contract.ts` — a temporary local copy of what
- * `packages/game-sdk` should export (see PER-24).
+ * `customInitialMinutes` exists. The field types come from `@playhall/game-sdk`
+ * (ADR-0007), re-exported through `../sdk/contract.ts` like every other SDK
+ * type chess uses.
  */
 
-import type {
-  FieldVisibility,
-  SelectOption,
-  SettingsFormDescriptor,
-} from '../sdk/settings-contract.js'
+import type { FieldVisibility, SelectOption, SettingsFormDescriptor } from '../sdk/contract.js'
 import {
   CUSTOM_INCREMENT_SECONDS,
   CUSTOM_INITIAL_MINUTES,

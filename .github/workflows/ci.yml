@@ -15,7 +15,18 @@ name: CI
 #     missing pnpm script.
 
 on:
+  # `edited` is load-bearing, not tidiness (PER-117). A bare `pull_request:`
+  # defaults to `[opened, synchronize, reopened]`, and `pr-hygiene` is the one
+  # gate that reads PR *metadata* instead of the tree — so without `edited` it
+  # checks the title and body exactly once and never looks again. A PR could
+  # open with a `Paperclip-Issue:` trailer, go green, and then have the link
+  # edited out; worse, `pr-hygiene` checks the title because a squash-merge
+  # takes the PR title as the commit subject, so a retitle after the gate
+  # passed lands an unchecked subject on `main` and breaks the CHANGELOG.
+  # `gh run rerun` is not a workaround — a rerun replays the *stored* event
+  # payload, so it re-reads the old body.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   merge_group:
   workflow_dispatch:
   # `production.yml` calls this on every push to `main`, so the gates run
@@ -26,8 +37,15 @@ on:
 # One run per ref. A force-push supersedes the previous run instead of queueing
 # behind it. `main` is never cancelled, so the production pipeline always has a
 # completed CI run to gate on.
+#
+# `event.action` is in the group for the `edited` trigger above: an `edited` and
+# a `synchronize` are both `event_name: pull_request`, so keying on the event
+# name alone would put them in one group and `cancel-in-progress` would let a
+# PR-body edit kill the in-flight code run and restart all of the gates.
+# Splitting by action keeps the intent above — a force-push still supersedes the
+# previous force-push — while a metadata edit only ever supersedes another edit.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ github.event.action }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
@@ -48,6 +66,52 @@ jobs:
       - name: Linked issue and conventional PR title
         run: node scripts/ci/pr-hygiene.mjs
 
+  # The one cross-file coupling in this pipeline, made checkable (PER-88).
+  # `ci-gate` below requests `pull-requests: write`, and a `workflow_call` caller
+  # that grants less does not fail a gate — GitHub rejects the whole run when it
+  # builds it, with zero jobs, no annotation and no check run on the commit, so
+  # nothing turns red. `main.yml` and `release.yml` now carry the grant, and both
+  # say why, but a comment cannot catch the third caller or the next job here that
+  # needs a new scope. This can.
+  #
+  # No `setup` step on purpose: it reads the workflow files off disk and runs no
+  # install, so it is the cheapest job here and still reports when the workspace
+  # would not install.
+  #
+  # `actionlint` (PER-101) joins the same job rather than getting its own: it is
+  # the same subject — the workflow files themselves — and needs no install
+  # either. Both checks run even if the first fails, so one bad workflow file does
+  # not hide the other problem.
+  #
+  # actionlint's known blind spot: for `pull_request`, GitHub parses the head
+  # ref's workflow files before it builds the run, so a syntax error in *this*
+  # file startup_failures everything and this job never starts. It still covers
+  # the other four workflows, and covers this one on `workflow_dispatch`.
+  workflows:
+    name: workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        env:
+          # Pinned by version + checksum for the same reason every `uses:` here is
+          # pinned by SHA: a CI linter that changes silently under you is a worse
+          # failure than not having one.
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 --retry-all-errors -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum --check --strict -
+          tar -xzf "$tarball" actionlint
+          ./actionlint -color
+      - name: Reusable-workflow callers are not narrowed
+        if: always()
+        run: node scripts/ci/assert-workflow-permissions.mjs
+
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -56,6 +120,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs lint
+
+  # Separate from `lint` so "your code is wrong" and "your code is unformatted"
+  # are two different red X's. A formatting failure is fixed with `pnpm format`
+  # and needs no thought; conflating the two trains people to skim both.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs format
 
   typecheck:
     name: typecheck
@@ -86,6 +162,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs unit
+
+  # The repo-wide >= 80% rule (AGENTS.md) is currently enforced only *inside*
+  # `pnpm test`, by each package's own vitest thresholds — so a package that
+  # never configures a threshold is exempt by accident, which is how
+  # `game-sdk` sat at 0% and `games/chess` at 41% while `unit` stayed green.
+  # This gate is the aggregate check that closes that hole. PENDING until its
+  # owning issue (PER-89) lands the root script; see scripts/ci/gate.mjs.
+  #
+  # The coverage artifact belongs here rather than on `unit`, where it used to
+  # sit: `unit` runs vitest with no `--coverage`, so the upload had
+  # `if-no-files-found: ignore` and published an empty archive on every run that
+  # read, to anyone glancing at it, as coverage enforcement. On this job it is
+  # empty for the same reason until PER-89 lands — but at least it is attached to
+  # the job whose name says it is pending.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs coverage
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -200,7 +298,20 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [pr-hygiene, lint, typecheck, boundaries, unit, testkit, integration, e2e]
+    needs:
+      [
+        pr-hygiene,
+        workflows,
+        lint,
+        format,
+        typecheck,
+        boundaries,
+        unit,
+        coverage,
+        testkit,
+        integration,
+        e2e,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

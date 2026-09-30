@@ -129,6 +129,32 @@ export {
   validateManifest,
 } from './manifest.js'
 
+// The settings surface is split across two modules so a browser can reach the
+// pure readers without the validator. Both halves are re-exported here, so the
+// barrel is unchanged for everyone who does not care — see
+// `settings-form.ts` for why the line is where it is.
+export type {
+  FieldVisibility,
+  GameSettingsShape,
+  NumberField,
+  SelectField,
+  SelectOption,
+  SettingsField,
+  SettingsFieldKind,
+  SettingsFormDescriptor,
+  SettingsValue,
+  ToggleField,
+} from './settings-form.js'
+export {
+  SETTINGS_FORM_VERSION,
+  canonicalSettingsKey,
+  isFieldVisible,
+  visibleFields,
+} from './settings-form.js'
+
+export type { SettingsContract, SettingsFormIssue, SettingsFormIssueCode } from './settings.js'
+export { checkSettingsForm, settingsFieldSchema, settingsFormDescriptorSchema } from './settings.js'
+
 export type { Semver, VersionPin, VersionPinFailure } from './versioning.js'
 export {
   SDK_CONTRACT_VERSION,

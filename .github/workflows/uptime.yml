@@ -99,11 +99,19 @@ jobs:
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
               `/actions/runs/${context.runId}`
 
-            const found = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue label:${LABEL} in:title "${TITLE}"`,
-              per_page: 5,
+            // `issues.listForRepo`, not the search API. GitHub is deprecating
+            // `search.issuesAndPullRequests` calls that do not pass
+            // `advanced_search`, so this would have started failing on its own
+            // schedule — and the search index lags writes by seconds to minutes,
+            // which is exactly wrong for "have I already opened this outage
+            // issue?". Listing by label is exact and immediate.
+            const found = await github.rest.issues.listForRepo({
+              ...context.repo,
+              labels: LABEL,
+              state: 'open',
+              per_page: 100,
             })
-            const open = found.data.items.find((i) => i.state === 'open')
+            const open = found.data.find((i) => !i.pull_request && i.title === TITLE)
 
             if (down.length === 0) {
               if (open) {

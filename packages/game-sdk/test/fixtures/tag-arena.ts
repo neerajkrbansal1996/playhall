@@ -151,6 +151,33 @@ export const manifest: GameManifest<TagArenaSettings> = {
       isDefault: true,
     },
   ],
+  // A real-time game's form is the same three field kinds as a turn-based one.
+  // That is the generality test for ADR-0007 from the other end: if the
+  // descriptor had needed a fourth kind here, it would have been chess-shaped.
+  settingsForm: {
+    version: 1,
+    fields: [
+      {
+        kind: 'number',
+        key: 'roundSeconds',
+        label: 'Round length',
+        unit: 's',
+        min: 30,
+        max: 600,
+        step: 30,
+      },
+      {
+        kind: 'number',
+        key: 'arenaRadius',
+        label: 'Arena radius',
+        help: 'Bigger arenas favour hiders.',
+        unit: 'm',
+        min: 16,
+        max: 64,
+        step: 4,
+      },
+    ],
+  },
   timers: [{ id: 'round', kind: 'match', description: 'Round length.', pausesOnDisconnect: false }],
   status: 'coming-soon',
   version: '0.1.0',

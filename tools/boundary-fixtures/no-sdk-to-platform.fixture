@@ -1,0 +1,9 @@
+# expect: no-sdk-to-platform
+# why: the SDK becoming a client of the platform it is supposed to be a contract with
+=== file: packages/game-sdk/src/index.ts ===
+// game-sdk is the contract both sides code against. If it imports platform-core it can no
+// longer be published or reasoned about independently, and the contract stops being a boundary.
+import { brandKey } from '@scope/platform-core'
+
+export type GameId = string & { __brand: 'GameId' }
+export const owner = brandKey

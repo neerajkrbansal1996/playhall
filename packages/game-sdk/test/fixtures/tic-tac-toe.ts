@@ -137,8 +137,39 @@ export const manifest: GameManifest<TicTacToeSettings> = {
       settings: { moveTimeoutSeconds: 30, firstMove: 'seat-order' },
       isDefault: true,
     },
-    { id: 'blitz', label: 'Blitz', settings: { moveTimeoutSeconds: 5, firstMove: 'random' } },
+    {
+      id: 'blitz',
+      label: 'Blitz',
+      settings: { moveTimeoutSeconds: 5, firstMove: 'random' },
+      featured: true,
+    },
   ],
+  // The generality test for ADR-0007: tic-tac-toe is nothing like chess and
+  // needs no field kind chess did not need, and no chess concept.
+  settingsForm: {
+    version: 1,
+    fields: [
+      {
+        kind: 'number',
+        key: 'moveTimeoutSeconds',
+        label: 'Seconds per move',
+        unit: 's',
+        min: 5,
+        max: 300,
+        step: 5,
+      },
+      {
+        kind: 'select',
+        key: 'firstMove',
+        label: 'Who moves first',
+        display: 'chips',
+        options: [
+          { value: 'seat-order', label: 'Host' },
+          { value: 'random', label: 'Coin flip' },
+        ],
+      },
+    ],
+  },
   timers: [
     {
       id: 'move',

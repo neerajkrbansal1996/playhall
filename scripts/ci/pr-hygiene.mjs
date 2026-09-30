@@ -10,18 +10,37 @@
  *      title* as the commit subject, so an unchecked title defeats the hook and
  *      breaks the generated CHANGELOG.
  *
- * The third rule — CTO review on every PR — cannot be checked here. A required
- * reviewer is branch protection plus CODEOWNERS, and branch protection is
- * unavailable on this repo's current GitHub plan (see docs/ci-cd.md). The
- * CODEOWNERS file and this job are the parts that work today; the protection
- * rule switches on later with no change to either.
+ * The third rule — CTO review on every PR — cannot be checked here, and cannot
+ * be checked anywhere. A required reviewer is branch protection, which needs a
+ * plan the board has declined; and a required *review* rule additionally needs
+ * a second GitHub identity, because one account cannot approve its own PR and a
+ * single-identity repo would deadlock rather than gate. There is deliberately
+ * no CODEOWNERS file: without protection it requests a reviewer it cannot
+ * require, and a control that cannot fail is worse than a missing one, because
+ * the next person reads the file and stops looking. See docs/ci-cd.md.
  *
  * Reads the event payload from GITHUB_EVENT_PATH so it needs no API token.
  */
 import { readFileSync } from 'node:fs'
 
-/** Paperclip issue id, e.g. PER-6. Matches a bare id or one inside a markdown link. */
-const PAPERCLIP_ISSUE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/
+/**
+ * A *deliberate* link to a Paperclip issue: either the `Paperclip-Issue:`
+ * trailer the PR template ships, or a `/{PREFIX}/issues/{ID}` UI link.
+ *
+ * Not a bare `\b[A-Z]+-\d+\b`. That matched three things the author never
+ * chose: the id inside the template's own HTML comment (so an untouched
+ * template passed), any `ADR-0004` reference, and any upstream id quoted in
+ * prose. The check has to be able to fail, or it is decoration.
+ */
+const PAPERCLIP_ISSUE =
+  /(^[ \t]*Paperclip-Issue:[ \t]*[A-Z][A-Z0-9]{1,9}-\d+\b)|(\/[A-Z][A-Z0-9]{1,9}\/issues\/[A-Z][A-Z0-9]{1,9}-\d+\b)/m
+
+/**
+ * Markdown/HTML comments. Stripped before the link check so the template's own
+ * instructions cannot satisfy the rule they describe.
+ */
+const HTML_COMMENT = /<!--[\s\S]*?-->/g
+
 /** Conventional commit subject: `type(optional-scope)!: summary`. */
 const CONVENTIONAL_TITLE =
   /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: .+/
@@ -39,14 +58,19 @@ if (!pr) {
   process.exit(0)
 }
 
-const body = pr.body ?? ''
 const title = pr.title ?? ''
+// Strip the template's commentary first: an author who fills in nothing must
+// fail, and the unedited template contains both a `PER-6` example and a
+// `Paperclip-Issue:` label inside its HTML comment.
+const body = (pr.body ?? '').replace(HTML_COMMENT, '')
 const failures = []
 
 if (!PAPERCLIP_ISSUE.test(body)) {
   failures.push(
-    'No linked issue. Put the Paperclip issue id in the PR description, e.g. ' +
-      '`Paperclip-Issue: PER-6` or `Closes [PER-6](/PER/issues/PER-6)`.',
+    'No linked issue. Add the trailer `Paperclip-Issue: PER-6` on its own line, or link the ' +
+      'issue as `[PER-6](/PER/issues/PER-6)`. A bare mention in prose, an `ADR-…` reference, ' +
+      'or the id left inside the template’s HTML comment does not count — the link has to ' +
+      'be something you chose.',
   )
 }
 

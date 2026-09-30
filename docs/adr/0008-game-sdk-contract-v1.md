@@ -1,10 +1,16 @@
 # ADR-0008: Fix the Game SDK contract at v1
 
-- **Status:** Accepted
+- **Status:** Accepted (rev 2)
 - **Date:** 2026-09-30
 - **Author:** CTO
 - **Milestone:** M1
 - **Issue:** [PER-10](/PER/issues/PER-10)
+- **Revisions:**
+  - rev 1 — contract fixed at v1 ([PER-10](/PER/issues/PER-10)).
+  - rev 2 — §10 added: `manifest.settingsForm` is required, and the `isDefault` preset must
+    carry `defaultSettings` ([PER-95](/PER/issues/PER-95)). Raised when ADR-0007's
+    descriptor met v1's fixtures on `main`. Pre-M2, so no board gate; nothing shipped, so
+    no contract-major bump.
 
 ## Context
 
@@ -30,9 +36,9 @@ optional members are cheap; a missing seam is a rewrite.
 
 Ship contract major **1**, exported from `packages/game-sdk`, with the manifest, the
 turn-based server contract, the real-time server contract (types only), and the client
-contracts as specified in [PER-10](/PER/issues/PER-10). Nine decisions below depart from
+contracts as specified in [PER-10](/PER/issues/PER-10). The decisions below depart from
 the literal wording of the issue or resolve something it left open; each is listed with
-what it cost and what it bought.
+what it cost and what it bought. §1–§9 are rev 1; §10 was added in rev 2.
 
 ### 1. Timers are returned as commands, not scheduled by the game
 
@@ -131,6 +137,40 @@ returned rejection is a normal outcome the platform turns into a client response
 metric and a log line. `ActionError.message` is developer-facing; player copy is resolved
 by the platform from `code`, so games never ship UI strings.
 
+### 10. `manifest.settingsForm` is required (added rev 2, [PER-95](/PER/issues/PER-95))
+
+Every v1 manifest carries a `SettingsFormDescriptor`. It is required, not optional, and
+`validateManifest` rejects a manifest without one.
+
+`fields` may be empty. A game with nothing to configure declares
+`{ version: 1, fields: [] }`, which is how the contract distinguishes "deliberately no
+settings" from "forgot the descriptor" — a distinction an optional field erases.
+
+The reason is the plugin boundary, not taste. `GameCatalogEntry` is the JSON-safe
+projection that crosses the network to the lobby catalogue and the create-lobby page, and
+it deliberately drops `settingsSchema` because a live zod schema is not JSON. So a
+manifest whose only machine-readable description of its settings is `settingsSchema` has
+no description of its settings _on the create path at all_. Rendering it would need either
+`apps/web` importing the game package to reach the live schema — the platform importing a
+game, which principle 1 forbids — or a zod-introspection layer in the shell that
+reverse-engineers presentation from validation structure, which is the shell reasoning
+about a game's internals and is undefined for anything but a flat object of primitives.
+The descriptor is the only way the shell renders a complete, correct form having loaded no
+game code.
+
+The descriptor is presentation only and grants no validation power. `settingsSchema`
+remains the sole authority over what settings are legal; the server re-validates every
+submitted settings object against it regardless of what the descriptor said. A descriptor
+that has drifted from its schema is caught at manifest-validation time by
+`checkSettingsForm`, which probes the schema with each option and each numeric bound.
+
+Shape and semantics are ADR-0007's; this decision only fixes that the field is
+mandatory at v1. Related, and not a contract change: a preset with `isDefault: true` must
+carry exactly `defaultSettings`. `isDefault` already meant "the preset the lobby opens
+on", so a mismatch is a form that opens with a preset selected while showing different
+values. `validateManifest` now enforces the invariant the field was always documented to
+have.
+
 ## Alternatives considered
 
 ### Pass a `ctx.scheduleTimer()` callback instead of returning timer commands
@@ -180,6 +220,40 @@ would be a promise to render props it cannot handle. `never` is the correct eras
 is what shipped. Worth recording because the `unknown` version looks right and fails only
 when a second, differently-typed game is added to the registry.
 
+### Make `settingsForm` optional and fall back to rendering from `settingsSchema` (rev 2)
+
+The cheaper-looking option, and the one that would have left this ADR untouched: a manifest
+with no descriptor stays valid and the create-lobby page derives the form from
+`settingsSchema` instead.
+
+It lost because the fallback does not exist and cannot be built cheaply.
+`settingsSchema` never reaches the create path — `toCatalogEntry` drops it by design, since
+a live zod object is not JSON, and the create-lobby page has only the catalogue entry. To
+make the fallback real, one of two things has to happen: `apps/web` imports the game package
+to obtain the live schema, which is the platform importing a game directly and is the exact
+thing the dependency-boundary gate fails the build over; or the shell ships a zod
+introspection layer.
+
+ADR-0007 measured that second path against the real `chessSettingsSchema` and it does not
+reach. Introspection recovers enum values and some numeric bounds — the bounds only by
+unwrapping `ZodDefault` → `ZodEffects` and reading the private `_def.checks`. It recovers
+none of the 6 field labels, 3 help strings, 15 option labels, 12 group assignments, 5-entry
+group order, 2 visibility rules, 2 units or 2 display hints, and `step: 0.5` is
+unrecoverable outright because it lives in a `.refine()`. An optional descriptor therefore
+buys a fallback that renders a measurably worse form, using more platform code, resting on
+a private zod field that a zod major would rearrange.
+
+Optional-with-no-fallback was also considered and is worse still: it means a game can
+declare settings the create page cannot render, so the failure mode is a silently
+unconfigurable lobby discovered by a player rather than a manifest rejected in CI.
+
+The cost of choosing required is two fixtures, 34 lines, and no production change: nothing
+has shipped, no match has ever run, and no external consumer pins v1, so there is no
+in-progress match to strand and no `sdkContractVersion` bump is owed. The same tightening
+after M2 would be a migration on every manifest plus a major bump. Requiring it now is the
+reversible direction; relaxing a required field later is backward-compatible, while
+tightening an optional one is not.
+
 ## Evidence
 
 - **Contracts are implementable without platform internals.** Two complete games are
@@ -189,6 +263,14 @@ when a second, differently-typed game is added to the registry.
   codecs). Each imports `@playhall/game-sdk` and `zod`, and nothing else. This is the
   acceptance criterion in [PER-10](/PER/issues/PER-10) demonstrated in the same commit as
   the contracts.
+- **rev 2: the required descriptor costs two fixtures and breaks nothing else.** At PR #6
+  head `ce13616` the package was `4 failed | 155 passed (159)`; all four failures were the
+  two v1 fixtures lacking a descriptor plus `baseManifest()`'s `isDefault` preset carrying
+  `{ rounds: 1 }` against `defaultSettings: { rounds: 3 }`. Adding the descriptors and
+  making the default preset canonical gives **159 passed (159)** with `tsc --noEmit` clean,
+  no change to `src/`, and both fixtures still importing only `@playhall/game-sdk` and
+  `zod`. That last point is the generality test: Tag Arena is real-time and 3D, tic-tac-toe
+  is a 3×3 grid, and both express their whole form in the same three field kinds.
 - **120 tests pass; 100% statement, line and function coverage, 99.3% branch coverage** on
   the package (threshold: 80%). Determinism, `applyAction` immutability, redaction,
   legal-action/validation agreement, version pinning and server authority over input are
@@ -233,3 +315,6 @@ when a second, differently-typed game is added to the registry.
   mean `STANDARD_ACTION_ERROR_CODES` is under-specified.
 - Any game needs a seat's connection state inside its rules. One such game is a hook; two
   means §8 was wrong and presence belongs in the roster.
+- A game's settings genuinely cannot be expressed in the three descriptor field kinds
+  (§10). That reopens ADR-0007's field-kind set, not §10's "required" — the answer is a
+  fourth kind, never an escape hatch that renders from game code.

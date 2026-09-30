@@ -133,6 +133,12 @@ export function tryMove(chess: Chess, input: MoveInput): string | null {
  * Accepts SAN ("e4", "Nf3", "O-O", "exd8=Q+") and long algebraic ("e2e4",
  * "e7e8q"). Resolves against the legal move list, so an ambiguous or illegal
  * string returns `null` rather than a guess.
+ *
+ * "Ambiguous" includes a promoting push written without its promotion letter:
+ * "e7e8" names four distinct legal moves, so it is rejected and the caller has
+ * to ask which piece. Defaulting silently — to a queen, or to whatever chess.js
+ * happens to list first — would let the server apply a move the player never
+ * chose, and an unwanted knight in a won endgame loses the game.
  */
 export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const trimmed = text.trim()
@@ -145,12 +151,16 @@ export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const coordinate = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/i.exec(trimmed)
   if (coordinate) {
     const [, from, to, promotion] = coordinate
-    const match = legal.find(
+    const candidates = legal.filter(
       (move: Move) =>
         move.from === from?.toLowerCase() &&
         move.to === to?.toLowerCase() &&
         (promotion === undefined || move.promotion === promotion.toLowerCase()),
     )
+    // Exactly one, mirroring the SAN branch below. A from/to pair normally
+    // identifies a single move; the one case where it does not is a promotion
+    // with the piece left off, which lands here as four candidates.
+    const match = candidates.length === 1 ? candidates[0] : undefined
     return match ? moveInput(match.from, match.to, match.promotion) : null
   }
 
