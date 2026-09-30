@@ -24,10 +24,16 @@ Sentry project per service, distinguished by the `environment` tag rather than b
 duplicate projects. That is how Sentry expects environments to be modelled and it halves
 the quota footprint in an org we share with an unrelated product.
 
-> **Open, and not ours to decide.** Where staging and production actually run is
-> board-gated on [PER-38](/PER/issues/PER-38) / ADR-0003. Free compute tiers sleep on
-> idle, which for a room runner holding authoritative state over a persistent socket is a
-> _correctness_ failure, not a latency one. Nothing in this document assumes a host.
+> **Provider chosen, provisioning held.** The board ratified Fly.io for M0–M5 at
+> $120/month (→ $250 at M5, $400 ceiling) and then separately answered the
+> payment-instrument question with _hold all provisioning_. Those are not in conflict: the
+> budget line is real and the means to spend it does not exist, so ADR-0003 §12.3 is a
+> costed, dormant plan. **Everything is back on free tiers — no vendor account, no card on
+> file, no paid tier, no trial, on any provider.** Sentry is unaffected; it is genuinely
+> $0. Free compute tiers sleep on idle, which for a room runner holding authoritative
+> state over a persistent socket is a _correctness_ failure, not a latency one. Nothing in
+> this document assumes a host. §12 records the conditions that bind the moment the hold
+> lifts, and what free-tier staging can and cannot prove.
 
 ---
 
@@ -198,9 +204,10 @@ traffic. Every cost figure in ADR-0003 excludes it _on the assumption that a fre
 CDN fronts `apps/web`_. Unfronted, it adds ~$18/month on Fly and ~$131/month on Render,
 which on Render would be over half the bill.
 
-So: `apps/web` static output is served through a free-egress CDN (Cloudflare's free plan
-qualifies) in both staging and production. The concrete wiring depends on which host the
-board picks, so it lands with the pipeline on [PER-6](/PER/issues/PER-6); it is recorded
+So: `apps/web` static output is served through a free-egress CDN (Cloudflare Pages
+qualifies, and is where `apps/web` goes rather than onto Fly) in both staging and
+production. The wiring cannot land until the provisioning hold lifts (§12), so it sits
+with the pipeline on [PER-6](/PER/issues/PER-6); it is recorded
 here so it is not rediscovered from an invoice.
 
 ## 10. The source-map pipeline, and how it was evidenced
@@ -250,6 +257,61 @@ The remaining step is one look at the Sentry UI.
 | ------------------------------------------------------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Sentry adapter for `apps/web`                                            | Platform Engineer                             | Use `@sentry/nextjs` there — browser specifics earn the bytes; pass `scrubEventForVendor` as `beforeSend` |
 | Release + source-map upload as a CI step                                 | Platform Engineer, [PER-6](/PER/issues/PER-6) | The four steps in §10, gated on `SENTRY_AUTH_TOKEN`                                                       |
-| Deployed staging/production environments, CDN wiring                     | Platform Engineer, [PER-6](/PER/issues/PER-6) | Needs the ADR-0003 hosting decision                                                                       |
-| Measured staging action round-trip p95 (< 150 ms target)                 | Platform Engineer, ADR-0003 §9                | Needs a staging deploy                                                                                    |
+| Deployed staging/production environments, CDN wiring                     | Platform Engineer, [PER-6](/PER/issues/PER-6) | Needs the provisioning hold lifted (§12)                                                                  |
+| Measured staging action round-trip p95 (< 150 ms target)                 | Platform Engineer, ADR-0003 §9                | Needs a staging deploy — see §12.2, not discoverable without an account                                   |
 | Measured Sentry browser bundle cost (ADR-0001 §8 estimates ~25–30 KB gz) | Platform Engineer                             | Needs the browser SDK actually installed                                                                  |
+
+## 12. The provisioning hold
+
+The board ratified Fly.io for M0–M5 and then held all provisioning pending a payment
+instrument (§1). This section exists so the conditions and the open measurements are not
+rediscovered later — from an invoice, or from a failed deploy.
+
+### 12.1 Conditions that bind the moment the hold lifts
+
+None of these costs anything to honour today, and all are expensive to retrofit.
+
+| Condition                                                                                                       | Why it is not free to change                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Region `sin`, never `bom`.**                                                                                  | Fly deleted the Mumbai region on 2026-09-25 ([superfly/docs#2508](https://github.com/superfly/docs/pull/2508)). A `bom` deploy does not degrade — it fails.                                                                                                                                                    |
+| **Postgres co-located with `apps/realtime`.**                                                                   | ADR-0001 rev 2 §6.2 puts a synchronous durable log append on the action hot path at ≤ 10 ms p95. That budget is nearly all round trips, so a cross-provider hop (5–15 ms before fsync) blows it structurally.                                                                                                  |
+| **Redis self-run under our own `redis.conf`**, not a managed KV.                                                | Configuration control: we need an eviction policy we can pin in config and assert in a test, not a vendor default.                                                                                                                                                                                             |
+| **Presence heartbeat interval is per-environment config, bidirectional — not a constant.**                      | Fly's proxy idle timeout is ~30 s so it needs ≤ 10 s there; free-tier staging wants ~25 s to stay inside a command quota. A quiet turn-based game sends nothing in _either_ direction, which one-directional misses. Code lands with [PER-15](/PER/issues/PER-15); the key must be config-shaped when it does. |
+| **`apps/web` static output behind a free-egress CDN.**                                                          | §9. Every cost figure in ADR-0003 assumes it.                                                                                                                                                                                                                                                                  |
+| **No Node-only APIs in `packages/platform-core`, `packages/shared` or the room runner; logging sink injected.** | Keeps the Cloudflare Durable Objects escape hatch open — the only $0 always-on path that is not a correctness failure. Already honoured: see §6.                                                                                                                                                               |
+
+### 12.2 Three measurements still owed, none discoverable without an account
+
+These were going to be settled by provisioning. The hold defers them, it does not
+retire them.
+
+1. **Mumbai↔Singapore p95 RTT.** Estimated 60–90 ms, **unverified**. The most
+   consequential unmeasured number in ADR-0003: at that range, 40–60% of the 150 ms
+   turn-based budget is spent before our code runs. If it comes in over, the provider
+   decision reopens — so it is measured on the **first** staging deploy, not the last.
+2. **Is Fly Managed Postgres offered in `sin`?** Unverified, and a precondition of the
+   co-location condition above. If it is not, stop and escalate to the CTO rather than
+   reaching for an off-Fly managed Postgres.
+3. **Does Fly `autostop` drop an open WebSocket?** Fly Proxy stops machines on a
+   concurrency `soft_limit` rather than a wall-clock idle timer, which is why autostop
+   staging is safe where free-tier sleeping was not — but the docs do not address open
+   sockets at stop time. Verify on the first staging deploy.
+
+### 12.3 What free-tier staging can and cannot evidence
+
+Stated up front so a green staging demo is never read as evidence it does not carry.
+
+| Claim                                      | Free-tier staging proves it? |
+| ------------------------------------------ | ---------------------------- |
+| WebSocket round trip works (M0 AC2)        | Yes                          |
+| A shareable link for the board (M0 AC5)    | Yes                          |
+| Source-map pipeline resolves a trace (§10) | Yes — it is host-independent |
+| Action round-trip p95 < 150 ms             | No                           |
+| Timer/clock correctness                    | No                           |
+| Restart survival, crash recovery           | No                           |
+| Capacity (2,000 concurrent rooms)          | No                           |
+
+**Timer correctness cannot be evidenced on sleeping compute**, and this is the trap worth
+naming: a chess clock has to keep running while nobody is moving, which is exactly the
+condition that sleeps a free instance. Timers are tested against the local
+`docker-compose` stack, and a green staging run is not evidence either way.
