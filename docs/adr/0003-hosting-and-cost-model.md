@@ -21,8 +21,10 @@
 - **Amended:** 2026-09-30 (**rev 4**) — the board **held all provisioning and returned everything
   to free tiers**, hours after approving the spend. The provider choice survives; the permission
   to spend does not. **§8 becomes operative again, §7 and §12 become authorised-but-dormant, and
-  the approved $8 capacity test cannot run.** New **§8.7** and **§13**; the Status line, §7, §8,
-  §8.4 and §12 changed materially. See [What changed in rev 4](#what-changed-in-rev-4).
+  the approved $8 capacity test cannot run.** New **§8.7**, **§13** and **§13.6** — the last
+  recording that adopting Colyseus and holding provisioning jointly remove the only always-on $0
+  option, so M3 does not rediscover it. The Status line, §7, §8, §8.4 and §12 changed materially.
+  See [What changed in rev 4](#what-changed-in-rev-4).
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -126,6 +128,15 @@ with literally: §8.1's topology _is_ four vendor accounts (Cloudflare, Render, 
 all free, none needing a card. Which reading holds decides whether **three** of M0's five
 acceptance criteria are demonstrable or **none** are. That is a board question, not mine, and
 §8.7 states it so it is answered once rather than assumed differently by each reader.
+
+**A second conflict, between two board decisions rather than inside one, recorded in §13.6.**
+Rejecting the `RoomRunner` amendment adopted **Colyseus**; holding provisioning put us on
+free-tier compute. Each is defensible alone, and together they remove the only always-on $0
+option in this document — **Cloudflare Durable Objects cannot host Colyseus**, because the
+Workers runtime is not Node. So under the hold there is no always-on $0 path: it is Colyseus on
+a free tier that sleeps. Recorded, deliberately not solved, so **M3 does not rediscover it**.
+§13.6 also answers the timing question: **M3 is the right point to bring the hold back**, unless
+§8.7 resolves the wrong way, in which case it is an M0 escalation instead.
 
 ---
 
@@ -1789,6 +1800,48 @@ nothing to re-derive; and the first $9/month of it (previews, §12.2) closes AC1
 criterion the hold costs us. If the board wants a smaller first step than $120, **§12.2's
 preview line alone is the one to release**, and I would rather ask for $9 with AC1b attached than
 for $120 in the abstract.
+
+### 13.6 The conflict two board decisions jointly created, recorded so M3 is not a surprise
+
+Chief of Staff asked for this to be written down rather than solved, and that is the right
+instruction — neither decision should be reopened on the strength of it. Both were made in the
+same session, minutes apart, and each is defensible alone:
+
+- The board **rejected** [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), so
+  **Colyseus is adopted** rather than the in-house `RoomRunner` ([PER-72](/PER/issues/PER-72)).
+- The board **held all provisioning**, so we are on free-tier compute (§8.1).
+
+Taken together they remove a third option that neither one removes alone. The only candidate
+anywhere in this ADR for which **idle is a designed-for state rather than a failure mode** is
+Cloudflare Durable Objects, whose WebSocket Hibernation API evicts an idle object from memory
+_without dropping its sockets_ (§6, §8.3). **Durable Objects cannot host Colyseus** — the
+Workers runtime is not Node, and Colyseus's server is built on the Node `ws`/`http` stack.
+
+So: **under the hold there is no always-on $0 path.** It is Colyseus on a free tier that sleeps,
+and §8.2 already names that as a _correctness_ failure rather than a quota — sockets dropped,
+rooms gone, clocks stopped, and the player then told something untrue.
+
+**Why this surfaces at M3 specifically.** M3 is resilience and spectators: reconnection and
+restart recovery. Those cannot be evidenced against a server that is itself the thing
+disappearing — the test and the fault are the same event, so a pass and a failure are
+indistinguishable. Through M1 and M2 the gap is an inconvenience; at M3 it is the subject matter.
+
+**On the timing question Chief of Staff asked me to answer: M3 is the right milestone to bring
+the hold back to the board, and I would not move it earlier.** Two reasons, and one caveat.
+
+1. **Nothing between now and M3 is blocked by it that is not already blocked by AC1b.** M1 and M2
+   are platform-core, SDK and chess-rules work, all of which is unit-testable and
+   `docker-compose`-testable without a vendor. Asking earlier spends board attention on a
+   question whose answer does not change what anyone does this week.
+2. **By M3 we will have a better argument than we have today.** The ask is currently $120 in the
+   abstract against zero measured numbers. At M3 it is a named criterion that cannot be
+   evidenced, which is a decision the board can actually weigh.
+
+**The caveat, and it is the thing that would change my answer:** if [PER-6](/PER/issues/PER-6)'s
+free-tier preview work shows that **M0 cannot be signed off at all** under reading B of §8.7 — no
+staging, therefore no AC2 and no AC5 — then the hold stops being an M3 problem and becomes an M0
+one, and I would escalate immediately rather than on a schedule. §8.7 is the trigger to watch,
+and it is a board question today rather than at M3.
 
 ---
 
