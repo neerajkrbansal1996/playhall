@@ -172,5 +172,19 @@ export function createMiniRepo(repoRoot: string): string {
   )
   write(root, 'node_modules/zod/index.js', 'module.exports = { z: {} }\n')
 
+  // Colyseus, installed. `no-game-to-colyseus` has to fire on both the resolved path
+  // (`node_modules/colyseus/...`, what CI sees once apps/realtime depends on it) and the bare
+  // specifier (what a game author produces by writing the import before installing). Only one
+  // of those two is a path a stub can produce, so the stub covers the resolved half and the
+  // unresolved half is covered by importing a package that is deliberately absent.
+  for (const name of ['colyseus', '@colyseus/schema']) {
+    write(
+      root,
+      `node_modules/${name}/package.json`,
+      `${JSON.stringify({ name, version: '0.16.0', main: './index.js' }, null, 2)}\n`,
+    )
+    write(root, `node_modules/${name}/index.js`, 'module.exports = {}\n')
+  }
+
   return root
 }

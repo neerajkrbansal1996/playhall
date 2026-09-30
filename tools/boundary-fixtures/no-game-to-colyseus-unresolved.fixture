@@ -1,0 +1,11 @@
+# expect: no-game-to-colyseus
+# why: the same violation written before the package is installed, where the module resolves to nothing and a path-only rule would silently pass
+=== file: games/fx-a/src/index.ts ===
+// `@colyseus/core` is deliberately NOT stubbed in the mini repo, so this import does not
+// resolve. That is the realistic first form of the violation — an engineer writes the import,
+// CI runs before `pnpm install` has the package, and dependency-cruiser keeps the bare
+// specifier as the module path. A rule matching only `node_modules/...` would pass here, which
+// is the worst failure mode a gate has: green and doing nothing.
+import type { Room } from '@colyseus/core'
+
+export type GameRoom = Room

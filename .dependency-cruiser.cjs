@@ -44,6 +44,21 @@ const GENERATED_REGISTRY = '^apps/[^/]+/src/games\\.generated\\.ts$'
  */
 const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
 
+/**
+ * The server framework. ADR-0001 §4 (rev 4) adopts Colyseus for `apps/realtime` by board
+ * decision; ADR-0002 §2 keeps it out of `games/**`. That pairing is the whole point: the
+ * platform may pick a framework, a game may never learn which one was picked.
+ *
+ * Two alternations, because a module's path in the graph depends on whether it resolved:
+ *   - `^(colyseus|@colyseus/x)$` — declared but not installed, or imported without being
+ *     declared. dependency-cruiser keeps the bare specifier as the path.
+ *   - `.../node_modules/colyseus/...` — installed and resolved.
+ * Matching only the resolved form would make the rule silently pass on the exact case a game
+ * author is most likely to produce first: an import written before `pnpm install` runs.
+ */
+const COLYSEUS_MODULES =
+  '^(colyseus|@colyseus/[^/]+)$|(^|/)node_modules/(colyseus|@colyseus/[^/]+)/'
+
 module.exports = {
   forbidden: [
     {
@@ -56,6 +71,21 @@ module.exports = {
         'CTO for an SDK addition (ADR first) rather than reaching past the contract.',
       from: { path: '^games/' },
       to: { path: PLATFORM_INTERNALS },
+    },
+    {
+      name: 'no-game-to-colyseus',
+      severity: 'error',
+      comment:
+        "The server framework is a platform choice, never a game's. The board adopted Colyseus " +
+        'for apps/realtime (ADR-0001 §4); exactly one file names it, and that file is an ' +
+        'adapter. A game that imports colyseus or @colyseus/* — most likely @colyseus/schema to ' +
+        'express its state — makes the SDK contract Colyseus-shaped and pins every game to the ' +
+        "platform's netcode framework, which is the coupling the one rule forbids. It also " +
+        'hands the game to Colyseus state sync, which is default-broadcast: a hidden-information ' +
+        'leak is a correctness bug (ADR-0001 §4.5). Keep game state as plain TypeScript and let ' +
+        `${SDK_NAME} carry it.`,
+      from: { path: '^games/' },
+      to: { path: COLYSEUS_MODULES },
     },
     {
       name: 'no-game-to-app',
@@ -189,7 +219,18 @@ module.exports = {
     /** Third-party code is allowed; we do not audit inside it. */
     doNotFollow: { path: '(^|/)node_modules/' },
 
-    exclude: { path: '(^|/)(node_modules|dist|\\.next|coverage|\\.turbo)/' },
+    /**
+     * `node_modules` is deliberately NOT excluded, only `doNotFollow`ed. The difference matters:
+     * `doNotFollow` keeps a third-party package in the graph as a leaf, so an edge *to* it is
+     * visible to the rules; `exclude` deletes the module, and with it every edge pointing at it.
+     * Excluding it left the gate unable to express any rule about a game's third-party
+     * dependencies at all — `no-game-to-colyseus` would have passed silently on the one case
+     * that matters most, a game importing an installed `@colyseus/schema`. Proven by the
+     * `no-game-to-colyseus.fixture` negative test, which fails without this line.
+     *
+     * Cost is bounded: each third-party package adds one leaf node and is never traversed.
+     */
+    exclude: { path: '(^|/)(dist|\\.next|coverage|\\.turbo)/' },
 
     /**
      * Resolution only — never used to compile. dependency-cruiser takes one tsconfig for the
