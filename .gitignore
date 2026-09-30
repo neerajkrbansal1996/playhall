@@ -21,3 +21,9 @@ pnpm-debug.log*
 
 # Agent harness local config (machine-specific absolute paths)
 .claude/settings.local.json
+
+# Playwright output (PER-131). The `e2e` CI job uploads both as an artifact.
+playwright-report/
+test-results/
+blob-report/
+.playwright/
