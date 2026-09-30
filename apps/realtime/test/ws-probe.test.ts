@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { connect, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import {
@@ -382,15 +382,99 @@ describe('ws probe — route scope', () => {
   })
 })
 
+/**
+ * Tighter than the suite default on purpose. The regression the stalled-peer test
+ * guards is a 30 s stall, so it has to fail fast rather than sit inside the 20 s
+ * default and report as an ordinary slow test.
+ */
+const STALLED_PEER_TIMEOUT_MS = 5_000
+
 describe('ws probe — shutdown', () => {
   it('closes live sockets and stops accepting upgrades', async () => {
     const { url, probe } = await harness()
     const ws = await open(`${url}${WS_PROBE_PATH}`)
 
+    // The listener goes on *before* the shutdown that triggers the event. This
+    // read the other way round first and passed locally for the worst reason:
+    // shutdown happened to resolve before the client saw its close, so the
+    // listener still caught it. On a slower runner the order flipped, the event
+    // had already fired by the time the listener attached, and the await hung
+    // until the 20 s test timeout. A promise for an event must exist before the
+    // action that emits it.
+    const closed = nextClose(ws)
     await probe.close()
-    expect((await nextClose(ws)).code).toBe(1001)
+
+    expect((await closed).code).toBe(1001)
 
     // Listener detached: nothing handles the upgrade, so the handshake fails.
     await expect(open(`${url}${WS_PROBE_PATH}`)).rejects.toThrow()
+  })
+
+  it(
+    'resolves even when a peer never answers the close frame',
+    async () => {
+      // `ws` tracks clients by default, and `WebSocketServer.close()` then
+      // withholds its callback until every client has reached CLOSED — a full
+      // graceful close handshake per socket, bounded only by ws's 30 s
+      // `closeTimeout`. A peer that simply stops reading therefore holds
+      // shutdown open for half a minute, and a service that must come back in
+      // ten seconds cannot let a client decide that. The probe turns the
+      // tracking off and relies on its own socket set instead.
+      //
+      // The peer here is a raw TCP socket that completes the upgrade and then
+      // never speaks again — no `ws` client will reproduce this, because it
+      // answers a close frame automatically, and an assertion against a
+      // cooperative peer passes with the tracking either way. That is exactly
+      // how the default slipped past a green local run.
+      const { url, probe } = await harness()
+      const port = Number(new URL(url).port)
+      const peer = connect({ host: '127.0.0.1', port })
+
+      await new Promise<void>((resolve, reject) => {
+        peer.once('error', reject)
+        peer.once('data', (chunk: Buffer) => {
+          // 101 means the probe upgraded us and its side of the socket is OPEN.
+          if (chunk.includes('101 Switching Protocols')) {
+            resolve()
+            return
+          }
+          reject(new Error(`peer was not upgraded: ${chunk.toString('utf8').split('\r\n')[0]}`))
+        })
+        peer.write(
+          [
+            `GET ${WS_PROBE_PATH} HTTP/1.1`,
+            `Host: 127.0.0.1:${port}`,
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            // Any 16-byte base64 nonce; the probe does no auth and does not care.
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+            'Sec-WebSocket-Version: 13',
+            '\r\n',
+          ].join('\r\n'),
+        )
+      })
+      // From here the peer reads nothing and writes nothing. The close frame the
+      // probe is about to send will never be acknowledged.
+      peer.pause()
+
+      const startedAt = Date.now()
+      await probe.close()
+      const elapsed = Date.now() - startedAt
+
+      // With client tracking on this waits out `closeTimeout` (30 s) instead.
+      expect(elapsed).toBeLessThan(1_000)
+
+      peer.destroy()
+    },
+    STALLED_PEER_TIMEOUT_MS,
+  )
+
+  it('is idempotent, so a second shutdown is not an error', async () => {
+    const { url, probe } = await harness()
+    await open(`${url}${WS_PROBE_PATH}`)
+
+    await probe.close()
+    await expect(probe.close()).resolves.toBeUndefined()
+    expect(probe.openSocketCount()).toBe(0)
   })
 })

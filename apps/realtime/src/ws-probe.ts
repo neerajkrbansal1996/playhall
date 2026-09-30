@@ -119,10 +119,19 @@ export function attachWsProbe(server: Server, options: ProbeOptions = {}): Attac
   // answering to a name from a protocol that does not exist yet. Returning
   // false selects none and sends no `Sec-WebSocket-Protocol` header, which is
   // what "no subprotocol negotiation" (ADR-0009 §3) has to mean mechanically.
+  //
+  // `clientTracking: false` because we keep our own `sockets` set, and ws's
+  // duplicate of it changes what `close()` means: with tracking on, `close()`
+  // does not resolve until every client has reached CLOSED, which means waiting
+  // out a *graceful* close handshake per socket — up to ws's 30 s
+  // `closeTimeout` if a peer never answers. Shutdown must not be hostage to a
+  // client's cooperation. With tracking off, `close()` resolves on the next
+  // tick and each socket still gets its clean 1001 from the loop below.
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: limits.maxFrameBytes,
     handleProtocols: () => false,
+    clientTracking: false,
   })
   const sockets = new Set<WebSocket>()
 
@@ -281,8 +290,16 @@ function send(ws: WebSocket, frame: PongFrame | ErrorFrame): void {
   ws.send(JSON.stringify(frame))
 }
 
-/** Declines an upgrade with a real HTTP status rather than a bare socket drop. */
+/**
+ * Declines an upgrade with a real HTTP status rather than a bare socket drop, so
+ * a caller learns whether it was refused (404, wrong route) or shed (503, at the
+ * socket cap) instead of seeing an indistinguishable reset.
+ *
+ * `end` rather than `write` + `destroy`: destroying immediately can discard the
+ * buffered response, which turns a 503 into an ECONNRESET under exactly the load
+ * that produces 503s. `end` flushes, then FINs; `destroy` on the flush guarantees
+ * the socket is released even if the peer never reads.
+ */
 function rejectUpgrade(socket: Duplex, status: number, text: string): void {
-  socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\n\r\n`)
-  socket.destroy()
+  socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\n\r\n`, () => socket.destroy())
 }
