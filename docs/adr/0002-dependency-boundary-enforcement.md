@@ -49,7 +49,11 @@
   because `no-illegal-declared-dep` already decides which dependencies are legal; §2.6 only says
   where the bookkeeping for that decision is allowed to live. It also records why
   `tsconfig.json` is **not** exempt on the same reasoning, and states the general test for the
-  next generated file that raises this question. Found on [PER-67](/PER/issues/PER-67).
+  next generated file that raises this question. **Triggered on**
+  [PER-24](/PER/issues/PER-24), where Game Engineer (Chess) stopped and asked rather than guess:
+  declaring `@playhall/game-sdk` mechanically forces a root lockfile change, which reads as a
+  violation of "a game must never need a change outside its own folder". Ruled there, then written
+  up here on [PER-67](/PER/issues/PER-67) so the next game does not have to ask again.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -430,6 +434,11 @@ because "review will catch it" is not a mechanism.
 Rule `no-illegal-declared-dep` (§2) says which dependencies a game may _declare_. It says nothing
 about the file that _records_ that declaration for the workspace, so the question "may a game PR
 edit `pnpm-lock.yaml`?" has been answered by reviewer taste. It is answered here instead.
+
+The question is not hypothetical: on [PER-24](/PER/issues/PER-24) the Game Engineer (Chess) hit it
+and correctly stopped to ask, because declaring `@playhall/game-sdk` mechanically forces a root
+lockfile change and this ADR gave no reading under which that was allowed. That round trip is the
+cost of leaving it to taste, and it is paid once per game until the rule is written down.
 
 **The rule.** A game package's PR may modify `pnpm-lock.yaml` **if and only if** the diff is confined
 to that game's own `importers:` stanza.
