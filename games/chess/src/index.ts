@@ -50,6 +50,7 @@ export {
 
 export {
   analyse,
+  chessAt,
   parseMoveInput,
   repetitionKey,
   replay,

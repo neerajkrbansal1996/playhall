@@ -1,5 +1,5 @@
 import { availableDrawClaims, detectAutomaticEnding, timeoutEnding } from './rules/endings.js'
-import { analyse, replay, START_FEN, tryMove } from './rules/position.js'
+import { analyse, chessAt, START_FEN, tryMove } from './rules/position.js'
 import {
   opponent,
   type ChessEnding,
@@ -164,7 +164,8 @@ function finish(state: ChessMatchState, ending: ChessEnding): ChessMatchState {
  *
  * Every legality decision lives here and runs on the server. The client may draw
  * legal-move dots, but a client that skips them cannot get an illegal move past
- * this function: the move is replayed through chess.js from the stored SAN list.
+ * this function: the position is derived from the stored SAN list and the move is
+ * offered to chess.js, which is the only thing that decides whether it is legal.
  */
 export function applyAction(
   state: ChessMatchState,
@@ -237,10 +238,13 @@ function applyMove(
   color: Color,
   ctx: GameContext,
 ): ChessActionResult {
-  const chess = replay(state.initialFen, state.moves)
-  if (chess.turn() !== color) return fail('not_your_turn')
+  // One derivation, read three ways: whose turn it is, the position to play the
+  // candidate move into, and (via `moves` below) the ending check. Replaying the
+  // game here made every action cost O(plies) twice over.
+  const current = analyse(state.initialFen, state.moves)
+  if (current.turn !== color) return fail('not_your_turn')
 
-  const san = tryMove(chess, move)
+  const san = tryMove(chessAt(current.fen), move)
   if (san === null) return fail('illegal_move')
 
   const moves = [...state.moves, san]

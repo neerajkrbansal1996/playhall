@@ -53,6 +53,21 @@ export function replay(initialFen: string, moves: readonly string[]): Chess {
 }
 
 /**
+ * A `Chess` holding exactly `fen`, with no history behind it.
+ *
+ * For deciding one candidate move. Legality and SAN disambiguation depend only on
+ * the position, and a FEN carries all of it — placement, side to move, castling
+ * rights, the en passant square and both clocks — so the reducer does not have to
+ * replay the game to reject an illegal move.
+ *
+ * Not for anything that needs history: repetition counts come from `analyse`, and
+ * PGN export needs `replay`.
+ */
+export function chessAt(fen: string): Chess {
+  return new Chess(fen)
+}
+
+/**
  * The repetition key for a position, for callers holding a `Chess`.
  *
  * See `positionKey` in `derive.ts` for what goes into it and why the en passant
