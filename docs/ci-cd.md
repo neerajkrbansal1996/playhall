@@ -19,7 +19,7 @@ See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 
 | Workflow                        | Trigger                                                   | What it does                                                                            |
 | ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The nine gates plus the `ci-gate` aggregate.                                            |
+| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | Every gate in [The gates](#the-gates), plus the `ci-gate` aggregate.                    |
 | `.github/workflows/preview.yml` | PR opened / pushed / reopened                             | Preview deploy per target, health-probed, URL posted on the PR.                         |
 | `.github/workflows/main.yml`    | push to `main`                                            | Re-runs the gates, audits for a direct push, then deploys to **staging**.               |
 | `.github/workflows/release.yml` | push of a `v*` tag, manual                                | Asserts a tag, re-runs the gates, audits the tagged commit, then deploys to production. |
@@ -76,6 +76,22 @@ tag. There is deliberately **no** "ref to deploy" input: a free-text ref would b
 way to put an arbitrary untagged commit into production, which is precisely what the tag
 trigger exists to prevent.
 
+`main.yml` can also be run by hand (`workflow_dispatch`), which is how staging gets
+re-deployed without landing a new commit. On a dispatch the commit has no merged PR by
+construction, so `push-audit` reports **not applicable** and passes rather than failing.
+The exemption is inside `scripts/ci/assert-merged-via-pr.mjs` rather than an `if:` on the
+job on purpose: the staging jobs list `push-audit` in `needs:`, and a skipped job skips its
+dependents, so guarding the job would take staging with it. A missing
+`GITHUB_EVENT_NAME`/`GITHUB_REF` is treated as a misconfiguration, not an exemption, so the
+control cannot fail open.
+
+The audit's scope is therefore **commits reaching `main`, plus every tag** — not "pushes to
+`main`". Writing it the narrower way is a trap worth naming: a `v*` tag push is `push` on
+`refs/tags/...`, so a `push`-to-`main`-only test makes `release.yml`'s audit report "not
+applicable" and exit 0 while its step still says it asserted the tagged commit arrived via a
+merged PR. Production would deploy unaudited, and the first time anyone found out would be a
+real release. A tag is never exempt, whatever the event.
+
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
 
@@ -87,18 +103,19 @@ issue. `pr-hygiene` and `workflows` call their script directly instead: both are
 checks over files already on disk, so they skip `./.github/actions/setup` and still report
 when an install would not succeed.
 
-| Gate          | Runs                              | Status                                                                                             |
-| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                     |
-| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                    |
-| `lint`        | `pnpm lint`                       | Live.                                                                                              |
-| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                              |
-| `boundaries`  | `pnpm boundaries`                 | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                       | Live.                                                                                              |
-| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
-| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
-| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
-| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                  |
+| Gate          | Runs                              | Status                                                                                                  |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                          |
+| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: `actionlint` plus the reusable-caller check. No install, no token.                        |
+| `lint`        | `pnpm lint`                       | Live.                                                                                                   |
+| `format`      | `pnpm format:check`               | Live. Fix a failure with `pnpm format`; it needs no thought, which is why it is not folded into `lint`. |
+| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                                   |
+| `boundaries`  | `pnpm boundaries`                 | Live since [PER-5](/PER/issues/PER-5) landed. [ADR-0002](adr/0002-dependency-boundary-enforcement.md).  |
+| `unit`        | `pnpm test`                       | Live.                                                                                                   |
+| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                             |
+| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                             |
+| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                                   |
+| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                       |
 
 A pending gate logs a `::notice` naming its owner and **passes**. This is deliberate: a
 workflow calling a script that does not exist fails with `ERR_PNPM_NO_SCRIPT`, which is
@@ -310,7 +327,8 @@ so every gate here executes and ADR-0004's push detector can fire.
 **Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
-not a verdict. **Five of nine gates are PENDING stubs**, `integration` boots Redis and
+not a verdict. **Four of the eleven gates are PENDING stubs** — `coverage`, `testkit`,
+`integration` and `e2e` — `integration` boots Redis and
 Postgres service containers with no tests in them, and there is no build caching. Re-measure
 when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
 the `coverage` job, so it is a nine-job number for a ten-job pipeline.
@@ -336,15 +354,6 @@ on both services.
 
 ## Things deliberately not done
 
-- **`prettier --check` is not a CI gate.** PER-6 lists lint, typecheck, boundaries, unit,
-  testkit, integration and E2E; formatting is not among them. The figure previously given
-  here — "~24 unformatted files" — is stale: measured at this head, `prettier --check .`
-  reports **two**, `docs/adr/0004-pr-gate-without-branch-protection.md` and
-  `docs/adr/README.md`. So the "large mechanical diff" argument is mostly spent, and what is
-  left is one registry line, one job, and two documents to reformat.
-  [PER-98](/PER/issues/PER-98) owns it and must re-measure immediately before landing —
-  "clean" is a property of a head, not of the repo, and this number moves every time a
-  document lands.
 - **No `CODEOWNERS`.** Rejected by ADR-0004, and the reasoning is right: without branch
   protection it enforces nothing, and a file that looks like a control but is not one is
   worse than no file, because it invites the belief that the gate exists.
@@ -355,6 +364,9 @@ on both services.
   `@v4` is a third party that can change what runs in CI after review.
 - **Secret scanning / CodeQL are not configured.** Both are worth having; neither is in
   this issue's scope.
-- **`actionlint` is not yet a CI step.** It was used to verify these workflows (1.7.12,
-  zero findings across all 7 files) and is worth wiring in, but it needs a binary download
-  and there is no point adding it while Actions cannot run — [PER-55](/PER/issues/PER-55).
+- **`actionlint` does not cover `ci.yml` on a pull request.** It now runs inside the
+  `workflows` job (1.7.12, pinned by version and SHA-256), but it has one blind spot that
+  cannot be closed from inside the workflow: GitHub parses the head ref's workflow files
+  _before_ it builds the run, so a syntax error in `ci.yml` itself is a `startup_failure`
+  and this job never starts to report it. It still covers the other workflow files on every
+  PR, and covers `ci.yml` on `workflow_dispatch`.

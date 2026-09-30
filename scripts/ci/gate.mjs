@@ -4,16 +4,18 @@
  *
  * Why this exists: PER-6 must stand up the *shape* of the pipeline (lint,
  * typecheck, boundaries, unit, testkit, integration, e2e) before every gate's
- * implementation exists — `pnpm boundaries` lands with PER-5, the conformance
- * testkit with PER-17, integration and E2E with M1/M3. A workflow that calls a
- * missing pnpm script fails with `ERR_PNPM_NO_SCRIPT`, which is
- * indistinguishable from a real regression.
+ * implementation exists — the conformance testkit lands with PER-17, integration
+ * and E2E with M1/M3. A workflow that calls a missing pnpm script fails with
+ * `ERR_PNPM_NO_SCRIPT`, which is indistinguishable from a real regression.
  *
  * So each gate is declared here once, with the issue that owns it. A gate whose
  * script is not defined yet is reported as PENDING and passes; the day the
  * owning issue adds the script, the same job turns into a hard gate with no
  * workflow edit. The job names never change, which is what lets required status
  * checks be switched on (see `docs/ci-cd.md`) without rework.
+ *
+ * That has now happened once for real: PER-5 added the root `boundaries` script
+ * and the gate went live on the next run with no edit to this file.
  *
  * `CI_STRICT_GATES=1` turns PENDING into a failure. Set it once M1 closes so a
  * gate can never silently regress back to "not implemented".
@@ -31,6 +33,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
  */
 const GATES = {
   lint: { script: 'lint', pendingOwner: null },
+  // Live from the day it lands, not PENDING: `format:check` has existed in the
+  // root package.json since PER-6, it just was never called by anything. See
+  // ADR-0001 §9. `pnpm format` is the fix command for a failure here.
+  format: { script: 'format:check', pendingOwner: null },
   typecheck: { script: 'typecheck', pendingOwner: null },
   unit: { script: 'test', pendingOwner: null },
   // The >= 80% rule currently lives in each package's own vitest thresholds, so
@@ -40,10 +46,9 @@ const GATES = {
     script: 'test:coverage',
     pendingOwner: 'PER-89 — aggregate >= 80% check across the required packages',
   },
-  boundaries: {
-    script: 'boundaries',
-    pendingOwner: 'PER-5 — dependency-cruiser rule set (see docs/adr/0002)',
-  },
+  // Went live with no edit here the moment PER-5 added the root `boundaries`
+  // script — the PENDING branch keys on the script existing, not on this field.
+  boundaries: { script: 'boundaries', pendingOwner: null },
   testkit: {
     script: 'test:testkit',
     pendingOwner: 'PER-17 — game conformance testkit (first consumer: tic-tac-toe)',

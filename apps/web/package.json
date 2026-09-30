@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@playhall/game-sdk": "workspace:*",
+    "@playhall/platform-core": "workspace:*",
     "@playhall/shared": "workspace:*",
     "@playhall/ui": "workspace:*",
     "class-variance-authority": "^0.7.1",

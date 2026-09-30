@@ -1,7 +1,11 @@
 'use client'
 
-import { visibleFields, type SettingsValue } from '@playhall/game-sdk'
-import type { SettingsFormDescriptor } from '@playhall/game-sdk'
+// The subpath, not the barrel: `visibleFields` is a *value*, so importing it
+// from `@playhall/game-sdk` pulls the descriptor schemas — and zod, 79.6 kB raw
+// — into this client chunk to re-check JSON the server already validated. The
+// subpath module imports nothing. See `packages/game-sdk/src/settings-form.ts`.
+import { visibleFields, type SettingsValue } from '@playhall/game-sdk/settings-form'
+import type { SettingsFormDescriptor } from '@playhall/game-sdk/settings-form'
 
 import { cn } from '@/lib/utils'
 
