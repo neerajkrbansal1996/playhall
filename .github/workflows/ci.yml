@@ -77,13 +77,39 @@ jobs:
   # No `setup` step on purpose: it reads the workflow files off disk and runs no
   # install, so it is the cheapest job here and still reports when the workspace
   # would not install.
+  #
+  # `actionlint` (PER-101) joins the same job rather than getting its own: it is
+  # the same subject — the workflow files themselves — and needs no install
+  # either. Both checks run even if the first fails, so one bad workflow file does
+  # not hide the other problem.
+  #
+  # actionlint's known blind spot: for `pull_request`, GitHub parses the head
+  # ref's workflow files before it builds the run, so a syntax error in *this*
+  # file startup_failures everything and this job never starts. It still covers
+  # the other four workflows, and covers this one on `workflow_dispatch`.
   workflows:
     name: workflows
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        env:
+          # Pinned by version + checksum for the same reason every `uses:` here is
+          # pinned by SHA: a CI linter that changes silently under you is a worse
+          # failure than not having one.
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 --retry-all-errors -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum --check --strict -
+          tar -xzf "$tarball" actionlint
+          ./actionlint -color
       - name: Reusable-workflow callers are not narrowed
+        if: always()
         run: node scripts/ci/assert-workflow-permissions.mjs
 
   lint:
@@ -94,6 +120,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs lint
+
+  # Separate from `lint` so "your code is wrong" and "your code is unformatted"
+  # are two different red X's. A formatting failure is fixed with `pnpm format`
+  # and needs no thought; conflating the two trains people to skim both.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs format
 
   typecheck:
     name: typecheck
@@ -265,6 +303,7 @@ jobs:
         pr-hygiene,
         workflows,
         lint,
+        format,
         typecheck,
         boundaries,
         unit,
