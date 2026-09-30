@@ -151,7 +151,8 @@ export function evaluateAutoStart(
   }
 
   const qualifies = seatingSnapshot(room, policy).blockers.length === 0
-  if (qualifies) return armed ? { action: 'none' } : { action: 'arm', endsAt: now + AUTO_START_COUNTDOWN_MS }
+  if (qualifies)
+    return armed ? { action: 'none' } : { action: 'arm', endsAt: now + AUTO_START_COUNTDOWN_MS }
   return armed ? { action: 'cancel' } : { action: 'none' }
 }
 

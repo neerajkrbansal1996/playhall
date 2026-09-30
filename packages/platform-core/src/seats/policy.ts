@@ -112,9 +112,7 @@ function defaultRotation(teams: TeamMode): RematchRotation {
  * `entry` is typed as the catalogue entry plus the optional declarations above,
  * so a caller holding a plain `GameCatalogEntry` type-checks unchanged.
  */
-export function seatingPolicyFor(
-  entry: GameCatalogEntry & SeatingDeclarations,
-): SeatingPolicy {
+export function seatingPolicyFor(entry: GameCatalogEntry & SeatingDeclarations): SeatingPolicy {
   const teams: TeamMode = entry.teams
   return {
     minPlayers: entry.minPlayers,

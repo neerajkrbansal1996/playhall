@@ -197,12 +197,7 @@ export {
 export type { RoomView, SeatView, ViewerKind } from './seats/view.js'
 export { roomViewFor, viewerKindFor } from './seats/view.js'
 
-export type {
-  BotIdentity,
-  BotSeatProvider,
-  BotSlotOutcome,
-  BotSlotRequest,
-} from './seats/bots.js'
+export type { BotIdentity, BotSeatProvider, BotSlotOutcome, BotSlotRequest } from './seats/bots.js'
 export { BOT_SEAT_PROVIDERS, resolveBotProvider } from './seats/bots.js'
 
 export type {

@@ -19,10 +19,7 @@ function replace(
   return seats.map((seat) => (seat.index === index ? change(seat) : seat))
 }
 
-export function seatAt(
-  seats: readonly RoomSeatSlot[],
-  index: number,
-): RoomSeatSlot | undefined {
+export function seatAt(seats: readonly RoomSeatSlot[], index: number): RoomSeatSlot | undefined {
   return seats.find((seat) => seat.index === index)
 }
 
@@ -94,13 +91,8 @@ export function assignSeat(
  * auto-balanced room re-derives afterwards, and a fixed-team room must not
  * forget which side seat 2 is on just because nobody is sitting in it.
  */
-export function vacateSeat(
-  seats: readonly RoomSeatSlot[],
-  index: number,
-): readonly RoomSeatSlot[] {
-  return replace(seats, index, (seat) =>
-    seatReady({ ...seat, occupantPlayerId: null }, false),
-  )
+export function vacateSeat(seats: readonly RoomSeatSlot[], index: number): readonly RoomSeatSlot[] {
+  return replace(seats, index, (seat) => seatReady({ ...seat, occupantPlayerId: null }, false))
 }
 
 /** Empties whichever seat `playerId` holds. A no-op when they hold none. */
@@ -138,9 +130,7 @@ export function setPlayerReady(
   playerId: string,
   isReady: boolean,
 ): readonly RoomSeatSlot[] {
-  return seats.map((seat) =>
-    seat.occupantPlayerId === playerId ? seatReady(seat, isReady) : seat,
-  )
+  return seats.map((seat) => (seat.occupantPlayerId === playerId ? seatReady(seat, isReady) : seat))
 }
 
 /** Clears every ready flag. Used by anything that invalidates a prior agreement. */

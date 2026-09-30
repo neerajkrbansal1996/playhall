@@ -19,7 +19,13 @@
 
 import type { Clock } from '../runtime.js'
 import type { RoomStore } from './store.js'
-import { type Room, type RoomCloseReason, type RoomRevision, isRoomTerminal, reviseRoom } from './types.js'
+import {
+  type Room,
+  type RoomCloseReason,
+  type RoomRevision,
+  isRoomTerminal,
+  reviseRoom,
+} from './types.js'
 
 export type RoomMutationFailure =
   | { readonly code: 'room_not_found' }
@@ -72,8 +78,7 @@ export type GuardedChange<TRefusal, TOutcome = never> = (
   room: Room,
   now: number,
 ) =>
-  | { readonly revision: RoomRevision; readonly outcome?: TOutcome }
-  | { readonly refused: TRefusal }
+  { readonly revision: RoomRevision; readonly outcome?: TOutcome } | { readonly refused: TRefusal }
 
 export type GuardedMutationResult<TRefusal, TOutcome = never> =
   | { readonly ok: true; readonly room: Room; readonly outcome?: TOutcome }
@@ -82,7 +87,10 @@ export type GuardedMutationResult<TRefusal, TOutcome = never> =
 
 export interface RoomWriter {
   /** An unconditional change. */
-  mutate(roomId: string, change: (room: Room, now: number) => RoomRevision): Promise<RoomMutationResult>
+  mutate(
+    roomId: string,
+    change: (room: Room, now: number) => RoomRevision,
+  ): Promise<RoomMutationResult>
   /**
    * A change that may refuse after reading fresh state, and that may label what
    * it did.
@@ -131,7 +139,8 @@ export function createRoomWriter(options: RoomWriterOptions): RoomWriter {
     const result = await guarded<never>(roomId, (room, now) => ({ revision: change(room, now) }))
     // `never` cannot be produced, so the refusal arm is unreachable. Narrowed
     // rather than cast so a future refusing change here fails to compile.
-    if (!result.ok && 'refused' in result) throw new Error('unreachable: unconditional change refused')
+    if (!result.ok && 'refused' in result)
+      throw new Error('unreachable: unconditional change refused')
     return result
   }
 

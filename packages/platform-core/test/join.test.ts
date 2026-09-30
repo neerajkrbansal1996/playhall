@@ -260,7 +260,13 @@ describe('applyJoin', () => {
     const room = makeRoom({ seats: ['host', null], spectatorPlayerIds: ['watcher'] })
     // A spectator resolves to `spectating`; seat promotion is a deliberate
     // host/seat action, so drive `applyJoin` with the seated outcome directly.
-    const next = applyJoin(room, 'watcher', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
+    const next = applyJoin(
+      room,
+      'watcher',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(next.spectatorPlayerIds).toEqual([])
     expect(seatIndexOf(next, 'watcher')).toBe(1)
   })
@@ -289,18 +295,36 @@ describe('applyJoin', () => {
 
   it('bumps the version on every revision, so the store can tell writes apart', () => {
     const room = makeRoom()
-    const seated = applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
+    const seated = applyJoin(
+      room,
+      'guest',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(seated.version).toBe(room.version + 1)
 
     // Same instant, so `updatedAt` cannot distinguish them; the counter must.
-    const spectating = applyJoin(room, 'other', { kind: 'spectating', isRejoin: false }, NOW, policy)
+    const spectating = applyJoin(
+      room,
+      'other',
+      { kind: 'spectating', isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(spectating.updatedAt).toBe(seated.updatedAt)
     expect(spectating.version).toBe(room.version + 1)
   })
 
   it('restarts the rematch window when a seat is taken in a finished room', () => {
     const room = makeRoom({ status: 'finished', finishedAt: T0, seats: ['host', null] })
-    const next = applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
+    const next = applyJoin(
+      room,
+      'guest',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     // Without this, someone seated at minute 14 of the 15-minute window gets
     // sixty seconds to agree to a rematch.
     expect(next.finishedAt).toBe(NOW)
@@ -308,16 +332,20 @@ describe('applyJoin', () => {
 
   it('leaves the rematch window alone for a spectator or a rejoin', () => {
     const room = makeRoom({ status: 'finished', finishedAt: T0, seats: ['host', 'guest'] })
-    expect(applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW, policy).finishedAt).toBe(T0)
     expect(
-      applyJoin(room, 'guest', { kind: 'rejoined', seatIndex: 1, isRejoin: true }, NOW, policy).finishedAt,
+      applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW, policy).finishedAt,
+    ).toBe(T0)
+    expect(
+      applyJoin(room, 'guest', { kind: 'rejoined', seatIndex: 1, isRejoin: true }, NOW, policy)
+        .finishedAt,
     ).toBe(T0)
   })
 
   it('leaves the rematch window null while a room is still in its lobby', () => {
     const room = makeRoom()
     expect(
-      applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy).finishedAt,
+      applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
+        .finishedAt,
     ).toBeNull()
   })
 })

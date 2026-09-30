@@ -17,21 +17,12 @@
  */
 
 import type { GameRegistry } from '../registry/registry.js'
-import {
-  type RoomMutationFailure,
-  type RoomWriter,
-  createRoomWriter,
-} from '../rooms/mutate.js'
+import { type RoomMutationFailure, type RoomWriter, createRoomWriter } from '../rooms/mutate.js'
 import type { RoomStore } from '../rooms/store.js'
 import type { Clock } from '../runtime.js'
 import { type Room, type RoomRevision, type RoomSeatSlot, seatIndexOf } from '../rooms/types.js'
 import { type BotSeatProvider, type BotSlotOutcome, resolveBotProvider } from './bots.js'
-import {
-  type HostActionRejection,
-  canCloseLobby,
-  canKick,
-  canTransferHost,
-} from './host.js'
+import { type HostActionRejection, canCloseLobby, canKick, canTransferHost } from './host.js'
 import { type SeatingPolicy, seatingPolicyFor } from './policy.js'
 import {
   type RematchRejection,
@@ -50,7 +41,12 @@ import {
   swapSeats,
   vacatePlayer,
 } from './seating.js'
-import { type StartBlockReason, evaluateAutoStart, resolveHostStart, startBlockers } from './start.js'
+import {
+  type StartBlockReason,
+  evaluateAutoStart,
+  resolveHostStart,
+  startBlockers,
+} from './start.js'
 import { assignTeams, moveToTeam } from './teams.js'
 import { type RoomView, roomViewFor } from './view.js'
 
@@ -134,11 +130,7 @@ export interface SeatService {
     actorPlayerId: string,
     targetPlayerId: string,
   ): Promise<SeatMutationResult>
-  kick(
-    roomId: string,
-    actorPlayerId: string,
-    targetPlayerId: string,
-  ): Promise<SeatMutationResult>
+  kick(roomId: string, actorPlayerId: string, targetPlayerId: string): Promise<SeatMutationResult>
   closeLobby(roomId: string, actorPlayerId: string): Promise<SeatMutationResult>
   /** The host presses Start. `force` overrides an outstanding ready check. */
   start(
@@ -210,10 +202,7 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
    * this would leave an auto-balanced room lopsided, or a countdown armed
    * against a roster that no longer exists.
    */
-  function rosterChanged(
-    policy: SeatingPolicy,
-    seats: readonly RoomSeatSlot[],
-  ): RoomRevision {
+  function rosterChanged(policy: SeatingPolicy, seats: readonly RoomSeatSlot[]): RoomRevision {
     return {
       seats: clearReady(assignTeams(seats, policy)),
       startCountdownEndsAt: null,
@@ -257,7 +246,10 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
       if (target === undefined) return refuse('no_such_seat')
       // A bot-reserved seat is not available to a player; the host set it aside.
       if (target.reservedFor !== null) return refuse('seat_occupied')
-      return { revision: rosterChanged(policy, swapSeats(room.seats, from, seatIndex)), outcome: 'applied' }
+      return {
+        revision: rosterChanged(policy, swapSeats(room.seats, from, seatIndex)),
+        outcome: 'applied',
+      }
     })
   }
 
@@ -327,9 +319,7 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
   ): Promise<SeatMutationResult> {
     return withPolicy(roomId, (room) => {
       const rejection = canTransferHost(room, actorPlayerId, targetPlayerId)
-      return rejection === null
-        ? { revision: { hostPlayerId: targetPlayerId } }
-        : refuse(rejection)
+      return rejection === null ? { revision: { hostPlayerId: targetPlayerId } } : refuse(rejection)
     })
   }
 
@@ -359,10 +349,7 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
     })
   }
 
-  async function closeLobby(
-    roomId: string,
-    actorPlayerId: string,
-  ): Promise<SeatMutationResult> {
+  async function closeLobby(roomId: string, actorPlayerId: string): Promise<SeatMutationResult> {
     return withPolicy(roomId, (room, _policy, now) => {
       const rejection = canCloseLobby(room, actorPlayerId)
       if (rejection !== null) return refuse(rejection)
@@ -456,7 +443,7 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
           // the refusal reports the tally so the client can render "1/3".
           // The vote persists — it is the whole point of the call — and the
           // outcome says so, while the tally travels on the returned room for
-           // the client to render "1/3".
+          // the client to render "1/3".
           return {
             revision: withRematchVote(room, playerId),
             outcome: 'rematch_vote_recorded',
@@ -508,10 +495,7 @@ export function createSeatService(options: SeatServiceOptions): SeatService {
     })
   }
 
-  async function view(
-    roomId: string,
-    viewerPlayerId: string | null,
-  ): Promise<RoomView | null> {
+  async function view(roomId: string, viewerPlayerId: string | null): Promise<RoomView | null> {
     const room = await writer.read(roomId)
     if (room === null) return null
     const policy = policyFor(room)
