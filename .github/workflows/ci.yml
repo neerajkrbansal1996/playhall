@@ -15,7 +15,18 @@ name: CI
 #     missing pnpm script.
 
 on:
+  # `edited` is load-bearing, not tidiness (PER-117). A bare `pull_request:`
+  # defaults to `[opened, synchronize, reopened]`, and `pr-hygiene` is the one
+  # gate that reads PR *metadata* instead of the tree — so without `edited` it
+  # checks the title and body exactly once and never looks again. A PR could
+  # open with a `Paperclip-Issue:` trailer, go green, and then have the link
+  # edited out; worse, `pr-hygiene` checks the title because a squash-merge
+  # takes the PR title as the commit subject, so a retitle after the gate
+  # passed lands an unchecked subject on `main` and breaks the CHANGELOG.
+  # `gh run rerun` is not a workaround — a rerun replays the *stored* event
+  # payload, so it re-reads the old body.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   merge_group:
   workflow_dispatch:
   # `production.yml` calls this on every push to `main`, so the gates run
@@ -26,8 +37,15 @@ on:
 # One run per ref. A force-push supersedes the previous run instead of queueing
 # behind it. `main` is never cancelled, so the production pipeline always has a
 # completed CI run to gate on.
+#
+# `event.action` is in the group for the `edited` trigger above: an `edited` and
+# a `synchronize` are both `event_name: pull_request`, so keying on the event
+# name alone would put them in one group and `cancel-in-progress` would let a
+# PR-body edit kill the in-flight code run and restart all of the gates.
+# Splitting by action keeps the intent above — a force-push still supersedes the
+# previous force-push — while a metadata edit only ever supersedes another edit.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ github.event.action }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
