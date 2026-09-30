@@ -17,6 +17,14 @@
  * that stops the suite from passing on a rule set that simply rejects everything.
  * `tool: declared-deps` routes the fixture to `check-declared-deps.mjs` instead of
  * dependency-cruiser, for the one rule dependency-cruiser cannot express.
+ *
+ * `unlink: platform-core, fx-b` omits those packages' workspace symlinks from the scratch repo,
+ * so importing them does **not** resolve. That reproduces the production case the mini repo
+ * otherwise cannot express: pnpm links a workspace package into `node_modules` only when the
+ * importer *declares* it, and a game may never declare a platform package. Without this, every
+ * illegal bare specifier resolves inside the harness, and the suite proves the rules fire under
+ * conditions the real repo never produces — which is how a rule can pass its own fixture and
+ * still be green on the realistic violation.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,6 +40,11 @@ export interface Fixture {
   /** One-line statement of what the fixture proves, shown on failure. */
   readonly why: string
   readonly tool: FixtureTool
+  /**
+   * Unscoped workspace package names whose `node_modules` symlink the scratch repo must NOT
+   * create, so an import of them stays unresolved — the undeclared-dependency case.
+   */
+  readonly unlink: readonly string[]
   /** Repo-relative path -> file contents, written into the scratch repo verbatim. */
   readonly files: ReadonlyMap<string, string>
 }
@@ -82,11 +95,17 @@ function parse(name: string, raw: string): Fixture {
     throw new Error(`Fixture ${name} has unknown "# tool: ${tool}".`)
   }
 
+  const unlink = (header.get('unlink') ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+
   return {
     name,
     expectRule: expect === 'none' ? null : expect,
     why: header.get('why') ?? '(no "# why:" given)',
     tool,
+    unlink,
     files,
   }
 }
