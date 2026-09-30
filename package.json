@@ -21,6 +21,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm -r test",
+    "check:workflow-permissions": "node scripts/ci/assert-workflow-permissions.mjs",
     "clean": "pnpm -r clean",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",

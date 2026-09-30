@@ -34,6 +34,13 @@ no annotation and no step to open**, which reads exactly like an account-level A
 That is how it presented the first time `main.yml` ran for real, and it is why both callers now
 carry the grant explicitly even though the step that uses it only fires on a `pull_request`.
 
+You will not have to remember that, though: the **`workflows` gate** asserts it. For every job
+that calls a local reusable workflow, the permissions it passes must cover every scope that
+workflow's jobs request. It is the check that makes this the one coupling in the pipeline you
+cannot break silently — see [PER-88](/PER/issues/PER-88), which is where the failure mode above
+cost `main` several green runs before anyone noticed. The same gate also catches the other
+direction: add a scope to a job inside `ci.yml` and it tells you which callers now need it.
+
 Both `main.yml` and `release.yml` re-run the gates rather than trusting "CI was green on
 the PR". Two PRs can each be green alone and red together, and with no branch protection
 nothing forces a rebase before merge. A tag can also point at any commit, including one
@@ -72,20 +79,24 @@ free, `main` -> production can come back.
 
 ## The gates
 
-Each gate is one job in `ci.yml`, running through `scripts/ci/gate.mjs`, which owns the
-registry of gate name → root pnpm script → owning issue.
+Each gate is one job in `ci.yml`. The gates that need the workspace run through
+`scripts/ci/gate.mjs`, which owns the registry of gate name → root pnpm script → owning
+issue. `pr-hygiene` and `workflows` call their script directly instead: both are static
+checks over files already on disk, so they skip `./.github/actions/setup` and still report
+when an install would not succeed.
 
-| Gate          | Runs                        | Status                                                                                             |
-| ------------- | --------------------------- | -------------------------------------------------------------------------------------------------- |
-| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs` | Live. PR only.                                                                                     |
-| `lint`        | `pnpm lint`                 | Live.                                                                                              |
-| `typecheck`   | `pnpm typecheck`            | Live.                                                                                              |
-| `boundaries`  | `pnpm boundaries`           | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                 | Live.                                                                                              |
-| `coverage`    | `pnpm test:coverage`        | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
-| `testkit`     | `pnpm test:testkit`         | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
-| `integration` | `pnpm test:integration`     | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
-| `e2e`         | `pnpm test:e2e`             | **Pending** — M1/M3, QA Engineer.                                                                  |
+| Gate          | Runs                              | Status                                                                                             |
+| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                     |
+| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                    |
+| `lint`        | `pnpm lint`                       | Live.                                                                                              |
+| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                              |
+| `boundaries`  | `pnpm boundaries`                 | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
+| `unit`        | `pnpm test`                       | Live.                                                                                              |
+| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
+| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
+| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
+| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                  |
 
 A pending gate logs a `::notice` naming its owner and **passes**. This is deliberate: a
 workflow calling a script that does not exist fails with `ERR_PNPM_NO_SCRIPT`, which is
