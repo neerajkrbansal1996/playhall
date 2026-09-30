@@ -16,6 +16,8 @@ import {
   type GameManifest,
   type GameStatus,
   type MatchResult,
+  type RematchRotation,
+  type StartMode,
   defineTurnBasedGame,
 } from '@playhall/game-sdk'
 import { z } from 'zod'
@@ -41,6 +43,13 @@ export interface FakeGameOptions {
   readonly minPlayers?: number
   readonly maxPlayers?: number
   readonly version?: string
+  /**
+   * Seating declarations (ADR-0010). Set on the *manifest*, so a test that
+   * reads them back off a catalogue entry is exercising `toCatalogEntry`
+   * rather than its own fixture.
+   */
+  readonly startMode?: StartMode
+  readonly rematchRotation?: RematchRotation
 }
 
 export function makeGame(options: FakeGameOptions): AnyGameModule {
@@ -54,6 +63,8 @@ export function makeGame(options: FakeGameOptions): AnyGameModule {
     minPlayers: options.minPlayers ?? 2,
     maxPlayers: options.maxPlayers ?? 2,
     teams: 'none',
+    startMode: options.startMode,
+    rematchRotation: options.rematchRotation,
     turnModel: 'sequential',
     hasHiddenInformation: false,
     usesRandomness: false,

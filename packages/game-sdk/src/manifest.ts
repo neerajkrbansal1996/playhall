@@ -36,6 +36,56 @@ export type GameStatus = (typeof GAME_STATUSES)[number]
 export const SUPPORTED_INPUTS = ['pointer', 'touch', 'keyboard', 'gamepad', 'motion'] as const
 export type SupportedInput = (typeof SUPPORTED_INPUTS)[number]
 
+/**
+ * May a newcomer take a free seat after the match has started? (ADR-0010)
+ *
+ * The question is only about *seats*. Whether a newcomer may watch is already
+ * declared by `supportsSpectators`, and folding the two together would give the
+ * platform two flags that disagree about the same arrival.
+ *
+ * - `spectate_only` — no. A seat vacated mid-match still belongs to the player
+ *   who left, and they may reconnect into it. This is the default a manifest
+ *   that declares nothing gets.
+ * - `fill_empty_seats` — yes. **Real-time turn models only.** The real-time
+ *   contract has `onPlayerJoin`, so the game is told about the arrival and can
+ *   initialise it. The turn-based contract has no join hook, so seating a
+ *   newcomer would splice an occupant into a roster `createInitialState`
+ *   already fixed, with no callback through which the game could react.
+ *   `validateManifest` rejects the combination rather than downgrading it.
+ */
+export const LATE_JOIN_MODES = ['spectate_only', 'fill_empty_seats'] as const
+export type LateJoinMode = (typeof LATE_JOIN_MODES)[number]
+
+/**
+ * How a match begins. (ADR-0010)
+ *
+ * - `auto_when_full` — the room starts itself once every seat is taken.
+ * - `host_starts` — the host decides, however full the room is.
+ *
+ * Optional. A manifest that declares nothing gets `auto_when_full` iff
+ * `minPlayers === maxPlayers`: such a game has exactly one playable roster, so
+ * "full" and "ready to go" are the same fact and asking the host to confirm it
+ * is a tap for nothing. A game that disagrees says so here.
+ */
+export const START_MODES = ['auto_when_full', 'host_starts'] as const
+export type StartMode = (typeof START_MODES)[number]
+
+/**
+ * What a rematch rotates. (ADR-0010)
+ *
+ * - `none` — same seats. "New game, same people", unchanged.
+ * - `seats` — every player shifts one seat, so turn order advances. This is
+ *   what makes a two-player rematch fair without anyone negotiating colours.
+ * - `teams` — seats are kept but teams are re-drawn from scratch, so the same
+ *   group does not play the same four-versus-four every round.
+ *
+ * Optional. The default for a manifest that declares nothing follows `teams`:
+ * `teams` for an auto-balanced game, `none` for fixed teams (whose seat-to-team
+ * map is part of its rules), `seats` otherwise.
+ */
+export const REMATCH_ROTATIONS = ['none', 'seats', 'teams'] as const
+export type RematchRotation = (typeof REMATCH_ROTATIONS)[number]
+
 /** Slug: lowercase kebab-case. Used in URLs and in the 6-character-code flow. */
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
@@ -107,6 +157,16 @@ export interface GameManifest<TSettings = unknown> {
   /** Required when `teams` is `fixed`. */
   readonly teamCount?: number
 
+  /**
+   * Seating declarations (ADR-0010). All three are optional and all three have
+   * a documented default, so a manifest that omits them behaves exactly as it
+   * did before they existed. They are seat-level only: declaring one never
+   * calls the game module.
+   */
+  readonly lateJoin?: LateJoinMode
+  readonly startMode?: StartMode
+  readonly rematchRotation?: RematchRotation
+
   readonly turnModel: TurnModel
   /** Required iff `turnModel === 'realtime'`. */
   readonly realtime?: RealtimeProfile
@@ -167,6 +227,10 @@ export const gameManifestSchema = z.object({
   maxPlayers: z.number().int().min(1),
   teams: z.enum(TEAM_MODES),
   teamCount: z.number().int().min(2).optional(),
+
+  lateJoin: z.enum(LATE_JOIN_MODES).optional(),
+  startMode: z.enum(START_MODES).optional(),
+  rematchRotation: z.enum(REMATCH_ROTATIONS).optional(),
 
   turnModel: z.enum(TURN_MODELS),
   realtime: realtimeProfileSchema.optional(),
@@ -232,6 +296,19 @@ export function validateManifest<TSettings>(
     problems.push({
       path: 'realtime',
       message: "realtime profile is only valid when turnModel is 'realtime'",
+    })
+  }
+
+  // ADR-0010 decision 3. A turn-based game has no join hook, so seating a
+  // newcomer mid-match would put an occupant in a roster `createInitialState`
+  // fixed, with no callback through which the game could initialise them.
+  // Reject it here rather than downgrading it silently — a rule that resolves
+  // to something the game did not ask for is the defect ADR-0010 exists to fix.
+  if (manifest.lateJoin === 'fill_empty_seats' && !isRealtime) {
+    problems.push({
+      path: 'lateJoin',
+      message:
+        "lateJoin 'fill_empty_seats' requires turnModel 'realtime': the turn-based contract has no join hook",
     })
   }
 
@@ -339,6 +416,15 @@ export interface GameCatalogEntry {
   readonly maxPlayers: number
   readonly teams: TeamModeName
   readonly teamCount: number | null
+  /**
+   * Seating declarations (ADR-0010), `null` when the manifest declares nothing.
+   * The seats layer projects these into its `SeatingPolicy` and applies the
+   * documented default for a `null`; it is the only place a manifest field
+   * becomes a seating rule.
+   */
+  readonly lateJoin: LateJoinMode | null
+  readonly startMode: StartMode | null
+  readonly rematchRotation: RematchRotation | null
   readonly turnModel: TurnModel
   readonly realtime: RealtimeProfile | null
   readonly hasHiddenInformation: boolean
@@ -377,6 +463,9 @@ export function toCatalogEntry<TSettings>(manifest: GameManifest<TSettings>): Ga
     maxPlayers: manifest.maxPlayers,
     teams: manifest.teams,
     teamCount: manifest.teamCount ?? null,
+    lateJoin: manifest.lateJoin ?? null,
+    startMode: manifest.startMode ?? null,
+    rematchRotation: manifest.rematchRotation ?? null,
     turnModel: manifest.turnModel,
     realtime: manifest.realtime ?? null,
     hasHiddenInformation: manifest.hasHiddenInformation,

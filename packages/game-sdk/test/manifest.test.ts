@@ -95,6 +95,28 @@ describe('validateManifest', () => {
     expect(problemPaths(manifest)).toContain('realtime')
   })
 
+  // ADR-0010 decision 3. The turn-based contract has `onDisconnect`/`onReconnect`
+  // and no join hook, so there is no callback through which a turn-based game
+  // could initialise a newcomer spliced into a running roster.
+  it("rejects lateJoin 'fill_empty_seats' on a turn-based game", () => {
+    expect(problemPaths(baseManifest({ lateJoin: 'fill_empty_seats' }))).toContain('lateJoin')
+    expect(problemPaths(baseManifest({ lateJoin: 'spectate_only' }))).not.toContain('lateJoin')
+  })
+
+  it("accepts lateJoin 'fill_empty_seats' on a real-time game", () => {
+    expect(validateManifest({ ...tagArena, lateJoin: 'fill_empty_seats' }).ok).toBe(true)
+  })
+
+  it('accepts the other two seating declarations on any turn model', () => {
+    const manifest = baseManifest({ startMode: 'auto_when_full', rematchRotation: 'teams' })
+    expect(validateManifest(manifest).ok).toBe(true)
+  })
+
+  it('rejects a seating declaration outside its enum', () => {
+    const manifest = baseManifest({ startMode: 'whenever' as never })
+    expect(problemPaths(manifest)).toContain('startMode')
+  })
+
   it('rejects snapshotRate above tickRate', () => {
     const result = realtimeProfileResult(60, 30)
     expect(result.success).toBe(true)
@@ -175,6 +197,29 @@ describe('toCatalogEntry', () => {
     expect(entry.realtime).toBeNull()
     expect(entry.presets[0]?.description).toBeNull()
     expect(entry.presets[0]?.isDefault).toBe(true)
+  })
+
+  // The defect ADR-0010 fixes: `toCatalogEntry` is a field-by-field projection,
+  // so a manifest field it forgets is unreachable from every consumer that
+  // reads the entry — silently, with the consumer's fallback standing in.
+  it('projects the seating declarations, so a declared rule reaches the entry', () => {
+    const entry = toCatalogEntry(
+      baseManifest({ startMode: 'auto_when_full', rematchRotation: 'none' }),
+    )
+    expect(entry.startMode).toBe('auto_when_full')
+    expect(entry.rematchRotation).toBe('none')
+  })
+
+  it('projects a real-time game that declares fill_empty_seats', () => {
+    const entry = toCatalogEntry({ ...tagArena, lateJoin: 'fill_empty_seats' })
+    expect(entry.lateJoin).toBe('fill_empty_seats')
+  })
+
+  it('normalises undeclared seating rules to null, leaving the default to the seats layer', () => {
+    const entry = toCatalogEntry(baseManifest())
+    expect(entry.lateJoin).toBeNull()
+    expect(entry.startMode).toBeNull()
+    expect(entry.rematchRotation).toBeNull()
   })
 
   it('carries the realtime profile through for a real-time game', () => {

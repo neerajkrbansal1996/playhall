@@ -35,6 +35,49 @@ describe('loading', () => {
     expect(registry.entryById('game-alpha')?.slug).toBe('alpha')
     expect(registry.entryById('missing')).toBeNull()
   })
+
+  /**
+   * ADR-0010's reachability test, and the reason it goes through the registry
+   * rather than calling `toCatalogEntry` directly.
+   *
+   * The seats layer reads its seating rules off the catalogue entry the
+   * registry stores. `toCatalogEntry` is an explicit field-by-field
+   * projection, so a manifest field it forgets to copy is unreachable from
+   * every consumer downstream of it — and the consumer's documented fallback
+   * stands in, silently. A test that builds an entry object by hand cannot see
+   * that: it asserts against its own fixture, not against the projection. So
+   * the declaration below is set on the *manifest*, and read back off whatever
+   * the registry actually stored.
+   */
+  it('carries a declared seating rule from the manifest to the stored entry', async () => {
+    const registry = await registryOf(
+      makeGame({
+        slug: 'alpha',
+        id: 'game-alpha',
+        minPlayers: 2,
+        maxPlayers: 4,
+        startMode: 'auto_when_full',
+        rematchRotation: 'none',
+      }),
+    )
+
+    const entry = registry.entryById('game-alpha')
+    expect(entry).not.toBeNull()
+    // Both values are the opposite of what the seats layer would default to
+    // for this manifest (a 2–4 player game derives `host_starts`, and a
+    // team-less game defaults to `seats`), so a dropped field cannot pass by
+    // coinciding with the fallback.
+    expect(entry?.startMode).toBe('auto_when_full')
+    expect(entry?.rematchRotation).toBe('none')
+  })
+
+  it('stores null for a game that declares no seating rules', async () => {
+    const registry = await registryOf(makeGame({ slug: 'alpha', id: 'game-alpha' }))
+    const entry = registry.entryById('game-alpha')
+    expect(entry?.lateJoin).toBeNull()
+    expect(entry?.startMode).toBeNull()
+    expect(entry?.rematchRotation).toBeNull()
+  })
 })
 
 describe('bad registrations', () => {
