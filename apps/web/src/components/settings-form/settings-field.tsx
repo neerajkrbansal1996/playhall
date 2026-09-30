@@ -1,6 +1,6 @@
 'use client'
 
-import type { SettingsField, SettingsValue } from '@atrium/game-sdk'
+import type { SettingsField, SettingsValue } from '@playhall/game-sdk'
 
 import { ChipGroupField } from './chip-group-field'
 import { DropdownSelectField } from './dropdown-select-field'

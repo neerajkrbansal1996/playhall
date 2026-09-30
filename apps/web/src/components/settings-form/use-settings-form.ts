@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
-import type { SettingsValue } from '@atrium/game-sdk'
+import type { SettingsValue } from '@playhall/game-sdk'
 
 import { presetMatching, settingsFromPreset } from './presets'
 import type { SettingsFormPreset, SettingsValues } from './types'

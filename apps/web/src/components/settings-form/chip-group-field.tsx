@@ -1,7 +1,7 @@
 'use client'
 
 import { Check } from 'lucide-react'
-import type { SelectField, SettingsValue } from '@atrium/game-sdk'
+import type { SelectField, SettingsValue } from '@playhall/game-sdk'
 
 import { cn } from '@/lib/utils'
 

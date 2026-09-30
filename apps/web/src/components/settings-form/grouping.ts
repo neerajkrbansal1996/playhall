@@ -11,7 +11,7 @@
  * descriptor declared.
  */
 
-import type { SelectField, SelectOption } from '@atrium/game-sdk'
+import type { SelectField, SelectOption } from '@playhall/game-sdk'
 
 /** Options that share a `group`, plus the heading to draw above them. */
 export interface OptionGroup {

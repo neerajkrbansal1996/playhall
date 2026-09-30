@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertCircle, Check, X } from 'lucide-react'
-import type { SettingsValue, ToggleField as ToggleFieldDescriptor } from '@atrium/game-sdk'
+import type { SettingsValue, ToggleField as ToggleFieldDescriptor } from '@playhall/game-sdk'
 
 import { cn } from '@/lib/utils'
 

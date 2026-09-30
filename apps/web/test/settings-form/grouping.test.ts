@@ -1,4 +1,4 @@
-import type { SelectField } from '@atrium/game-sdk'
+import type { SelectField } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
 
 import { groupOptions, optionForToken, optionToken } from '@/components/settings-form/grouping'

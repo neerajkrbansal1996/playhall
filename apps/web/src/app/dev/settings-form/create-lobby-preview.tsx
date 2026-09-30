@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { SettingsFormDescriptor } from '@atrium/game-sdk'
+import type { SettingsFormDescriptor } from '@playhall/game-sdk'
 
 import { Button } from '@/components/ui/button'
 import {

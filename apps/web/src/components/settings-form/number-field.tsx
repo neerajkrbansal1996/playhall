@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { NumberField as NumberFieldDescriptor, SettingsValue } from '@atrium/game-sdk'
+import type { NumberField as NumberFieldDescriptor, SettingsValue } from '@playhall/game-sdk'
 
 import { cn } from '@/lib/utils'
 

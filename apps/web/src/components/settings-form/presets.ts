@@ -1,4 +1,4 @@
-import { canonicalSettingsKey, type SettingsValue } from '@atrium/game-sdk'
+import { canonicalSettingsKey, type SettingsValue } from '@playhall/game-sdk'
 
 import type { SettingsFormPreset, SettingsValues } from './types'
 

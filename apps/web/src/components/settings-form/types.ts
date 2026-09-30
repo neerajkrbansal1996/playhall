@@ -1,4 +1,4 @@
-import type { SettingsValue } from '@atrium/game-sdk'
+import type { SettingsValue } from '@playhall/game-sdk'
 
 /**
  * A preset as it arrives in `GameCatalogEntry.presets` — plain JSON, so

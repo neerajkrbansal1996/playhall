@@ -39,7 +39,7 @@ import {
   settingsFieldSchema,
   type SettingsField,
   type SettingsFormDescriptor,
-} from '@atrium/game-sdk'
+} from '@playhall/game-sdk'
 
 /** Why a field in the incoming JSON is not being rendered. */
 export interface SkippedField {
@@ -149,7 +149,7 @@ export function describeSkippedField(skipped: SkippedField): string {
   const where = skipped.key !== null ? `'${skipped.key}'` : `fields[${skipped.index}]`
   return skipped.reason === 'unknown_kind'
     ? `[settings-form] skipping ${where}: unsupported field kind '${skipped.kind}'. ` +
-        'It will keep its default value. Update @atrium/web to render it.'
+        'It will keep its default value. Update @playhall/web to render it.'
     : `[settings-form] skipping ${where}: the field does not match the SETTINGS_FORM_VERSION ${SETTINGS_FORM_VERSION} shape.`
 }
 

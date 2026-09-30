@@ -1,7 +1,7 @@
 'use client'
 
-import { visibleFields, type SettingsValue } from '@atrium/game-sdk'
-import type { SettingsFormDescriptor } from '@atrium/game-sdk'
+import { visibleFields, type SettingsValue } from '@playhall/game-sdk'
+import type { SettingsFormDescriptor } from '@playhall/game-sdk'
 
 import { cn } from '@/lib/utils'
 
