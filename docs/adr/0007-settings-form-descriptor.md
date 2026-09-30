@@ -252,6 +252,19 @@ proves the two agree.
   PER-115). `.` still re-exports all three, so server-side callers are unaffected. The
   `no-zod-in-pure-settings` boundary rule keeps the split honest, because nothing else would fail if
   it were reversed.
+- **The packaging claim is asserted against the build, not just the graph.** The `bundle` CI gate
+  (`pnpm check:bundle-zod-free`, [PER-126](/PER/issues/PER-126)) builds `apps/web` and fails if a
+  zod fingerprint appears in any client chunk that `app-build-manifest.json` attributes to the
+  create-lobby route or to the landing page. This is a **build assertion**, not a boundary rule, and
+  it is deliberately not a byte budget: the property is binary and a threshold would drift.
+  `no-zod-in-pure-settings` above can only see import edges, which is a weaker statement than it
+  looks — measurement on [PER-126](/PER/issues/PER-126) found that with `sideEffects: false` in
+  place, production tree-shaking already drops the schemas even when a client component imports a
+  _value_ from the `.` barrel, and even when `apps/web`'s settings-form barrel re-exports
+  `./normalize` as a value. Both were reintroduced and the route stayed at 12.1 kB. What does ship
+  zod is a client component that **calls** something zod-backed. So the subpath convention is a
+  belt-and-braces measure over a bundler optimisation, and the gate exists to catch the day that
+  optimisation stops holding — nothing else verifies `sideEffects: false` is true.
 
 ## Revisit triggers
 

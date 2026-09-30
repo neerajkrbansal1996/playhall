@@ -154,6 +154,21 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs boundaries
 
+  # The companion to `boundaries`, and deliberately separate from it (PER-126).
+  # `boundaries` reads the *import graph*; this reads the *emitted bytes*. They
+  # catch different regressions: a type-only import of a zod-backed module is a
+  # graph edge that ships nothing, and a value re-export in a barrel ships 79.6 kB
+  # without adding an edge dependency-cruiser would object to. Only a build can
+  # tell those apart, so this is the job that runs `next build`.
+  bundle:
+    name: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs bundle
+
   unit:
     name: unit
     runs-on: ubuntu-latest
@@ -342,6 +357,7 @@ jobs:
         format,
         typecheck,
         boundaries,
+        bundle,
         unit,
         coverage,
         testkit,
