@@ -301,6 +301,12 @@ importers:
         specifier: ^3.0.5
         version: 3.2.7(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0)
 
+  tools/ops-sweep:
+    devDependencies:
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.4)(jsdom@26.1.0)(lightningcss@1.32.0)
+
 packages:
 
   '@adobe/css-tools@4.5.0':

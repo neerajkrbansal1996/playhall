@@ -27,6 +27,7 @@
     "test:e2e:ui": "playwright test --ui",
     "e2e:install": "playwright install --with-deps chromium webkit",
     "check:workflow-permissions": "node scripts/ci/assert-workflow-permissions.mjs",
+    "sweep:stranded": "node scripts/ops/stranded-issue-sweep.mjs",
     "registry:generate": "node tools/generate-games-registry.mjs",
     "registry:check": "node tools/generate-games-registry.mjs --check",
     "clean": "pnpm -r clean",
