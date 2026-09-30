@@ -33,6 +33,13 @@ const GATES = {
   lint: { script: 'lint', pendingOwner: null },
   typecheck: { script: 'typecheck', pendingOwner: null },
   unit: { script: 'test', pendingOwner: null },
+  // The >= 80% rule currently lives in each package's own vitest thresholds, so
+  // a package that configures none is exempt by accident — which is exactly how
+  // game-sdk sat at 0% and games/chess at 41% behind a green `unit`.
+  coverage: {
+    script: 'test:coverage',
+    pendingOwner: 'PER-89 — aggregate >= 80% check across the required packages',
+  },
   boundaries: {
     script: 'boundaries',
     pendingOwner: 'PER-5 — dependency-cruiser rule set (see docs/adr/0002)',
@@ -52,7 +59,11 @@ const GATES = {
 }
 
 const gateName = process.argv[2]
-const gate = GATES[gateName]
+// Own keys only. A plain lookup resolves `constructor`, `toString` and friends
+// up the prototype chain, and the truthy result then reads `gate.script` as
+// undefined — which lands in the PENDING branch below and exits 0. A typo'd
+// gate name would report "pending, owner: unassigned" and pass forever.
+const gate = Object.hasOwn(GATES, gateName) ? GATES[gateName] : undefined
 
 if (!gate) {
   console.error(`Unknown CI gate "${gateName}". Known gates: ${Object.keys(GATES).join(', ')}`)
