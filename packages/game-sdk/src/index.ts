@@ -79,8 +79,23 @@ export { clearTimer, pauseTimer, resumeTimer, setTimer } from './timers.js'
 export type { Viewer } from './viewer.js'
 export { REPLAY, SPECTATOR, seatViewer, viewerSeatId } from './viewer.js'
 
-export type { MatchResult, ResultReason, SeatOutcome, Standing } from './result.js'
-export { RESULT_REASONS, drawStandings, standingsFromWinners } from './result.js'
+export type {
+  MatchResult,
+  MatchResultProblem,
+  ResultReason,
+  SeatOutcome,
+  Standing,
+  UnrecordedResultReason,
+} from './result.js'
+export {
+  RESULT_REASONS,
+  UNRECORDED_RESULT_REASONS,
+  drawStandings,
+  isRecordedResult,
+  standingsFromWinners,
+  unrecordedStandings,
+  validateMatchResult,
+} from './result.js'
 
 export type { DisconnectAction, DisconnectPolicy, DisconnectReason } from './disconnect.js'
 export { DEFAULT_DISCONNECT_POLICY } from './disconnect.js'

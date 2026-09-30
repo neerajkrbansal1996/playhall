@@ -22,6 +22,7 @@ export const TURN_BASED_CHECKS = [
   'serialization-round-trip',
   'reconnect-snapshot-matches-live',
   'random-playout-terminates',
+  'result-standings-well-formed',
 ] as const
 
 export type TurnBasedCheck = (typeof TURN_BASED_CHECKS)[number]
@@ -109,6 +110,11 @@ export class CheckRecorder {
 
   get failureCount(): number {
     return this.failures.length
+  }
+
+  /** How many times this check has asserted. Zero means it never ran. */
+  get assertionCount(): number {
+    return this.assertions
   }
 
   finish(): CheckResult {

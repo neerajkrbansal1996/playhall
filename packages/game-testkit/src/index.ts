@@ -41,6 +41,7 @@ export {
 } from './report.js'
 
 export {
+  type AbortScenario,
   type ActionCandidate,
   type SecretDescriptor,
   type SecretHolding,
@@ -61,8 +62,8 @@ export {
 } from './realtime.js'
 
 export { STANDARD_MALFORMED_ACTIONS } from './checks/actions.js'
-export { resultProblems } from './checks/playouts.js'
 export { checkSettingsFormContract } from './checks/settings-form.js'
+export { describeProblem } from './checks/result-standings.js'
 
 /**
  * Harness pieces games rarely need but `@playhall/platform-core` does: the
@@ -102,6 +103,7 @@ export const CONFORMANCE_CHECKS = [
   'serialization-round-trip',
   'reconnect-snapshot-matches-live',
   'random-playout-terminates',
+  'result-standings-well-formed',
 ] as const
 
 /** The SDK version this testkit build conforms to. Recorded on every run. */

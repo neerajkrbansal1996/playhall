@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { asSeatId } from '@playhall/game-sdk'
+import { asSeatId, validateMatchResult } from '@playhall/game-sdk'
 import {
   AmbientAccessError,
   CheckRecorder,
@@ -20,8 +20,8 @@ import {
   findJsonSafetyProblems,
   findScalar,
   formatReport,
+  describeProblem,
   jsonRoundTrip,
-  resultProblems,
   stableStringify,
   withoutAmbientSources,
 } from '../src/index.js'
@@ -208,12 +208,25 @@ describe('defaultChooseAction', () => {
   })
 })
 
-describe('resultProblems', () => {
+/**
+ * The standings *rules* are the SDK's (`validateMatchResult`, ADR-0006) and are
+ * tested in `@playhall/game-sdk`. What is the testkit's own is the delegation:
+ * that it asks the SDK rather than re-deriving, and renders what comes back.
+ * So these pin the seam, not the rules — a second copy of the rule table here
+ * is the drift ADR-0006 was written to stop.
+ */
+describe('standings validation is delegated to the SDK', () => {
   const seats = [asSeatId('s1'), asSeatId('s2'), asSeatId('s3')]
+
+  it('accepts an aborted match with empty standings', () => {
+    // The regression this seam was built for: validating `standings: []`
+    // against the full roster read as "omitted every seat".
+    expect(validateMatchResult({ reason: 'aborted', standings: [] }, seats)).toEqual([])
+  })
 
   it('accepts a competition-ranked result', () => {
     expect(
-      resultProblems(
+      validateMatchResult(
         {
           reason: 'completed',
           standings: [
@@ -227,25 +240,10 @@ describe('resultProblems', () => {
     ).toEqual([])
   })
 
-  it('rejects dense ranks, which hide a tie', () => {
-    const problems = resultProblems(
+  it('renders every problem the SDK can return', () => {
+    const problems = validateMatchResult(
       {
         reason: 'completed',
-        standings: [
-          { seatId: seats[0]!, rank: 1, outcome: 'win' },
-          { seatId: seats[1]!, rank: 1, outcome: 'win' },
-          { seatId: seats[2]!, rank: 2, outcome: 'loss' },
-        ],
-      },
-      seats,
-    )
-    expect(problems.join(' ')).toContain('competition-ranked')
-  })
-
-  it('rejects a missing seat, an extra seat and a bad reason', () => {
-    const problems = resultProblems(
-      {
-        reason: 'gave-up' as never,
         standings: [
           { seatId: seats[0]!, rank: 1, outcome: 'win' },
           { seatId: asSeatId('ghost'), rank: 2, outcome: 'loss' },
@@ -253,9 +251,13 @@ describe('resultProblems', () => {
       },
       seats,
     )
-    expect(problems.join(' ')).toContain('omits standings for s2, s3')
-    expect(problems.join(' ')).toContain('unknown seats ghost')
-    expect(problems.join(' ')).toContain("reason 'gave-up'")
+
+    expect(problems.length).toBeGreaterThan(0)
+    // Every code renders to a string that leads with the code itself; a
+    // problem the renderer does not know would come back as `undefined`.
+    for (const problem of problems) {
+      expect(describeProblem(problem)).toContain(problem.code)
+    }
   })
 })
 

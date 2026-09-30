@@ -108,6 +108,40 @@ export interface ActionCandidate<TAction> {
   readonly actions: readonly TAction[]
 }
 
+/**
+ * How this game reaches a match that **did not count**.
+ *
+ * Random playouts only ever produce endings the rules arrive at on their own,
+ * so they never reach an abort — and an abort is precisely where the standings
+ * contract is easiest to break (ADR-0006: an unrecorded reason must carry
+ * exactly zero standings, and a game that fills them in anyway is writing a
+ * phantom result into a player's history). The suite cannot derive the abort
+ * action for an arbitrary game, so the game names it here.
+ *
+ * A game with no unrecorded ending declares none, and the check says so in its
+ * notes rather than passing quietly.
+ */
+export interface AbortScenario<TState, TAction> {
+  /** Shows up in failure messages, e.g. `"host aborts on move one"`. */
+  readonly label: string
+  /**
+   * Normal moves to play before aborting. Default 0 — abort from the opening
+   * position. Use a small number for a game whose abort window opens after a
+   * move; the suite fails the scenario if the match ends before it gets there.
+   */
+  readonly afterSteps?: number
+  /**
+   * The action that ends the match without recording a result. Return `null`
+   * to say this scenario is not reachable from `state`; the suite reports that
+   * as a failure, because a declared abort that never runs is a hole in the
+   * gate rather than a passing check.
+   */
+  abortAction(
+    state: TState,
+    roster: SeatRoster,
+  ): { readonly seatId: SeatId; readonly action: TAction } | null
+}
+
 export interface SettingsVariant<TSettings> {
   readonly label: string
   readonly settings: TSettings
@@ -138,6 +172,12 @@ export interface TurnBasedConformanceSubject<
 
   /** Declared hidden information. Required when `hasHiddenInformation` is true. */
   readonly secrets?: readonly SecretDescriptor<TState>[]
+
+  /**
+   * Ways this game ends a match that records no result. Drives the abort half
+   * of `result-standings-well-formed`; see `AbortScenario`.
+   */
+  readonly abortScenarios?: readonly AbortScenario<TState, TAction>[]
 
   /**
    * Picks the next move. Defaults to a uniform pick among the actions of the
