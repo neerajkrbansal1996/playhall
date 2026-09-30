@@ -28,7 +28,7 @@ import {
   type HiddenHandView,
   hiddenHandSubject,
 } from '../src/reference/index.js'
-import { PUBLIC, type MatchResult } from '@playhall/game-sdk'
+import { PUBLIC, type MatchResult, checkSettingsForm } from '@playhall/game-sdk'
 import { ticTacToeSubject, type TicTacToeState, type TicTacToeSubject } from './subjects.js'
 
 /** Small runs: a mutant is caught on the first seed or it is not caught. */
@@ -367,5 +367,142 @@ describe('termination and results', () => {
         .find((check) => check.id === 'manifest-valid')
         ?.failures.some((failure) => failure.message.includes('undeclared-timer')),
     ).toBe(true)
+  })
+})
+
+/**
+ * The ADR-0007 settings-form descriptor.
+ *
+ * Every mutant here typechecks. That is the whole point: `SettingsField` is a
+ * structural type, so a descriptor assembled through a spread satisfies it and
+ * the drift only exists at runtime. Before `settings-form-contract` had a call
+ * site, each of these shipped green.
+ */
+describe('settings form descriptor', () => {
+  function mutateForm(form: unknown): ConformanceReport {
+    return runTurnBasedConformance(
+      {
+        ...ticTacToeSubject,
+        manifest: { ...ticTacToeSubject.manifest, settingsForm: form as never },
+      },
+      FAST,
+    )
+  }
+
+  function messagesOf(report: ConformanceReport, check: ConformanceCheck): string {
+    return (report.checks.find((candidate) => candidate.id === check)?.failures ?? [])
+      .map((failure) => `${failure.message} @ ${failure.where ?? '-'}`)
+      .join('\n')
+  }
+
+  const baseFields = ticTacToeSubject.manifest.settingsForm.fields
+
+  it('catches a visibleWhen naming a field that does not exist', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: baseFields.map((field) =>
+        field.kind === 'number'
+          ? // `timeControl` is a chess key. Copy-pasted descriptors do this,
+            // and the field then never appears in any lobby.
+            { ...field, visibleWhen: { field: 'timeControl', equals: ['custom'] } }
+          : field,
+      ),
+    })
+    expectCaughtBy(report, 'settings-form-contract')
+    expect(messagesOf(report, 'settings-form-contract')).toContain('visibility_target_missing')
+  })
+
+  it('catches a field bound to a settings key that does not exist', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: [...baseFields, { kind: 'toggle', key: 'rated', label: 'Rated' }],
+    })
+    expectCaughtBy(report, 'settings-form-contract')
+    expect(messagesOf(report, 'settings-form-contract')).toContain('unknown_field_key')
+  })
+
+  it('catches a select option the settings schema rejects', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: baseFields.map((field) =>
+        field.key === 'firstMove' && field.kind === 'select'
+          ? { ...field, options: [...field.options, { value: 'alternate', label: 'Alternate' }] }
+          : field,
+      ),
+    })
+    expectCaughtBy(report, 'settings-form-contract')
+    expect(messagesOf(report, 'settings-form-contract')).toContain('option_rejected')
+  })
+
+  it('catches number bounds that have drifted from the schema', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: baseFields.map((field) => (field.kind === 'number' ? { ...field, max: 600 } : field)),
+    })
+    expectCaughtBy(report, 'settings-form-contract')
+    expect(messagesOf(report, 'settings-form-contract')).toContain('number_bound_rejected')
+  })
+
+  it('catches an unknown key, which TypeScript only rejects on a fresh literal', () => {
+    // Assembled through a spread, so the excess-property check never fires —
+    // and `settingsFieldSchema` is `.strict()`, so it fails at runtime.
+    const stale = { placeholder: 'Seconds' }
+    const report = mutateForm({
+      version: 1,
+      fields: baseFields.map((field) => ({ ...field, ...stale })),
+    })
+    expectCaughtBy(report, 'settings-form-contract')
+    expect(messagesOf(report, 'settings-form-contract')).toContain('settingsFormDescriptorSchema')
+  })
+
+  it('catches a preset the form cannot produce', () => {
+    // The `blitz` preset sets firstMove: 'random', and the select no longer
+    // offers it — so picking Blitz gives the host a setting the form cannot
+    // draw, and the first edit silently snaps it back to 'seat-order'.
+    const form = {
+      version: 1,
+      fields: baseFields.map((field) =>
+        field.key === 'firstMove' && field.kind === 'select'
+          ? { ...field, options: field.options.filter((option) => option.value !== 'random') }
+          : field,
+      ),
+    } as const
+
+    const report = mutateForm(form)
+    expectCaughtBy(report, 'settings-form-contract')
+    const messages = messagesOf(report, 'settings-form-contract')
+    expect(messages).toContain("preset 'blitz'")
+    expect(messages).toContain('select control cannot produce')
+
+    // This one is genuinely new rather than a relabelling of `manifest-valid`:
+    // the SDK checker probes only `defaultSettings`, so it is silent on this
+    // exact descriptor — and `manifest-valid`, which runs it, stays green.
+    expect(
+      checkSettingsForm({
+        settingsForm: form,
+        settingsSchema: ticTacToeSubject.manifest.settingsSchema,
+        defaultSettings: ticTacToeSubject.manifest.defaultSettings,
+      }),
+    ).toEqual([])
+    expect(failedChecks(report)).toEqual(['settings-form-contract'])
+  })
+
+  it('leaves the other checks alone: a broken descriptor is one failure', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: [...baseFields, { kind: 'toggle', key: 'rated', label: 'Rated' }],
+    })
+    expect(failedChecks(report)).toEqual(['manifest-valid', 'settings-form-contract'])
+  })
+
+  it('notes a setting no control binds, without failing the check', () => {
+    const report = mutateForm({
+      version: 1,
+      fields: baseFields.filter((field) => field.key !== 'firstMove'),
+    })
+    const check = report.checks.find((candidate) => candidate.id === 'settings-form-contract')
+    expect(check?.status).toBe('passed')
+    expect(check?.notes.join(' ')).toContain("'firstMove'")
+    expect(report.passed).toBe(true)
   })
 })

@@ -10,6 +10,7 @@
 import { SDK_VERSION, type GameEvent } from '@playhall/game-sdk'
 import { prepare } from './internal/prepare.js'
 import { checkManifest } from './checks/manifest.js'
+import { checkSettingsFormContract } from './checks/settings-form.js'
 import { checkDeterminism, checkReducerPurity } from './checks/determinism.js'
 import { checkNoHiddenInfoLeak } from './checks/redaction.js'
 import { checkIllegalActionRejected, checkLegalActionsAgree } from './checks/actions.js'
@@ -18,8 +19,8 @@ import { checkRandomPlayoutTerminates } from './checks/playouts.js'
 import {
   type CheckResult,
   type ConformanceReport,
+  type TurnBasedCheck,
   CheckRecorder,
-  TURN_BASED_CHECKS,
 } from './report.js'
 import type { TurnBasedConformanceOptions, TurnBasedConformanceSubject } from './subject.js'
 
@@ -37,22 +38,24 @@ export function runTurnBasedConformance<
   const prep = prepare(subject, options)
   const only = options.only === undefined ? null : new Set(options.only)
 
-  const runners: readonly (() => CheckRecorder)[] = [
-    () => checkManifest(prep),
-    () => checkDeterminism(prep),
-    () => checkReducerPurity(prep),
-    () => checkNoHiddenInfoLeak(prep),
-    () => checkIllegalActionRejected(prep),
-    () => checkLegalActionsAgree(prep),
-    () => checkSerializationRoundTrip(prep),
-    () => checkReconnectSnapshot(prep),
-    () => checkRandomPlayoutTerminates(prep),
+  // Keyed by check id rather than paired positionally with TURN_BASED_CHECKS:
+  // inserting a check in the middle of one list and not the other used to
+  // silently rename every check after it.
+  const runners: readonly (readonly [TurnBasedCheck, () => CheckRecorder])[] = [
+    ['manifest-valid', () => checkManifest(prep)],
+    ['settings-form-contract', () => checkSettingsFormContract(prep)],
+    ['determinism', () => checkDeterminism(prep)],
+    ['reducer-purity', () => checkReducerPurity(prep)],
+    ['no-hidden-info-leak', () => checkNoHiddenInfoLeak(prep)],
+    ['illegal-action-rejected', () => checkIllegalActionRejected(prep)],
+    ['legal-actions-agree', () => checkLegalActionsAgree(prep)],
+    ['serialization-round-trip', () => checkSerializationRoundTrip(prep)],
+    ['reconnect-snapshot-matches-live', () => checkReconnectSnapshot(prep)],
+    ['random-playout-terminates', () => checkRandomPlayoutTerminates(prep)],
   ]
 
   const checks: CheckResult[] = []
-  for (const [index, runner] of runners.entries()) {
-    const id = TURN_BASED_CHECKS[index]
-    if (id === undefined) continue
+  for (const [id, runner] of runners) {
     if (only !== null && !only.has(id)) continue
     try {
       checks.push(runner().finish())

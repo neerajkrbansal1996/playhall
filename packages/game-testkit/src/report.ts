@@ -13,6 +13,7 @@
 /** Checks a turn-based game must pass before CI will merge it. */
 export const TURN_BASED_CHECKS = [
   'manifest-valid',
+  'settings-form-contract',
   'determinism',
   'reducer-purity',
   'no-hidden-info-leak',

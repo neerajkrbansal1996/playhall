@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatReport, runTurnBasedConformance } from '../src/index.js'
+import { TURN_BASED_CHECKS, formatReport, runTurnBasedConformance } from '../src/index.js'
 import { hiddenHandSubject } from '../src/reference/index.js'
 import { ticTacToeSubject } from './subjects.js'
 
@@ -24,7 +24,9 @@ describe('turn-based conformance: tic-tac-toe', () => {
       expect.soft(check.status, `${check.id}: ${JSON.stringify(check.failures)}`).toBe('passed')
       expect.soft(check.assertions, `${check.id} asserted nothing`).toBeGreaterThan(0)
     }
-    expect(report.checks).toHaveLength(9)
+    // Derived, not a literal: a check added to TURN_BASED_CHECKS but never
+    // wired into the runner would otherwise pass this test silently.
+    expect(report.checks.map((check) => check.id)).toEqual([...TURN_BASED_CHECKS])
   })
 
   it('records the seeds it used, so a failure is reproducible', () => {

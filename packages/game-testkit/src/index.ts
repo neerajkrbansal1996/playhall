@@ -62,6 +62,7 @@ export {
 
 export { STANDARD_MALFORMED_ACTIONS } from './checks/actions.js'
 export { resultProblems } from './checks/playouts.js'
+export { checkSettingsFormContract } from './checks/settings-form.js'
 
 /**
  * Harness pieces games rarely need but `@playhall/platform-core` does: the
