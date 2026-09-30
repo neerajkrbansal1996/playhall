@@ -22,6 +22,12 @@
  * that *can* be derived should be; this file is only for the fixed surfaces
  * that have no key to derive from.
  *
+ * The one thing a derived name cannot carry is *which form it is in* — a page
+ * with two settings forms emits `setting-timeControl` twice. The answer is not
+ * to prefix the derived id but to name the containers, which is why both
+ * `createLobbyForm` and `editSettingsForm` are below: a spec scopes to the form
+ * first, then asks for the field.
+ *
  * Reconciliation note for whoever next edits the contract: rev 4's lobby table
  * still carries rev 2's hand-named settings ids (`time-control-select`,
  * `custom-initial-minutes`, `custom-increment-seconds`, `color-preference`)
@@ -37,6 +43,25 @@ export const testIds = {
   createLobbyForm: 'create-lobby-form',
   /** The primary action that creates the lobby. */
   createLobbySubmit: 'create-lobby-submit',
+
+  /**
+   * The waiting room's edit-settings form. **Scoping anchor: `setting-*` ids
+   * are not prefixed.**
+   *
+   * `fieldTestAttributes` derives `setting-<formFieldKey>` from the descriptor
+   * key alone, with no form namespace — deliberately, because a prefix would be
+   * a string the spec has to guess at, which is the drift this registry exists
+   * to remove. The cost is that the moment a page shows two settings forms —
+   * [PER-20](/PER/issues/PER-20) puts host edit-settings in the waiting room
+   * beside create-lobby — `setting-timeControl` matches twice and Playwright's
+   * `getByTestId` throws in strict mode.
+   *
+   * So the container is the thing that gets a name, and a spec scopes to it
+   * (`page.getByTestId(testIds.editSettingsForm).getByTestId('setting-…')`).
+   * The name is here ahead of the form itself so the E2E contract has something
+   * to write the rule against rather than a prefix nobody has implemented.
+   */
+  editSettingsForm: 'edit-settings-form',
 
   /** The room's 6-character code, as text. Share-first. */
   roomCode: 'room-code',

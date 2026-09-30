@@ -22,12 +22,14 @@ import {
   chessPresetsFixture,
   chessSettingsFormFixture,
 } from './settings-form/fixtures'
+import { Harness } from './settings-form/harness'
 
 describe('the platform testid registry', () => {
   it('matches the names the contract fixed', () => {
     expect(testIds).toEqual({
       createLobbyForm: 'create-lobby-form',
       createLobbySubmit: 'create-lobby-submit',
+      editSettingsForm: 'edit-settings-form',
       roomCode: 'room-code',
       roomLink: 'room-link',
       copyRoomLink: 'copy-room-link',
@@ -35,6 +37,19 @@ describe('the platform testid registry', () => {
       joinSubmit: 'join-submit',
       spectatorCount: 'spectator-count',
     })
+  })
+
+  it('names a container for each of the two forms that can share a page', () => {
+    // Not decoration: `setting-*` ids carry no form namespace, so these two
+    // names are the only thing a spec can disambiguate on once the waiting
+    // room's edit-settings form sits beside create-lobby ([PER-20]). Deleting
+    // `editSettingsForm` as "unused" would leave that page untestable, which is
+    // why it is named before the form it points at exists.
+    expect(testIds.createLobbyForm).not.toBe(testIds.editSettingsForm)
+    for (const id of [testIds.createLobbyForm, testIds.editSettingsForm]) {
+      expect(id).toMatch(/-form$/)
+      expect(id).not.toMatch(/^setting-/)
+    }
   })
 
   it('names no game-specific selector', () => {
@@ -118,5 +133,57 @@ describe('the create-lobby surface', () => {
     await user.click(within(form).getByRole('button', { name: /Rapid 10\+0/ }))
 
     expect(screen.queryByText(/"timeControl"/)).toBeNull()
+  })
+})
+
+describe('two settings forms on one page', () => {
+  /**
+   * The shape [PER-20](/PER/issues/PER-20) will build: the host edits settings
+   * in the waiting room while a create-lobby form is also mounted. The
+   * edit-settings form does not exist yet, so this stands in the renderer with
+   * the container name it will carry.
+   */
+  function renderBothForms() {
+    const normalized = normalizeSettingsForm(chessSettingsFormFixture)
+    return render(
+      <>
+        <CreateLobbyPreview
+          gameName="chess"
+          form={normalized.form}
+          defaultSettings={chessDefaultSettingsFixture}
+          presets={chessPresetsFixture}
+        />
+        <div data-testid={testIds.editSettingsForm}>
+          <Harness
+            settingsForm={chessSettingsFormFixture}
+            defaultSettings={chessDefaultSettingsFixture}
+          />
+        </div>
+      </>,
+    )
+  }
+
+  it('emits the same setting-* id twice, which is the reason the anchor exists', () => {
+    renderBothForms()
+
+    // Measured, not hypothetical. `getByTestId` — and Playwright's strict-mode
+    // locator — throws on this. If a future change ever prefixes the derived
+    // ids, this test fails and `editSettingsForm`'s rationale needs rewriting
+    // rather than silently rotting.
+    expect(screen.getAllByTestId('setting-timeControl')).toHaveLength(2)
+  })
+
+  it('is disambiguated by scoping to each form container', () => {
+    renderBothForms()
+
+    const createLobby = screen.getByTestId(testIds.createLobbyForm)
+    const editSettings = screen.getByTestId(testIds.editSettingsForm)
+
+    // The rule the E2E contract writes down: scope to the form, then ask for
+    // the field. Both sides resolve to exactly one element, and to different ones.
+    const inCreate = within(createLobby).getByTestId('setting-timeControl')
+    const inEdit = within(editSettings).getByTestId('setting-timeControl')
+    expect(inCreate).not.toBe(inEdit)
+    expect(editSettings).not.toContainElement(inCreate)
   })
 })
