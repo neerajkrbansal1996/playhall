@@ -11,8 +11,8 @@
  * what makes "no accounts, no personal data" true rather than aspirational.
  */
 
-import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { type PlayerId, type Result, asPlayerId, err, ok } from '@playhall/game-sdk'
+import { webCryptoRandomSource } from '../runtime.js'
 import { type GuestAvatar, avatarFor } from './avatar.js'
 import {
   type GuestCookieOptions,
@@ -89,7 +89,15 @@ export interface IssuedGuestIdentity {
   readonly setCookie: string
 }
 
-/** Injectable so tests are deterministic. Defaults to `node:crypto`. */
+/**
+ * Injectable so tests are deterministic. Defaults to `webCryptoRandomSource()`
+ * — the package's `RandomSource` port, backed by the global Web Crypto API.
+ *
+ * Deliberately not a Node builtin: `platform-core` has to stay importable from
+ * an edge runtime (`runtime.ts` header), and `src/index.ts` re-exports this file,
+ * so a builtin import here would decide that for the whole package. Enforced by
+ * the `no-platform-core-node-builtins` boundary rule, not by this comment.
+ */
 export type RandomBytes = (size: number) => Uint8Array
 
 export interface GuestIdentityServiceConfig {
@@ -184,7 +192,7 @@ function identityFromClaims(claims: GuestClaims): GuestIdentity {
 export function createGuestIdentityService(
   config: GuestIdentityServiceConfig,
 ): GuestIdentityService {
-  const randomBytes = config.randomBytes ?? ((size: number) => nodeRandomBytes(size))
+  const randomBytes = config.randomBytes ?? webCryptoRandomSource().randomBytes
   const ttlSeconds = config.ttlSeconds ?? GUEST_TOKEN_TTL_SECONDS
   const cookieOptions: GuestCookieOptions = { maxAgeSeconds: ttlSeconds, ...config.cookie }
 
