@@ -100,6 +100,14 @@ export interface TimerServiceOptions {
   readonly specs?: readonly TimerSpec[]
   /** Invoked once per expiry, in deadline order. */
   readonly onExpire?: (expiry: TimerExpiry) => void
+  /**
+   * Invoked when a single mutation's expiry drain hits `MAX_DRAIN_PASSES` — an
+   * `onExpire` handler re-armed an already-due timer more than 32 times. The
+   * records passed here were **force-expired without `onExpire` being called**,
+   * so the game never hears about them. It is a bug signal, not a normal path:
+   * log it loudly. See `#drainDue`.
+   */
+  readonly onDrainExhausted?: (dropped: readonly TimerExpiry[]) => void
 }
 
 /**
@@ -113,8 +121,10 @@ const FIRE_TOLERANCE_MS = 1
  * Cap on how many expiry passes one drain performs. `poll()` delivers a single
  * pass by design, so the drain loops; the cap is there because an `onExpire`
  * handler that re-arms an already-due timer on every pass would otherwise spin
- * forever inside a mutator. Hitting it leaves the remaining work to the
- * scheduler rather than hanging the room.
+ * forever inside a mutator.
+ *
+ * Hitting it is a bug in the handler, not a load condition. See `#drainDue` for
+ * what happens then and why it is not "leave it to the scheduler".
  */
 const MAX_DRAIN_PASSES = 32
 
@@ -125,6 +135,7 @@ export class TimerService {
   #scheduler: Scheduler
   #specs: ReadonlyMap<string, TimerSpec> | null
   #onExpire: (expiry: TimerExpiry) => void
+  #onDrainExhausted: (dropped: readonly TimerExpiry[]) => void
   #records = new Map<string, TimerRecord>()
   #disposed = false
   /** Guards against an `onExpire` handler that re-enters via `apply`. */
@@ -136,6 +147,7 @@ export class TimerService {
     this.#scheduler = options.scheduler ?? createTimeoutScheduler(this.#clock)
     this.#specs = options.specs ? new Map(options.specs.map((spec) => [spec.id, spec])) : null
     this.#onExpire = options.onExpire ?? (() => {})
+    this.#onDrainExhausted = options.onDrainExhausted ?? (() => {})
   }
 
   get now(): number {
@@ -261,7 +273,7 @@ export class TimerService {
         : resetRecord(existing, options.delayMs, issuedAtMs)
 
     this.#records.set(timerId, record)
-    this.#afterMutation()
+    this.#afterMutation(issuedAtMs)
     return record
   }
 
@@ -531,16 +543,31 @@ export class TimerService {
 
   /**
    * Delivers every expiry already due at `nowMs` *before* a mutation gets to
-   * observe the records.
+   * observe the records, and again after it.
    *
    * This is the determinism fix. Live, the scheduler polls first, so a flag that
    * fell at +10 s is delivered before the move that lands at +12 s. In replay
    * nothing polls: the runner drives a fixed clock straight from the match log,
    * so without this the same seed and the same inputs end in a flag-fall live
    * and in a position on replay. Rather than leave that as a contract the
-   * service cannot enforce, every mutator drains here first and the invariant
-   * becomes: **a record can never reach `remainingMs === 0` without a
-   * `TimerExpiry` having been delivered.**
+   * service cannot enforce, every mutator drains here and the invariant
+   * becomes: **once a mutator has returned, no record sits at
+   * `remainingMs === 0` without its `TimerExpiry` having been accounted for.**
+   *
+   * ## The bound on that invariant
+   *
+   * "Accounted for" and not "delivered", because of `MAX_DRAIN_PASSES`. Each
+   * pass is one `poll`, and an `onExpire` handler may legitimately arm the next
+   * timer; a handler that arms an *already-due* one every single time would
+   * loop forever. After 32 passes the drain stops looping and force-expires
+   * whatever is still due **without calling `onExpire`**, reporting it through
+   * `onDrainExhausted`.
+   *
+   * It is not "leave the remainder to the scheduler": in replay there is no
+   * scheduler, so that escape hatch does not exist on the one path this
+   * invariant was introduced for, and the record would sit at zero un-expired,
+   * invisible to `deadlineMsAt`, never reported. Dropping an event loudly beats
+   * a clock the game can never learn about.
    *
    * A no-op while firing — we are already inside a pass, and a handler that
    * mutates must not re-enter one.
@@ -550,6 +577,29 @@ export class TimerService {
     for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
       if (this.poll(nowMs).length === 0) return
     }
+    this.#forceExpireDue(nowMs)
+  }
+
+  /** The `MAX_DRAIN_PASSES` escape hatch. See `#drainDue`. */
+  #forceExpireDue(nowMs: number): void {
+    const dropped: TimerExpiry[] = []
+    for (const record of [...this.#records.values()]) {
+      const dueAtMs = deadlineMsAt(record)
+      if (dueAtMs === null || dueAtMs - FIRE_TOLERANCE_MS > nowMs) continue
+      this.#records.set(record.timerId, expireRecord(record))
+      dropped.push({
+        timerId: record.timerId,
+        seatId: record.seatId,
+        kind: record.kind,
+        dueAtMs,
+        firedAtMs: nowMs,
+        latenessMs: nowMs - dueAtMs,
+      })
+    }
+    if (dropped.length === 0) return
+    dropped.sort((a, b) => a.dueAtMs - b.dueAtMs)
+    this.#onDrainExhausted(dropped)
+    this.#rearm()
   }
 
   #mutate(timerId: TimerId, fn: (record: TimerRecord) => TimerRecord): void {
@@ -564,17 +614,14 @@ export class TimerService {
    * onto a seat that already flagged, a `set` with `delayMs: 0` — fire first,
    * then re-arm. Otherwise a zero-length timer would wait for the next
    * unrelated event to be noticed.
+   *
+   * `nowMs` is the mutation's instant, not the wall clock. Passing the wall
+   * clock here would measure `latenessMs` against it and break `poll`'s own
+   * promise that a replayed expiry gets the same `firedAtMs`/`latenessMs` as
+   * the live one — on the exact path that promise was written for.
    */
   #afterMutation(nowMs?: number): void {
-    const next = this.nextDeadlineMs()
-    if (
-      next !== null &&
-      next - FIRE_TOLERANCE_MS <= (nowMs ?? this.#clock.now()) &&
-      !this.#firing
-    ) {
-      this.poll()
-      return
-    }
+    this.#drainDue(nowMs ?? this.#clock.now())
     this.#rearm()
   }
 

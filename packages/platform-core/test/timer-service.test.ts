@@ -374,7 +374,7 @@ describe('re-entrancy', () => {
     expect(rounds).toBe(3)
   })
 
-  it('does not let a handler that re-arms a zero-length timer recurse forever', () => {
+  it('drains a handler that re-arms a zero-length timer, without recursing', () => {
     const clock = createManualClock(0)
     const onExpire = vi.fn((expiry: TimerExpiry) => {
       if (onExpire.mock.calls.length < 5)
@@ -388,11 +388,36 @@ describe('re-entrancy', () => {
     })
 
     service.set(TURN, { delayMs: 0 })
-    // The re-arm happens inside the firing pass, so it is picked up on the
-    // next poll rather than re-entering. One fire per poll, always.
-    expect(onExpire).toHaveBeenCalledTimes(1)
+    // Each re-arm happens inside a firing pass, so it is picked up by the next
+    // pass of the drain rather than re-entering. The drain runs the chain out
+    // before `set` returns, because a mutator must not leave a due timer
+    // un-reported — there is no scheduler in replay to pick it up.
+    expect(onExpire).toHaveBeenCalledTimes(5)
+    expect(service.get(TURN)?.expired).toBe(true)
     service.poll()
-    expect(onExpire).toHaveBeenCalledTimes(2)
+    expect(onExpire).toHaveBeenCalledTimes(5)
+  })
+
+  it('force-expires and reports when a handler out-runs the drain cap', () => {
+    const clock = createManualClock(0)
+    const dropped: TimerExpiry[][] = []
+    const service = new TimerService({
+      matchId: MATCH,
+      clock,
+      scheduler: createManualScheduler(),
+      // Pathological: re-arms an already-due timer on every single pass.
+      onExpire: (expiry) => service.set(expiry.timerId, { delayMs: 0, issuedAtMs: clock.now() }),
+      onDrainExhausted: (expiries) => dropped.push([...expiries]),
+    })
+
+    service.set(TURN, { delayMs: 0 })
+
+    // The cap stops the loop, but the record does not get left at zero
+    // un-expired — that state is invisible to `deadlineMsAt` and would never
+    // be reported at all.
+    expect(service.get(TURN)?.expired).toBe(true)
+    expect(dropped).toHaveLength(1)
+    expect(dropped[0]?.map((expiry) => expiry.timerId)).toEqual([TURN])
   })
 })
 
