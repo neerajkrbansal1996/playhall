@@ -4,7 +4,7 @@ import { liveness, readiness, type DependencyCheck, type HealthContext } from '.
 function context(overrides: Partial<HealthContext> = {}): HealthContext {
   const startedAtMs = Date.parse('2026-09-30T12:00:00.000Z')
   return {
-    service: '@atrium/realtime',
+    service: '@playhall/realtime',
     version: '0.0.0',
     startedAtMs,
     now: () => startedAtMs + 30_000,

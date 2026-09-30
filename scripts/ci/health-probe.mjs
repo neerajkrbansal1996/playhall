@@ -21,7 +21,9 @@ const timeoutMs = numberFlag('--timeout-ms', 5_000)
 const delayMs = numberFlag('--delay-ms', 3_000)
 
 if (!url) {
-  console.error('Usage: node scripts/ci/health-probe.mjs <url> [--attempts N] [--timeout-ms N] [--delay-ms N]')
+  console.error(
+    'Usage: node scripts/ci/health-probe.mjs <url> [--attempts N] [--timeout-ms N] [--delay-ms N]',
+  )
   process.exit(2)
 }
 

@@ -38,6 +38,6 @@ Paperclip-Issue: PER-
 - [ ] Boundary rules pass — no game imports platform internals or another game
 - [ ] No `Date.now()` / `Math.random()` / I/O added inside a game module or its reducers
 - [ ] Every new JSON message or HTTP input has a `zod` schema
-- [ ] No brand string hard-coded — read it from `@atrium/shared`'s `BRAND`
+- [ ] No brand string hard-coded — read it from `@playhall/shared`'s `BRAND`
 - [ ] No new Redis key without a TTL and a documented lifecycle
 - [ ] CTO review requested

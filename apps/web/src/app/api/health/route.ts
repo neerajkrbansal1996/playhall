@@ -1,4 +1,4 @@
-import { buildHealthPayload, healthHttpStatus } from '@atrium/shared'
+import { buildHealthPayload, healthHttpStatus } from '@playhall/shared'
 
 /**
  * `GET /api/health` — liveness for the web app.
@@ -34,7 +34,7 @@ const startedAtMs = Date.now()
 
 export async function GET(): Promise<Response> {
   const payload = buildHealthPayload({
-    service: '@atrium/web',
+    service: '@playhall/web',
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0',
     nowMs: Date.now(),
     startedAtMs,

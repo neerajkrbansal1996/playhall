@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildHealthPayload, healthHttpStatus, type HealthDependency } from '../src/health'
 
 const BASE = {
-  service: '@atrium/realtime',
+  service: '@playhall/realtime',
   version: '0.0.0',
   startedAtMs: Date.parse('2026-09-30T12:00:00.000Z'),
   nowMs: Date.parse('2026-09-30T12:02:30.000Z'),
@@ -98,8 +98,8 @@ describe('buildHealthPayload', () => {
   })
 
   it('names the answering service, so a misrouted probe is obvious', () => {
-    const payload = buildHealthPayload({ ...BASE, service: '@atrium/web' })
+    const payload = buildHealthPayload({ ...BASE, service: '@playhall/web' })
 
-    expect(payload.service).toBe('@atrium/web')
+    expect(payload.service).toBe('@playhall/web')
   })
 })

@@ -120,12 +120,12 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: atrium
-          POSTGRES_PASSWORD: atrium
-          POSTGRES_DB: atrium
+          POSTGRES_USER: playhall
+          POSTGRES_PASSWORD: playhall
+          POSTGRES_DB: playhall
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U atrium -d atrium"
+          --health-cmd "pg_isready -U playhall -d playhall"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -138,7 +138,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://atrium:atrium@localhost:5432/atrium
+      DATABASE_URL: postgresql://playhall:playhall@localhost:5432/playhall
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
     steps:
@@ -154,12 +154,12 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: atrium
-          POSTGRES_PASSWORD: atrium
-          POSTGRES_DB: atrium
+          POSTGRES_USER: playhall
+          POSTGRES_PASSWORD: playhall
+          POSTGRES_DB: playhall
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U atrium -d atrium"
+          --health-cmd "pg_isready -U playhall -d playhall"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -172,7 +172,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://atrium:atrium@localhost:5432/atrium
+      DATABASE_URL: postgresql://playhall:playhall@localhost:5432/playhall
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
     steps:

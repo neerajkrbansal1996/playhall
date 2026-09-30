@@ -1,4 +1,4 @@
-import { buildHealthPayload, type HealthDependency, type HealthPayload } from '@atrium/shared'
+import { buildHealthPayload, type HealthDependency, type HealthPayload } from '@playhall/shared'
 
 /**
  * Liveness and readiness for the realtime service.
