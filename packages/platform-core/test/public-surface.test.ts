@@ -39,6 +39,9 @@ describe('the package surface', () => {
       'roomKeyTtlMs',
       'canonicalizeRoomCode',
       'resolveJoin',
+      'realtimeJoinTarget',
+      'decideRealtimeBinding',
+      'publicRoomSummary',
     ]) {
       expect(platform).toHaveProperty(name)
     }

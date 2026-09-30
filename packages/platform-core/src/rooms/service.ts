@@ -40,6 +40,14 @@ import {
   rejectJoin,
   resolveJoin,
 } from './join.js'
+import {
+  type BindRealtimeRoomResult,
+  type PublicRoomSummary,
+  type RealtimeJoinTarget,
+  decideRealtimeBinding,
+  publicRoomSummary,
+  realtimeJoinTarget,
+} from './realtime-binding.js'
 import type { RoomStore } from './store.js'
 import type { Room, RoomCloseReason } from './types.js'
 
@@ -73,7 +81,17 @@ export interface JoinByCodeRequest {
 }
 
 export type JoinResult =
-  | { readonly ok: true; readonly room: Room; readonly outcome: JoinOutcome }
+  | {
+      readonly ok: true
+      readonly room: Room
+      readonly outcome: JoinOutcome
+      /**
+       * Where to go next: the framework handle plus the seat this join won.
+       * `ok: false` here means the join succeeded but the realtime room is not
+       * up yet — the client holds its place and retries, it never guesses.
+       */
+      readonly realtime: RealtimeJoinTarget
+    }
   | {
       readonly ok: false
       readonly code: JoinRejectionCode
@@ -107,8 +125,22 @@ export interface RoomService {
   finishMatch(roomId: string, matchId: string): Promise<Room | null>
   /** Applies every due lifecycle deadline. Call on an interval. */
   sweep(limit?: number): Promise<SweepReport>
-  /** Public rooms, or `[]` while the `publicRoomListing` flag is off. */
-  listPublic(limit?: number): Promise<readonly Room[]>
+  /**
+   * Binds the realtime framework's room handle to this platform room. Called
+   * by the realtime service once, after it creates the backing room.
+   * Idempotent for the same handle; refuses a different one.
+   */
+  bindRealtimeRoom(roomId: string, realtimeRoomId: string): Promise<BindRealtimeRoomResult>
+  /**
+   * The realtime handle for a player already admitted to this room. The only
+   * sanctioned way to obtain it — see `realtimeJoinTarget`.
+   */
+  realtimeTarget(roomId: string, playerId: string): Promise<RealtimeJoinTarget>
+  /**
+   * Public rooms, or `[]` while the `publicRoomListing` flag is off. Returns
+   * summaries, never rooms: a listing must not hand out a join capability.
+   */
+  listPublic(limit?: number): Promise<readonly PublicRoomSummary[]>
 }
 
 /**
@@ -183,6 +215,9 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     const room: Room = {
       id: roomId,
       code,
+      // The realtime service binds its own handle once the backing room exists.
+      // The platform room is usable (shareable, chattable) before that happens.
+      realtimeRoomId: null,
       gameId: manifest.id,
       gameSlug: manifest.slug,
       gameVersion: manifest.version,
@@ -252,7 +287,7 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
       const next = applyJoin(previous, playerId, outcome, clock.now())
       if (await store.save(previous, next)) {
         failedJoins.recordSuccess(ip)
-        return { ok: true, room: next, outcome }
+        return { ok: true, room: next, outcome, realtime: realtimeJoinTarget(next, playerId) }
       }
       // Lost the race for the last seat. Re-resolving against fresh state is
       // the correct answer — the loser becomes a spectator rather than
@@ -338,10 +373,58 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     return { expired, closed, prunedLimiterKeys }
   }
 
-  async function listPublic(limit = 50): Promise<readonly Room[]> {
-    if (!flags.isEnabled('publicRoomListing')) return []
-    return store.listPublic(limit)
+  /**
+   * Compare-and-set rather than a blind write: the realtime service binds while
+   * players are already joining and leaving, so the room it read may be stale
+   * even though the binding decision is not.
+   */
+  async function bindRealtimeRoom(
+    roomId: string,
+    realtimeRoomId: string,
+  ): Promise<BindRealtimeRoomResult> {
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const room = await store.get(roomId)
+      if (room === null) return { ok: false, error: { code: 'room_not_found' } }
+
+      const decision = decideRealtimeBinding(room, realtimeRoomId)
+      if (decision.action === 'noop') return { ok: true, room, bound: false }
+      if (decision.action === 'reject') {
+        return decision.code === 'already_bound'
+          ? {
+              ok: false,
+              // Non-null: `already_bound` is only reachable when it is set.
+              error: { code: 'already_bound', realtimeRoomId: room.realtimeRoomId as string },
+            }
+          : { ok: false, error: { code: decision.code } }
+      }
+
+      const next: Room = { ...room, realtimeRoomId, updatedAt: clock.now() }
+      if (await store.save(room, next)) return { ok: true, room: next, bound: true }
+    }
+    return { ok: false, error: { code: 'contended', retryAfterMs: CAS_BACKOFF_MS } }
   }
 
-  return { create, joinByCode, leave, finishMatch, sweep, listPublic }
+  async function realtimeTarget(roomId: string, playerId: string): Promise<RealtimeJoinTarget> {
+    const room = await store.get(roomId)
+    // A missing room is reported as `not_admitted`, not `not_found`: an unbound
+    // caller must not learn a room id from the shape of the refusal.
+    if (room === null) return { ok: false, code: 'not_admitted' }
+    return realtimeJoinTarget(room, playerId)
+  }
+
+  async function listPublic(limit = 50): Promise<readonly PublicRoomSummary[]> {
+    if (!flags.isEnabled('publicRoomListing')) return []
+    return (await store.listPublic(limit)).map(publicRoomSummary)
+  }
+
+  return {
+    create,
+    joinByCode,
+    leave,
+    finishMatch,
+    sweep,
+    bindRealtimeRoom,
+    realtimeTarget,
+    listPublic,
+  }
 }

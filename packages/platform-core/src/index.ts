@@ -77,6 +77,19 @@ export {
   resolveJoin,
 } from './rooms/join.js'
 
+export type {
+  BindRealtimeRoomFailure,
+  BindRealtimeRoomResult,
+  PublicRoomSummary,
+  RealtimeBindingDecision,
+  RealtimeJoinTarget,
+} from './rooms/realtime-binding.js'
+export {
+  decideRealtimeBinding,
+  publicRoomSummary,
+  realtimeJoinTarget,
+} from './rooms/realtime-binding.js'
+
 export type { RoomStore } from './rooms/store.js'
 export { createInMemoryRoomStore } from './rooms/store.js'
 

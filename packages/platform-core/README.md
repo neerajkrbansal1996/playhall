@@ -12,18 +12,19 @@ that runs in a millisecond.
 
 ## What is in here today (M1.3)
 
-| Module            | Owns                                                        |
-| ----------------- | ----------------------------------------------------------- |
-| `registry/`       | The game catalogue, built from dynamic-import thunks        |
-| `rooms/code`      | Room-code generation, unbiased draw, collision retry        |
-| `rooms/types`     | The room model and seat/membership helpers                  |
-| `rooms/join`      | The join matrix — one pure decision, shared by every caller |
-| `rooms/lifecycle` | The three expiry deadlines and Redis TTLs                   |
-| `rooms/store`     | The store port + an in-memory implementation                |
-| `rooms/service`   | The order in which the above are applied                    |
-| `rate-limit/`     | Token buckets, the policy set, the per-IP failed-join cap   |
-| `routing/`        | Route builders and parser, sitemap, `robots.txt`            |
-| `flags`           | Platform and per-game feature flags                         |
+| Module                   | Owns                                                        |
+| ------------------------ | ----------------------------------------------------------- |
+| `registry/`              | The game catalogue, built from dynamic-import thunks        |
+| `rooms/code`             | Room-code generation, unbiased draw, collision retry        |
+| `rooms/types`            | The room model and seat/membership helpers                  |
+| `rooms/join`             | The join matrix — one pure decision, shared by every caller |
+| `rooms/lifecycle`        | The three expiry deadlines and Redis TTLs                   |
+| `rooms/store`            | The store port + an in-memory implementation                |
+| `rooms/realtime-binding` | Code → realtime room handle, and the listing projection     |
+| `rooms/service`          | The order in which the above are applied                    |
+| `rate-limit/`            | Token buckets, the policy set, the per-IP failed-join cap   |
+| `routing/`               | Route builders and parser, sitemap, `robots.txt`            |
+| `flags`                  | Platform and per-game feature flags                         |
 
 Seats, teams, host controls and ready checks ([PER-13](/PER/issues/PER-13))
 extend `rooms/types` rather than replace it. Guest identity is
@@ -69,6 +70,38 @@ lands on the friendly not-found path. Never a wrong room.
 
 The first three rejection codes are _terminal_: this link will never work. Only
 terminal rejections charge the per-IP failed-join cap.
+
+## Code → realtime room handle
+
+The realtime framework generates its own opaque room id (ADR-0001 §4.1 rev 4).
+Joining therefore has one more step than the code lookup:
+
+```
+raw input → canonicalizeRoomCode → getByCode → join matrix admits →
+realtimeJoinTarget → { realtimeRoomId, seatIndex } → join by id
+```
+
+`joinByCode` returns that target inline, so a caller never has to assemble the
+mapping itself. Four properties hold, and each is tested:
+
+- **The code is still ours.** Six characters, global across games, the only
+  identifier a player sees or types. The framework handle is internal plumbing;
+  a game module sees neither.
+- **The mapping rides on the room record**, not on a second key, so it inherits
+  the room's TTL and cannot outlive it. A mapping with its own lifecycle would
+  be a join capability that leaks after the room is gone.
+- **Rebinding to a different handle is refused**, not overwritten. Two framework
+  rooms claiming one platform room is how a lobby silently splits in half. Same
+  handle twice is an idempotent no-op, so a retry is safe.
+- **The handle only reaches an admitted client.** `realtimeJoinTarget` answers
+  `not_admitted` for anyone the join matrix has not seated or accepted as a
+  spectator, because joining by id needs nothing else.
+
+`listPublic` returns `PublicRoomSummary`, never a `Room`: no code, no handle, no
+player ids. A lobby code is a capability, not an identifier (ADR-0001 §6), so
+the framework's own matchmaker room-listing driver stays **off** — and our
+flag-gated listing is typed so the same leak is unrepresentable rather than
+merely absent today.
 
 ## Room lifecycle
 
@@ -147,4 +180,4 @@ declaring its entry point in its own `package.json`:
 
 `pnpm --filter @playhall/platform-core test`. The suite covers code-generation
 collision handling and alphabet safety, the full join matrix, every lifecycle
-timer, and the failed-join IP cap.
+timer, the failed-join IP cap, and the code → realtime-handle mapping.

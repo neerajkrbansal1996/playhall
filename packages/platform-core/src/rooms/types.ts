@@ -46,6 +46,15 @@ export interface Room {
   /** Canonical, upper-case, 6 characters from the unambiguous alphabet. */
   readonly code: string
 
+  /**
+   * The realtime framework's own opaque room handle, or null until the realtime
+   * service has created the backing room and bound it. Internal plumbing: it is
+   * never shown to a player, never typed by one, and never visible to a game
+   * module. See `rooms/realtime-binding.ts` for why it lives on this record and
+   * who is allowed to receive it.
+   */
+  readonly realtimeRoomId: string | null
+
   readonly gameId: string
   readonly gameSlug: string
   /** Pinned for the room's whole life, so a mid-room deploy cannot change rules. */

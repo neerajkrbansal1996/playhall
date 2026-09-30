@@ -14,6 +14,7 @@ export interface RoomOverrides {
   readonly finishedAt?: number | null
   readonly hostPlayerId?: string
   readonly gameId?: string
+  readonly realtimeRoomId?: string | null
 }
 
 /** A two-seat lobby hosted by `host`, created at `T0`, with seat 1 free. */
@@ -23,6 +24,7 @@ export function makeRoom(overrides: RoomOverrides = {}): Room {
   return {
     id: 'room-1',
     code: 'ABC234',
+    realtimeRoomId: overrides.realtimeRoomId ?? null,
     gameId: overrides.gameId ?? 'fixture',
     gameSlug: 'fixture',
     gameVersion: '1.0.0',
