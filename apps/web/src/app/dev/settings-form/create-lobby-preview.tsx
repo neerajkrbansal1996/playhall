@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { SettingsFormDescriptor } from '@playhall/game-sdk'
 
 import { Button } from '@/components/ui/button'
+import { testIds } from '@/lib/testids'
 import {
   PresetQuickStart,
   SettingsForm,
@@ -58,18 +59,36 @@ export function CreateLobbyPreview({
 
       <hr className="border-border" />
 
-      <SettingsForm
-        form={form}
-        values={settings.values}
-        onChange={settings.setValue}
-        errors={errors}
-        presets={presets}
-        activePresetId={settings.activePresetId}
-        onApplyPreset={settings.applyPreset}
-      />
+      {/*
+        A real `<form>` with the contract's testid, not a bare div: submitting
+        is the setup step of every E2E scenario, and a form gives Enter-to-submit
+        for free — one fewer tap on a phone, and keyboard parity without a
+        handler.
+      */}
+      <form
+        data-testid={testIds.createLobbyForm}
+        onSubmit={(event) => {
+          event.preventDefault()
+          setSubmitted(settings.values)
+        }}
+        className="flex flex-col gap-6"
+      >
+        <SettingsForm
+          form={form}
+          values={settings.values}
+          onChange={settings.setValue}
+          errors={errors}
+          presets={presets}
+          activePresetId={settings.activePresetId}
+          onApplyPreset={settings.applyPreset}
+        />
+
+        <Button type="submit" data-testid={testIds.createLobbySubmit}>
+          Create lobby
+        </Button>
+      </form>
 
       <div className="flex flex-col gap-2">
-        <Button onClick={() => setSubmitted(settings.values)}>Create lobby</Button>
         <Button
           variant="outline"
           onClick={() =>
