@@ -377,6 +377,18 @@ survive a free-tier Redis that drops its keyspace. `packages/platform-core` owns
   persistence guarantee this is a real risk, not a theoretical one — so it is named here and
   is what [PER-38](/PER/issues/PER-38) has to price.
 
+**Blast radius, stated rather than hidden.**
+
+- *An app instance dies mid-match.* The room lock expires, another instance rehydrates from
+  the last snapshot plus the match log, and play resumes at the correct state. During that
+  window the player sees "reconnecting" — never a stale board presented as live. Showing a
+  correct state late beats showing a wrong state now.
+- *Redis dies hard.* With `appendonly yes` and the default `appendfsync everysec`, an
+  in-flight match can lose **up to 1 second** of applied actions. We are accepting that for
+  v1 and writing it down. Completed matches are already in Postgres and are unaffected. If
+  it proves unacceptable, the mitigations are `appendfsync always` (paid for in write
+  latency) or a replica with `WAIT` — both are changes to this line, not to the design.
+
 **Alternative considered.** Postgres `LISTEN/NOTIFY` plus tables instead of Redis, dropping a
 dependency. It lost on TTLs and presence: expiring lobbies and connection presence in
 Postgres means a sweeper job and write amplification on the hot path. **Rev 2 note:** this
