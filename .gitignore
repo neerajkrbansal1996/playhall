@@ -1,4 +1,6 @@
-node_modules/
+# Match a symlinked dependency farm too, which `node_modules/` does not:
+# a symlink to a directory is not a directory for gitignore purposes.
+node_modules
 dist/
 .next/
 out/

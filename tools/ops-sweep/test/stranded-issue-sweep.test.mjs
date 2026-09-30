@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  SWEEP_FLIP_MARKER,
+  applyRemedy,
+  confirmWrite,
+  countRecentFlips,
+  decideRemedy,
+  parseArgs,
+  planRemedy,
   evaluateDeepWakePaths,
+  hasLiveMonitor,
   hasLiveRun,
+  isOwnExecutionIssue,
   isShallowCandidate,
   openChildIds,
+  prioritiseFindings,
 } from '../../../scripts/ops/stranded-issue-sweep.mjs'
 
 /**
@@ -50,6 +60,7 @@ function issue(overrides) {
     hiddenAt: null,
     monitorNextCheckAt: null,
     activeRun: null,
+    originId: null,
     ...overrides,
   }
 }
@@ -72,10 +83,17 @@ const ELIGIBLE_AT_2026_09_30 = [
 const DISCOVERY = new Date('2026-09-30T17:30:00.000Z')
 const IN_PROGRESS = ['in_progress']
 
-function sweep(all, now = DISCOVERY, thresholdHours = 2) {
-  const cutoff = new Date(now.getTime() - thresholdHours * 3600_000)
+function sweep(all, now = DISCOVERY, thresholdHours = 2, extra = {}) {
+  const thresholdMs = thresholdHours * 3600_000
+  const screen = {
+    statuses: IN_PROGRESS,
+    cutoff: new Date(now.getTime() - thresholdMs),
+    now: now.getTime(),
+    thresholdMs,
+    ...extra,
+  }
   return all
-    .filter((candidate) => isShallowCandidate(candidate, all, IN_PROGRESS, cutoff))
+    .filter((candidate) => isShallowCandidate(candidate, all, screen))
     .map((candidate) => candidate.identifier)
 }
 
@@ -302,5 +320,366 @@ describe('deep wake paths', () => {
       evaluateDeepWakePaths({ detail: { blockedBy: [] }, interactions: null, recovery: null })
         .stranded,
     ).toBe(true)
+  })
+})
+
+/**
+ * The four corrections Chief of Staff made binding when authorising the routine
+ * (PER-155, 2026-09-30T18:09Z). Each one is here because the proposal without it
+ * would have been worse than no sweep at all.
+ */
+describe('monitor exclusion (correction 3)', () => {
+  // PER-86's real state at 18:04Z: `critical`, no activeRun, and a monitor due
+  // at 20:02:56Z. It has a live path; flipping it destroys a review wait.
+  const per86 = issue({
+    id: 'e3a6ff2c-per-86',
+    identifier: 'PER-86',
+    priority: 'critical',
+    assigneeAgentId: CTO,
+    lastActivityAt: '2026-09-30T14:00:00.000Z',
+    monitorNextCheckAt: '2026-09-30T20:02:56.000Z',
+  })
+  const NOW = new Date('2026-09-30T18:04:00.000Z')
+
+  it('a future monitor excludes an otherwise-qualifying critical issue', () => {
+    expect(hasLiveMonitor(per86, NOW.getTime(), 2 * 3600_000)).toBe(true)
+    expect(sweep([per86], NOW)).toEqual([])
+  })
+
+  it('without the monitor the same issue is a finding — the monitor is what saves it', () => {
+    expect(sweep([{ ...per86, monitorNextCheckAt: null }], NOW)).toEqual(['PER-86'])
+  })
+
+  // A monitor a few minutes past due is scheduler queue lag, not a dead monitor.
+  it('a slightly past-due monitor still counts as live', () => {
+    const lagging = { ...per86, monitorNextCheckAt: '2026-09-30T17:50:00.000Z' }
+    expect(hasLiveMonitor(lagging, NOW.getTime(), 2 * 3600_000)).toBe(true)
+    expect(sweep([lagging], NOW)).toEqual([])
+  })
+
+  // Past due by more than the sweep's own threshold: it has demonstrably not
+  // fired, and is no more a wake path than a terminal `activeRun` is.
+  it('a monitor past due by more than the threshold is not a wake path', () => {
+    const dead = { ...per86, monitorNextCheckAt: '2026-09-30T12:00:00.000Z' }
+    expect(hasLiveMonitor(dead, NOW.getTime(), 2 * 3600_000)).toBe(false)
+    expect(sweep([dead], NOW)).toEqual(['PER-86'])
+  })
+
+  it('an unparseable monitor timestamp is treated as live, never flipped', () => {
+    expect(hasLiveMonitor({ monitorNextCheckAt: 'not-a-date' }, NOW.getTime(), 0)).toBe(true)
+  })
+})
+
+describe('the sweep never sweeps itself (correction 3)', () => {
+  const routineId = '6d1f0b2e-routine'
+  const runIssue = issue({
+    id: 'sweep-run-issue',
+    identifier: 'PER-200',
+    assigneeAgentId: CTO,
+    lastActivityAt: '2026-09-30T11:00:00.000Z',
+    originId: routineId,
+  })
+
+  it('excludes an execution issue created by the sweep routine', () => {
+    expect(isOwnExecutionIssue(runIssue, { selfRoutineIds: [routineId] })).toBe(true)
+    expect(sweep([runIssue], DISCOVERY, 2, { selfRoutineIds: [routineId] })).toEqual([])
+  })
+
+  it('an execution issue from a different routine is still swept', () => {
+    expect(sweep([runIssue], DISCOVERY, 2, { selfRoutineIds: ['some-other-routine'] })).toEqual([
+      'PER-200',
+    ])
+  })
+
+  it('excludes explicit ids and identifiers, including the running issue itself', () => {
+    expect(sweep([runIssue], DISCOVERY, 2, { excludeIds: ['sweep-run-issue'] })).toEqual([])
+    expect(sweep([runIssue], DISCOVERY, 2, { excludeIds: ['PER-200'] })).toEqual([])
+  })
+})
+
+describe('strike ladder (correction 2)', () => {
+  const WINDOW = 24 * 3600_000
+  const NOW = new Date('2026-09-30T18:00:00.000Z').getTime()
+  const flipAt = (iso) => ({
+    body: `${SWEEP_FLIP_MARKER}\n## Stranded work restarted`,
+    createdAt: iso,
+  })
+
+  it("counts only the sweep's own flip comments", () => {
+    const comments = [
+      flipAt('2026-09-30T10:00:00.000Z'),
+      {
+        body: 'An ordinary engineer comment about the branch.',
+        createdAt: '2026-09-30T11:00:00.000Z',
+      },
+      { body: 'Restarting this — please pick it up.', createdAt: '2026-09-30T12:00:00.000Z' },
+    ]
+    expect(countRecentFlips(comments, NOW, WINDOW)).toBe(1)
+  })
+
+  it('ignores flips older than the window', () => {
+    const comments = [flipAt('2026-09-28T10:00:00.000Z'), flipAt('2026-09-30T10:00:00.000Z')]
+    expect(countRecentFlips(comments, NOW, WINDOW)).toBe(1)
+  })
+
+  it('reads the ledger from a paginated items payload', () => {
+    expect(countRecentFlips({ items: [flipAt('2026-09-30T10:00:00.000Z')] }, NOW, WINDOW)).toBe(1)
+  })
+
+  it('an unreadable comment list reads as zero flips, so the first remedy is a flip', () => {
+    expect(countRecentFlips(null, NOW, WINDOW)).toBe(0)
+    expect(decideRemedy(0, 2)).toBe('flip')
+  })
+
+  // PER-60 is the case that makes this necessary: it was flipped to `todo`, woke
+  // via `issue_status_changed`, and died again with `acpx_turn_failed`. 40.8% of
+  // runs on this company do. Without the limit the sweep loops forever on the
+  // failure it is treating, burning the capacity whose exhaustion causes it.
+  it('flips up to the limit, then escalates instead of looping', () => {
+    expect(decideRemedy(0, 2)).toBe('flip')
+    expect(decideRemedy(1, 2)).toBe('flip')
+    expect(decideRemedy(2, 2)).toBe('escalate')
+    expect(decideRemedy(3, 2)).toBe('escalate')
+  })
+})
+
+describe('ordering and cap (correction 4)', () => {
+  const finding = (identifier, priority, idleHours) => ({ identifier, priority, idleHours })
+
+  it('orders critical -> high -> medium -> low, then oldest first', () => {
+    const { selected } = prioritiseFindings(
+      [
+        finding('PER-109', 'low', 11.9),
+        finding('PER-81', 'medium', 5.4),
+        finding('PER-3', 'critical', 6.0),
+        finding('PER-13', 'high', 9.0),
+        finding('PER-6', 'critical', 8.0),
+        finding('PER-137', 'medium', 7.0),
+      ],
+      10,
+    )
+    expect(selected.map((f) => f.identifier)).toEqual([
+      'PER-6',
+      'PER-3',
+      'PER-13',
+      'PER-137',
+      'PER-81',
+      'PER-109',
+    ])
+  })
+
+  // 21 stranded issues were measured at 17:55Z. Restoring all of them in one
+  // fire floods a contended shared workspace, which is why the cap exists.
+  it('caps the fire at maxActions and reports the rest as deferred', () => {
+    const many = Array.from({ length: 21 }, (_, i) => finding(`PER-${i}`, 'medium', 21 - i))
+    const { selected, deferred } = prioritiseFindings(many, 10)
+    expect(selected).toHaveLength(10)
+    expect(deferred).toHaveLength(11)
+    expect(selected[0].idleHours).toBe(21)
+  })
+
+  it('sorts an unknown priority last rather than dropping it', () => {
+    const { selected } = prioritiseFindings(
+      [finding('PER-X', undefined, 20), finding('PER-Y', 'low', 1)],
+      10,
+    )
+    expect(selected.map((f) => f.identifier)).toEqual(['PER-Y', 'PER-X'])
+  })
+
+  it('does not mutate the input array', () => {
+    const input = [finding('PER-A', 'low', 1), finding('PER-B', 'critical', 1)]
+    prioritiseFindings(input, 10)
+    expect(input.map((f) => f.identifier)).toEqual(['PER-A', 'PER-B'])
+  })
+})
+
+describe('the remedy (correction 1)', () => {
+  const NOW = new Date('2026-09-30T18:00:00.000Z').getTime()
+  const OPTS = { strikeLimit: 2, strikeWindowHours: 24 }
+  const per60 = {
+    id: '071429ad-7d68-4aae-b97a-44c513a11778',
+    identifier: 'PER-60',
+    status: 'in_progress',
+    priority: 'high',
+    assigneeAgentId: CTO,
+    idleHours: 21.3,
+  }
+
+  // The two proven wake mechanisms on this board do not have to be chosen
+  // between: `PATCH {status, comment}` is one atomic write carrying both, which
+  // also sidesteps the race where flipping to `todo` *after* a comment has taken
+  // the execution lock strips that lock.
+  it('sends the status change and the audit comment in ONE patch', () => {
+    const plan = planRemedy(per60, [], OPTS, NOW)
+    expect(plan.remedy).toBe('flip')
+    expect(plan.patch.status).toBe('todo')
+    expect(plan.patch.comment).toContain('Stranded work restarted')
+    expect(plan.patch).not.toHaveProperty('unblockDescriptor')
+  })
+
+  // The invariant that makes the ledger work: a flip comment this sweep writes
+  // must be counted by the NEXT fire. If the marker and the counter ever drift
+  // apart, the strike limit silently stops existing.
+  it('a flip comment it writes is counted as a strike by the next fire', () => {
+    const first = planRemedy(per60, [], OPTS, NOW)
+    const thread = [{ body: first.patch.comment, createdAt: '2026-09-30T18:00:00.000Z' }]
+    expect(countRecentFlips(thread, NOW, 24 * 3600_000)).toBe(1)
+
+    const second = planRemedy(per60, thread, OPTS, NOW)
+    expect(second.remedy).toBe('flip')
+    thread.push({ body: second.patch.comment, createdAt: '2026-09-30T18:30:00.000Z' })
+
+    const third = planRemedy(per60, thread, OPTS, NOW)
+    expect(third.remedy).toBe('escalate')
+    expect(third.flipCount).toBe(2)
+  })
+
+  it('escalates to blocked naming the assignee as unblock owner', () => {
+    const thread = [
+      { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T10:00:00.000Z' },
+      { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T14:00:00.000Z' },
+    ]
+    const plan = planRemedy(per60, thread, OPTS, NOW)
+    expect(plan.patch.status).toBe('blocked')
+    expect(plan.patch.unblockDescriptor.owner.agentId).toBe(CTO)
+    expect(plan.patch.unblockDescriptor.action).toBeTruthy()
+    // The owner must also be legible to a human reading the thread, because the
+    // descriptor write is the part the platform can reject.
+    expect(plan.patch.comment).toContain(CTO)
+  })
+
+  it('an escalation rejected for the descriptor still lands, owner named in the comment', async () => {
+    const sent = []
+    const transport = {
+      getComments: async () => [
+        { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T10:00:00.000Z' },
+        { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T14:00:00.000Z' },
+      ],
+      patch: async (id, body) => {
+        sent.push(body)
+        if (body.unblockDescriptor) {
+          const err = new Error('422 agent cannot set another agent as unblock owner')
+          err.status = 422
+          throw err
+        }
+        return { id, status: body.status }
+      },
+    }
+    const result = await applyRemedy(per60, OPTS, NOW, transport)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).not.toHaveProperty('unblockDescriptor')
+    expect(result.ok).toBe(true)
+    expect(result.status).toBe('blocked')
+    expect(result.ownerInComment).toBe(true)
+  })
+
+  it('a rejected FLIP is not retried without its fields — it is reported as failed', async () => {
+    const transport = {
+      getComments: async () => [],
+      patch: async () => {
+        const err = new Error('409 conflict')
+        err.status = 409
+        throw err
+      },
+    }
+    await expect(applyRemedy(per60, OPTS, NOW, transport)).rejects.toThrow('409')
+  })
+
+  it('a 5xx on the escalating patch is not swallowed by the descriptor fallback', async () => {
+    const transport = {
+      getComments: async () => [
+        { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T10:00:00.000Z' },
+        { body: SWEEP_FLIP_MARKER, createdAt: '2026-09-30T14:00:00.000Z' },
+      ],
+      patch: async () => {
+        const err = new Error('503 upstream')
+        err.status = 503
+        throw err
+      },
+    }
+    await expect(applyRemedy(per60, OPTS, NOW, transport)).rejects.toThrow('503')
+  })
+
+  it('an unreadable comment thread does not stop the remedy — it flips', async () => {
+    const transport = {
+      getComments: async () => {
+        throw new Error('403')
+      },
+      patch: async (id, body) => ({ id, status: body.status }),
+    }
+    const result = await applyRemedy(per60, OPTS, NOW, transport)
+    expect(result.remedy).toBe('flip')
+    expect(result.ok).toBe(true)
+  })
+
+  // A 200 can still not persist. The remedy is only ever reported from what the
+  // PATCH echoed back, never from the request having returned.
+  describe('writes are confirmed by read-back, never inferred', () => {
+    it('an empty response body is a FAILED write', () => {
+      expect(confirmWrite(null, 'todo')).toEqual({ ok: false, reason: 'empty response body' })
+      expect(confirmWrite('', 'todo').ok).toBe(false)
+    })
+
+    it('an echoed status that is not what we asked for is a FAILED write', () => {
+      const result = confirmWrite({ status: 'in_progress' }, 'todo')
+      expect(result.ok).toBe(false)
+      expect(result.reason).toContain('expected todo')
+    })
+
+    it('only the echoed target status counts as success', () => {
+      expect(confirmWrite({ status: 'todo' }, 'todo')).toEqual({ ok: true, status: 'todo' })
+    })
+
+    it('reports a silently non-persisting patch as failed, not woken', async () => {
+      const transport = {
+        getComments: async () => [],
+        patch: async () => ({ status: 'in_progress' }), // 200, but nothing changed
+      }
+      const result = await applyRemedy(per60, OPTS, NOW, transport)
+      expect(result.ok).toBe(false)
+      expect(result.reason).toContain('expected todo')
+    })
+  })
+})
+
+describe('argument parsing', () => {
+  it('defaults to the authorised report-only sweep: 2h, cap 10, 2 strikes in 24h', () => {
+    expect(parseArgs([])).toMatchObject({
+      thresholdHours: 2,
+      maxActions: 10,
+      strikeLimit: 2,
+      strikeWindowHours: 24,
+      statuses: ['in_progress'],
+      act: false,
+    })
+  })
+
+  // A boolean flag that consumes the next argv entry silently drops it. This
+  // bit `--exit-zero`, which the routine depends on: the flag was accepted,
+  // ignored, and the sweep still exited 1 on findings.
+  it('a boolean flag does not swallow the argument after it', () => {
+    const opts = parseArgs(['--json', '--exit-zero', '--threshold-hours', '3'])
+    expect(opts.json).toBe(true)
+    expect(opts.exitZero).toBe(true)
+    expect(opts.thresholdHours).toBe(3)
+  })
+
+  it('accepts both --flag value and --flag=value', () => {
+    expect(parseArgs(['--max-actions', '5']).maxActions).toBe(5)
+    expect(parseArgs(['--max-actions=5']).maxActions).toBe(5)
+    expect(parseArgs(['--status=in_progress,in_review']).statuses).toEqual([
+      'in_progress',
+      'in_review',
+    ])
+    expect(parseArgs(['--exclude', 'PER-155, PER-2']).exclude).toEqual(['PER-155', 'PER-2'])
+  })
+
+  it('rejects malformed input rather than sweeping on a wrong threshold', () => {
+    expect(() => parseArgs(['--threshold-hours', 'soon'])).toThrow('non-negative')
+    expect(() => parseArgs(['--threshold-hours', '-1'])).toThrow('non-negative')
+    expect(() => parseArgs(['--max-actions'])).toThrow('requires a value')
+    expect(() => parseArgs(['--json=true'])).toThrow('does not take a value')
+    expect(() => parseArgs(['--wake'])).toThrow('unknown argument')
+    expect(() => parseArgs(['--status', ''])).toThrow('at least one status')
   })
 })
