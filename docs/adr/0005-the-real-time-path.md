@@ -5,6 +5,15 @@
 - **Author:** CTO
 - **Milestone:** M1 (design only). Implementation is **M6**, which is a board gate.
 - **Issue:** [PER-21](/PER/issues/PER-21) (epic [PER-9](/PER/issues/PER-9))
+- **Amended:** 2026-09-30 (rev 2) — **citations only; no decision in this ADR changed.** The board
+  decided [ADR-0001](./0001-v1-stack.md) §4 the other way (approval
+  [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), rejected 2026-09-30) and
+  Colyseus is now the server framework. Two places here described `@colyseus/schema` as
+  _rejected by ADR-0001 §4.2_, which after that reversal is a wrong instruction to whoever reads
+  it next: the objection now lives in ADR-0001 §4.3 and the prohibition in its §4.2 condition 1.
+  Corrected in §3.2 and §4.4. **§1 and §2 need no change** — `RoomRunner` / `RoomDriver` is
+  precisely the seam that makes the hosting engine replaceable, and Colyseus sits underneath it
+  rather than in place of it.
 
 | §   | Decision                                    | Status                                                  |
 | --- | ------------------------------------------- | ------------------------------------------------------- |
@@ -330,10 +339,16 @@ most of it: when two seats return the same key the platform encodes once and sen
 bytes to both, so "all four hunters see the same world" collapses 12 encodes to ~2.
 
 The direction of the default is the whole design. **Sharing is opt-in; hiding is the default.**
-This is the exact inversion of the `@filter()`-decorator model ADR-0001 §4.2 rejected Colyseus
-for: there, a new field is visible unless someone remembers to hide it. Here, a new field is
+This is the exact inversion of the `@filter()`-decorator model ADR-0001 §4.3 objects to: there,
+a new field is visible unless someone remembers to hide it. Here, a new field is
 per-seat unless the game deliberately declares two seats identical. A game that forgets to set a
 `viewKey` pays CPU. A game that forgets a `@filter()` leaks the location of a hidden player.
+
+> **Rev 2.** Since ADR-0001 rev 4 adopted Colyseus, that `@filter()` model is now **in the tree**
+> rather than rejected, which makes this subsection binding rather than comparative. ADR-0001 §4.2
+> condition 1 forbids Colyseus state sync from being the redaction path; `getSnapshotFor` plus
+> `viewKey` is the path it must use instead. Reaching for `this.state` because the framework is
+> already there requires a new ADR.
 
 **The game declares a field schema; the platform writes the bytes.** `snapshotCodec` is a
 declarative description of entity archetypes and their fields — type, range, quantisation — not
@@ -508,13 +523,13 @@ touching this format.
 **Codec choice: a hand-rolled `DataView` encoder generated from the game's `snapshotCodec`
 schema**, writing into a preallocated reused `ArrayBuffer`.
 
-| Alternative            | Why it lost                                                                                                                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| msgpackr               | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule.                                                                 |
-| Protobuf               | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand.                                                              |
-| FlatBuffers            | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick.                 |
-| `@colyseus/schema`     | Solves binary + delta well, and is rejected by ADR-0001 §4.2 for the same reason here: it puts a framework type hierarchy inside game state. A game would depend on the platform's netcode library.          |
-| Bit-packing everything | Squeezing the 10 B entity to ~6 B is possible. Rejected on **budget before optimisation**: we are at 21% of the ceiling. Spending CPU in the tick loop to save bytes we are not short of is the wrong trade. |
+| Alternative            | Why it lost                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| msgpackr               | Self-describing — field names on the wire — and allocates per encode. Loses on both bytes (~3–5× ours) and on the §1.3 zero-allocation rule.                                                                                                                                                                               |
+| Protobuf               | Field tags cost bytes, no delta support, and a runtime we would carry into the client bundle for a format we would still have to delta by hand.                                                                                                                                                                            |
+| FlatBuffers            | Zero-copy reads are genuinely good, but there is no delta story and the generated surface is large. Wins only if we needed random access into a big payload; we read every field every tick.                                                                                                                               |
+| `@colyseus/schema`     | Loses here for the reason ADR-0001 §4.3 gives: it solves binary + delta well, but puts a framework type hierarchy inside game state, so a game would depend on the platform's netcode library. **Still excluded after ADR-0001 rev 4** — adopting Colyseus makes this package _present_, not permitted (§4.2 condition 1). |
+| Bit-packing everything | Squeezing the 10 B entity to ~6 B is possible. Rejected on **budget before optimisation**: we are at 21% of the ceiling. Spending CPU in the tick loop to save bytes we are not short of is the wrong trade.                                                                                                               |
 
 ### 4.5 Clock sync
 
