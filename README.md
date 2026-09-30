@@ -35,6 +35,10 @@ pnpm dev     # start both apps
 `cp .env.example .env` if you need to change ports or point at a different
 Redis/Postgres. Defaults match `docker-compose.yml`, so the copy is optional.
 
+Every variable each service reads, and where the deployed value comes from, is in
+[`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md) — along with the log format, the
+correlation-id contract and the telemetry event budget. No secret is ever committed.
+
 ## Checks
 
 ```bash
@@ -81,6 +85,7 @@ tools/
   boundaries/       The dependency-boundary gate and its negative-case suite.
   boundary-fixtures/ Deliberate violations, one per rule. `.fixture`, never `.ts`.
 docs/adr/           Architecture decision records.
+docs/ENVIRONMENTS.md  Env vars per service, log format, telemetry budget.
 ```
 
 ## Rules that the build enforces

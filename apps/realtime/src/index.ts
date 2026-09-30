@@ -1,32 +1,71 @@
-import { createServer, type ServerResponse } from 'node:http'
-import { BRAND, healthHttpStatus, type HealthPayload } from '@playhall/shared'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import {
+  BRAND,
+  CORRELATION_ID_HEADER,
+  healthHttpStatus,
+  resolveCorrelationId,
+  withScope,
+  type CorrelationId,
+  type HealthPayload,
+} from '@playhall/shared'
 import { PLATFORM_CORE_VERSION, platformBuildInfo } from '@playhall/platform-core'
 import { loadEnv } from './env'
+import { createTelemetry } from './telemetry'
+import { pathOf } from './http'
 import { liveness, readiness, type HealthContext } from './health'
 
 const env = loadEnv()
+const { logger, release, errors } = createTelemetry(env)
 
 const healthContext: HealthContext = {
-  service: '@playhall/realtime',
+  service: release.service,
   version: PLATFORM_CORE_VERSION,
   startedAtMs: Date.now(),
   now: () => Date.now(),
 }
 
 /**
+ * Take the correlation id off the wire, or mint one. `minted: true` on a hop
+ * that should have received an id from `apps/web` means propagation broke
+ * upstream, so it is logged rather than hidden.
+ */
+function correlationFor(req: IncomingMessage): { correlationId: CorrelationId; minted: boolean } {
+  return resolveCorrelationId(req.headers[CORRELATION_ID_HEADER])
+}
+
+/**
  * M0 skeleton: HTTP only, so `pnpm dev` has something that actually boots and
  * the deploy pipeline has something to probe. The wire protocol (`room:*`,
- * `game:action`, `game:view`, `timer:sync`, …) and the room runner land in M1.
+ * `game:action`, `game:view`, `timer:sync`, …) and the room runner land in M1 —
+ * at which point `withScope` also binds `roomId`, and one room's whole life
+ * becomes greppable.
  *
  * Two health routes, not one — see `./health` for why liveness and readiness
  * must not be the same endpoint.
  */
 const server = createServer((req, res) => {
-  const path = (req.url ?? '/').split('?')[0]
+  const { correlationId, minted } = correlationFor(req)
+  const log = withScope(logger, { correlationId })
+
+  // Route on the path, never on the raw url. `/health?x=1` is the same route as
+  // `/health`, and an exact-match comparison silently 404s the moment anything
+  // appends a query string — a share link, an analytics tag, a cache buster.
+  const path = pathOf(req.url)
+
+  // Echo it back so a browser, a load test or a curl can follow one chain.
+  res.setHeader(CORRELATION_ID_HEADER, correlationId)
+
+  if (minted) {
+    log.debug('minted a correlation id for an inbound request', {
+      event: 'telemetry.correlation_minted',
+      path,
+    })
+  }
 
   // Liveness. Synchronous and dependency-free on purpose: an orchestrator
   // restarts the process when this fails.
   if (path === '/health') {
+    log.debug('health probe', { event: 'http.health' })
     sendHealth(res, liveness(healthContext))
     return
   }
@@ -34,19 +73,34 @@ const server = createServer((req, res) => {
   // Readiness. Returns 503 when a required dependency is down, which removes
   // this instance from rotation without killing it.
   if (path === '/ready') {
+    log.debug('readiness probe', { event: 'http.ready' })
     readiness(healthContext).then(
       (payload) => sendHealth(res, payload),
       // `readiness` is written not to reject, so reaching here is a bug in a
       // check. Report it as not-ready rather than as a 500, which a load
       // balancer would treat identically but an operator would not.
-      (error: unknown) =>
+      (error: unknown) => {
+        const err = error instanceof Error ? error : new Error('readiness failed')
+        log.error('readiness check threw', { event: 'http.ready_failed', err })
+        errors.captureException(err, { correlationId, route: '/ready' })
         sendJson(res, 503, {
           ok: false,
           status: 'unhealthy',
           service: healthContext.service,
-          error: error instanceof Error ? error.message : 'readiness failed',
-        }),
+          error: err.message,
+        })
+      },
     )
+    return
+  }
+
+  // Exists only to prove the source-map pipeline resolves a stack trace on a
+  // staging build. Off unless ENABLE_DEBUG_THROW_ROUTE=true.
+  if (path === '/debug/throw' && env.ENABLE_DEBUG_THROW_ROUTE) {
+    const error = new Error(`Deliberate ${release.environment} error from ${release.release}`)
+    log.error('deliberate error route hit', { event: 'debug.throw', err: error })
+    errors.captureException(error, { correlationId, route: '/debug/throw' })
+    sendJson(res, 500, { error: { code: 'deliberate_error', correlationId } })
     return
   }
 
@@ -54,12 +108,20 @@ const server = createServer((req, res) => {
 })
 
 server.listen(env.REALTIME_PORT, () => {
-  console.log(`[realtime] listening on http://localhost:${env.REALTIME_PORT} (${env.NODE_ENV})`)
+  logger.info('realtime service listening', {
+    event: 'server.started',
+    port: env.REALTIME_PORT,
+    nodeEnv: env.NODE_ENV,
+    debugThrowRoute: env.ENABLE_DEBUG_THROW_ROUTE,
+  })
 })
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    server.close(() => process.exit(0))
+    logger.info('shutting down', { event: 'server.stopping', signal })
+    server.close(() => {
+      void errors.flush(2_000).then(() => process.exit(0))
+    })
   })
 }
 
@@ -72,6 +134,16 @@ function sendHealth(res: ServerResponse, payload: HealthPayload): void {
     brand: BRAND.name,
     brandIsProvisional: BRAND.isProvisional,
     versions: platformBuildInfo(),
+    // Telemetry identity, so one probe answers "which build is this, really".
+    //
+    // `startedAt` deliberately is NOT set here. `payload` already carries it,
+    // derived from the single `startedAtMs` in `healthContext`, and so is
+    // `uptimeSeconds`. Overriding it from a second, independently-captured
+    // ambient clock read gives one response two sources of truth for the same
+    // instant and lets `startedAt` and `uptimeSeconds` disagree about the boot
+    // time. `health.ts` takes the clock by injection for exactly this reason.
+    release: release.release,
+    environment: release.environment,
   })
 }
 
