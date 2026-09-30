@@ -206,8 +206,11 @@ jobs:
     permissions:
       contents: read
       # Needed only to post the gate table on the PR (ADR-0004 Decision 2).
-      # `workflow_call` inherits the caller's permissions, so `main.yml` and
-      # `release.yml` must not narrow `pull-requests` below `write`.
+      # A called workflow cannot exceed its caller's grant, so `main.yml` and
+      # `release.yml` must each grant `pull-requests: write` on the job that
+      # calls this one. Both originally granted `contents: read` alone, and the
+      # result was a run that failed at startup with zero jobs — no failed step
+      # and no annotation to read. If you add another caller, grant it there too.
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

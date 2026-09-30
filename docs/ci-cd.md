@@ -27,6 +27,13 @@ of this pipeline is live and the deploy half is inert by design, not by omission
 reusable workflow, so adding one would run the whole suite twice and double the Actions
 minutes for no extra signal.
 
+**If you add a third caller, grant it `pull-requests: write` on the calling job.** A called
+workflow cannot exceed its caller's grant, and `ci-gate` requests that scope to post its gate
+table. Get it wrong and the run does not fail a job — it fails at **startup, with zero jobs,
+no annotation and no step to open**, which reads exactly like an account-level Actions outage.
+That is how it presented the first time `main.yml` ran for real, and it is why both callers now
+carry the grant explicitly even though the step that uses it only fires on a `pull_request`.
+
 Both `main.yml` and `release.yml` re-run the gates rather than trusting "CI was green on
 the PR". Two PRs can each be green alone and red together, and with no branch protection
 nothing forces a rebase before merge. A tag can also point at any commit, including one
