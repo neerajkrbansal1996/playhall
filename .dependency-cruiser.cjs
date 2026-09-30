@@ -160,6 +160,24 @@ const ZOD_MODULES = '^zod($|/)|(^|/)node_modules/zod/'
 const SDK_PURE_SETTINGS = '^packages/game-sdk/src/settings-form\\.ts$'
 const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
 
+/**
+ * The one file in `packages/platform-core/src/` still allowed to reach a Node builtin.
+ *
+ * Owned by PER-164, the ADR that decides whether `platform-core` stays edge-importable.
+ * `guest-token.ts` signs with `node:crypto`'s `createHmac`/`timingSafeEqual`; the WebCrypto
+ * equivalent is `crypto.subtle.sign`, which is async, so swapping it turns `signGuestToken` /
+ * `verifyGuestToken` async and ripples through `GuestIdentityService.issue()`/`authenticate()`.
+ * That is a contract change, so it is a decision rather than a cleanup, and it does not get made
+ * inside a lint rule.
+ *
+ * The exception is a single `$`-anchored path on purpose. One visible, countable exception is
+ * what turns "we might have an edge-portability problem" into "we have exactly one, it is here,
+ * and this issue owns removing it". Adding a second entry is not a mechanical fix — it means the
+ * invariant in `runtime.ts` no longer holds and the ADR needs to say so.
+ */
+const PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS =
+  '^packages/platform-core/src/identity/guest-token\\.ts$'
+
 module.exports = {
   forbidden: [
     {
@@ -280,6 +298,28 @@ module.exports = {
         'genuinely need a capability, it belongs behind an SDK-provided ctx facility, decided ' +
         'by ADR.',
       from: { path: '^games/' },
+      to: { dependencyTypes: ['core'] },
+    },
+    {
+      name: 'no-platform-core-node-builtins',
+      severity: 'error',
+      comment:
+        'packages/platform-core has to stay importable from an edge runtime — that is the ' +
+        'invariant runtime.ts states twice, and the reason webCryptoRandomSource() exists ' +
+        'instead of node:crypto. A node: import at module top level breaks it for the whole ' +
+        'package, because src/index.ts re-exports every subtree, so one file decides whether ' +
+        'the single entrypoint loads on an edge worker at all. Nothing else would go red: the ' +
+        'unit tests run on Node, typecheck is clean, and the break only shows up at deploy ' +
+        'time on a runtime CI does not exercise. That gap is why this is a rule and not a ' +
+        'comment. The fix is to take the capability as a port instead of importing it: the ' +
+        'RandomSource / Clock / IdSource interfaces in runtime.ts exist for exactly this, and ' +
+        'webCryptoRandomSource() is the default. If the capability has no WebCrypto equivalent ' +
+        'with the same signature (async vs sync counts as "no equivalent"), that is a contract ' +
+        'change: bring an ADR (PER-164) rather than adding yourself to the exception below.',
+      from: {
+        path: '^packages/platform-core/src/',
+        pathNot: PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS,
+      },
       to: { dependencyTypes: ['core'] },
     },
     {

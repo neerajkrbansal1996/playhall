@@ -1,0 +1,23 @@
+# expect: no-platform-core-node-builtins
+# why: platform-core reaching a Node builtin, which makes the package's single entrypoint unloadable on an edge runtime while every test, typecheck and lint stays green
+=== file: packages/platform-core/src/rooms.ts ===
+// The realistic shape of this violation: someone needs entropy for a room code, reaches for the
+// builtin they know, and nothing stops them. `runtime.ts` states the invariant in prose twice —
+// "nothing in platform-core reads the wall clock or the system CSPRNG directly" — and prose does
+// not fail a build.
+//
+// Nothing else in the suite would go red. The unit tests run on Node, so they pass. `tsc` is
+// happy, @types/node is a real dependency. ESLint has no rule for it. The break surfaces only
+// when apps/web imports the package's index on an edge runtime, which is a deploy-time failure
+// on a target CI does not exercise.
+import { randomBytes } from 'node:crypto'
+
+export const roomCodeSeed = (): Uint8Array => randomBytes(16)
+=== file: packages/platform-core/src/index.ts ===
+// The reason one file's import decides the whole package: the entrypoint re-exports every
+// subtree, so `import { brandKey } from '@scope/platform-core'` statically pulls in `rooms.ts`
+// and its builtin edge along with it.
+import { BRAND_KEY } from '@scope/shared'
+
+export const brandKey = BRAND_KEY
+export * from './rooms.js'
