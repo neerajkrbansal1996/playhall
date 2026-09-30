@@ -1,0 +1,23 @@
+# expect: no-platform-framework-in-games
+# why: the import half of ADR-0001 §4.2 condition 2 — a game reaching the platform's netcode framework, in both server-side spellings the denylist names, with the framework installed and resolving
+=== file: games/fx-a/src/index.ts ===
+// The shape ADR-0001 §4.2 named as the sharpest risk of adopting Colyseus, and §4.5 closes:
+// game state as a framework Schema. Colyseus then diffs and broadcasts it by default, so a
+// field is visible unless someone remembers to filter it — the inversion we do not accept.
+// Game state is plain TypeScript. Only apps/realtime's one adapter file names Colyseus.
+import { Schema, type } from '@colyseus/schema'
+
+export class BoardState extends Schema {
+  @type('string') declare fen: string
+  @type('string') declare hiddenDeck: string
+}
+=== file: games/fx-a/src/room.ts ===
+// The other spelling, and the one PER-75 names literally: the framework's own package rather
+// than a scoped sub-package. A game that writes against Colyseus' Room is written against the
+// platform's netcode choice, which is exactly what condition 2 forbids. Both spellings need
+// covering here, because a denylist that names two packages but is proven on one is proven on
+// one. The third published name, the `colyseus.js` browser client, has its own fixture — it is a
+// separate violation *path* (ADR-0002 §5), not just a separate name.
+import { Room } from 'colyseus'
+
+export class GameRoom extends Room {}

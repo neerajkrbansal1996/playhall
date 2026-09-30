@@ -172,7 +172,7 @@ export function createMiniRepo(repoRoot: string): string {
   )
   write(root, 'node_modules/zod/index.js', 'module.exports = { z: {} }\n')
 
-  // Colyseus, installed. `no-game-to-colyseus` has to fire on both the resolved path
+  // Colyseus, installed. `no-platform-framework-in-games` has to fire on both the resolved path
   // (`node_modules/colyseus/...`, what CI sees once apps/realtime depends on it) and the bare
   // specifier (what a game author produces by writing the import before installing). Only one
   // of those two is a path a stub can produce, so the stub covers the resolved half and the

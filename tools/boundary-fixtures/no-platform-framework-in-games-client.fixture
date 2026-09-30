@@ -1,4 +1,4 @@
-# expect: no-game-to-colyseus
+# expect: no-platform-framework-in-games
 # why: the browser client is published as `colyseus.js`, a name that neither `^colyseus$` nor `@colyseus/*` matches — the likeliest violation in a game's client-side code, and the one a pattern written from the server package names lets through
 === file: games/fx-a/src/index.ts ===
 // Installed and resolving, so this is not the "written before pnpm install" case — the rule
