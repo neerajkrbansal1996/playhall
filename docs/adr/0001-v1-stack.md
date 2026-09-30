@@ -38,6 +38,24 @@
   lintable, and what is a test — and marks each layer `landed` or names the issue it lands with.
   Condition 1 was the only condition whose enforcement this ADR described as discretionary; after
   this revision none are. Found on [PER-72](/PER/issues/PER-72).
+- **Amended:** 2026-09-30 (rev 7) — **§4.4.1 only; no decision changes.** Rev 6 gave layer 3 an
+  enforcement recipe that does not work. It specified `no-restricted-properties` "the same family
+  as the `Date.now` / `Math.random` determinism bans", and that family's `{ object, property }`
+  form catches **1 of the 4** egress shapes a Colyseus room uses (measured, eslint 9.39.5) —
+  notably not `this.broadcast`, the call rev 6 named by name. The property-only form catches
+  **4 of 4**. Rev 6 also pointed the rule at a config block whose `files:` array excludes
+  `apps/realtime` entirely, where it would have matched **0 of 4** and passed for free. §4.4.1 now
+  carries the working recipe with both measurements. Separately, rev 6's summary sentence listed
+  "layers 1, 2 and 6" as merge-blocking, dropping layer 3 even though its own table assigned
+  layer 3 to [PER-15](/PER/issues/PER-15); it now reads 1, 2, 3 and 6, and the paragraph states
+  which layers `c50da31` does and does not discharge. Docs-only: layer 3's implementation remains
+  PER-15's deliverable and `eslint.config.mjs` is untouched. **Layer 2** was corrected in the same
+  revision: rev 6 located its brand on `getViewFor` / `getSnapshotFor` **output**, which is a game
+  module's declared return type and so cannot carry a platform type without breaching condition 2.
+  The brand moves one hop up, to the platform-side wrapper that calls those functions;
+  `packages/game-sdk` is unchanged and no SDK contract change is implied. Row 2 also now states
+  what layer 2 does **not** prove, so it cannot be cited as discharging layer 5 or 6. Found while
+  ruling on [PER-153](/PER/issues/PER-153); corrected on [PER-158](/PER/issues/PER-158).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -259,21 +277,92 @@ two postures are incompatible, **so we do not use Colyseus state sync at all.** 
 filter" is not a plan; the design below is arranged so that the first four layers cannot be
 forgotten, only deliberately removed.
 
-| #   | Layer                                                                                                                                                                                                                                                                                                         | Kind       | Status                                                                            |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
-| 1   | **The room never assigns `this.state`.** A Colyseus room with no state runs no patch loop, so there is no unfiltered thing to forget to filter.                                                                                                                                                               | Structural | [PER-15](/PER/issues/PER-15)                                                      |
-| 2   | **One egress funnel, enforced by the type system.** `client.send` / `client.raw` / `broadcast` are reachable only from a single `colyseusEgress()` module, which accepts a branded `RedactedView<T>` that only `getViewFor` / `getSnapshotFor` output can produce. Passing raw game state does not typecheck. | Type-level | [PER-15](/PER/issues/PER-15)                                                      |
-| 3   | **`broadcast` banned outside that module** by `no-restricted-properties`, the same family as the `Date.now` / `Math.random` determinism bans in `eslint.config.mjs`.                                                                                                                                          | Lint       | [PER-15](/PER/issues/PER-15) — no source to lint until `apps/realtime` has a room |
-| 4   | **`@colyseus/schema` unreachable from a game**, so a game cannot express its state as framework state in the first place.                                                                                                                                                                                     | CI gate    | **Landed** — `no-game-to-colyseus`, `c50da31`                                     |
-| 5   | **Testkit hidden-information leak tests** — proves `getViewFor` returns the right bytes.                                                                                                                                                                                                                      | Test       | [PER-17](/PER/issues/PER-17)                                                      |
-| 6   | **Egress capture test** — asserts the server sent _nothing else_. Layer 5 proves the redactor is correct; only this proves no other code path writes to a socket.                                                                                                                                             | Test       | [PER-15](/PER/issues/PER-15) — **required deliverable, not optional**             |
+| #   | Layer                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Kind       | Status                                                                            |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| 1   | **The room never assigns `this.state`.** A Colyseus room with no state runs no patch loop, so there is no unfiltered thing to forget to filter.                                                                                                                                                                                                                                                                                                             | Structural | [PER-15](/PER/issues/PER-15)                                                      |
+| 2   | **One egress funnel, enforced by the type system.** `client.send` / `client.raw` / `broadcast` are reachable only from a single `colyseusEgress()` module, which accepts a branded `RedactedView<T>` **produced only by the platform's redaction call site** — the wrapper that invokes the game's `getViewFor` / `getSnapshotFor`, not those functions' declared return type. Passing raw game state does not typecheck. Scope and limits below the table. | Type-level | [PER-15](/PER/issues/PER-15)                                                      |
+| 3   | **`broadcast` / `send` / `raw` banned outside that module** by `no-restricted-properties` in the **property-only** form (`{ property: 'broadcast' }`, no `object`), in a **new config block scoped to the room source** with the `colyseusEgress()` module excluded via `ignores`, plus a negative fixture. Recipe and measurement below the table.                                                                                                         | Lint       | [PER-15](/PER/issues/PER-15) — no source to lint until `apps/realtime` has a room |
+| 4   | **`@colyseus/schema` unreachable from a game**, so a game cannot express its state as framework state in the first place.                                                                                                                                                                                                                                                                                                                                   | CI gate    | **Landed** — `no-game-to-colyseus`, `c50da31`                                     |
+| 5   | **Testkit hidden-information leak tests** — proves `getViewFor` returns the right bytes.                                                                                                                                                                                                                                                                                                                                                                    | Test       | [PER-17](/PER/issues/PER-17)                                                      |
+| 6   | **Egress capture test** — asserts the server sent _nothing else_. Layer 5 proves the redactor is correct; only this proves no other code path writes to a socket.                                                                                                                                                                                                                                                                                           | Test       | [PER-15](/PER/issues/PER-15) — **required deliverable, not optional**             |
 
-**Where this is weakest, stated plainly.** Layers 1–4 are mechanical, but only layer 4 exists
-today: Colyseus appears in no source file in the repo, so layers 1, 2, 3 and 6 all land with
-[PER-15](/PER/issues/PER-15) and are acceptance criteria on it. Until then condition 1 rests on
+**Layer 2's brand, and where it lives (rev 7).** Rev 6 described the brand as one that "only
+`getViewFor` / `getSnapshotFor` output can produce". Read literally that puts a platform type on a
+game module's **declared return type**, which is not buildable under condition 2. Measured at
+`eef6975`: `packages/game-sdk/src/turn-based.ts:119` declares
+`getViewFor(state: TState, viewer: Viewer): TView` — the game's own plain view type, no platform
+type in it; every implementation in the repo is game-authored (`games/chess/src/view.ts:76`); and
+`packages/platform-core/src` contains **no call site at all**. So the literal reading is satisfied
+only by editing `games/**` to carry a platform brand, which is the coupling §4.2 condition 2
+forbids and which the `no-game-to-colyseus` gate exists to prevent. It would also reach a second
+consumer: `packages/game-testkit/src/checks/redaction.ts:77` binds `server.getViewFor(state, viewer)`
+to a plain `TView`, and layer 5's leak fuzzer must keep seeing unbranded views.
+
+The brand therefore sits **one hop up**, on the platform side of that call: a non-exported
+`unique symbol` in `packages/platform-core`, applied by the wrapper that invokes the game's
+`getViewFor` / `getSnapshotFor` and returns `RedactedView<TView>`. Games keep returning plain
+`TView`. `packages/game-sdk` is untouched, so layer 2 requires **no SDK contract change and no SDK
+ADR** — which is also why this is a wording correction here rather than a new decision.
+
+_What layer 2 does and does not prove._ It certifies that a value **passed through the redaction
+call site**. It does not certify that the value was actually redacted — a wrapper that returned
+state unchanged would brand it identically; proving the redactor correct is layer 5's job. And
+because `RedactedView<T>` is assignable to `T`, an explicit `as RedactedView<T>` assertion can
+forge the brand. Layer 2 closes the accidental path — passing `TState`, or a hand-rolled literal,
+to `colyseusEgress()` fails to typecheck. The deliberate path is closed by layers 3 and 6. **No PR
+may cite layer 2 as discharging layer 5 or layer 6, in either direction.**
+
+**Layer 3's recipe, measured (rev 7).** Rev 6 specified layer 3 as `no-restricted-properties`,
+"the same family as the `Date.now` / `Math.random` determinism bans". Both halves of that sentence
+were wrong — the form and the scope — and both were measured with eslint 9.39.5 against a fixture
+holding the four egress shapes a real Colyseus room uses.
+
+_The form._ The determinism bans use the `{ object, property }` form. **That form cannot express
+this ban.**
+
+| Fixture line                              | `{ object, property }` form | property-only form |
+| ----------------------------------------- | --------------------------- | ------------------ |
+| `this.broadcast('state', view)`           | **missed**                  | caught             |
+| `client.send('state', view)`              | caught                      | caught             |
+| `for (const c of this.clients) c.send(…)` | **missed**                  | caught             |
+| `this.clients[0].raw(bytes)`              | **missed**                  | caught             |
+|                                           | **1 of 4**                  | **4 of 4**         |
+
+`{ object: 'this', property: 'broadcast' }` does not match a `ThisExpression`, so the
+object+property form misses `this.broadcast` — the canonical Colyseus egress call, and the one
+this section names by name. It also misses any renamed binding and any index expression. The
+property-only form — `{ property: 'broadcast' }`, `send`, `raw`, with no `object` — catches all
+four.
+
+_The scope._ `send` and `raw` are generic names, so the property-only form must **not** go
+repo-wide; it belongs in a block narrowly scoped by `files:` to the room source, with the
+`colyseusEgress()` module itself in that block's `ignores`. It also cannot simply be appended to
+the determinism block: that block is
+`files: ['packages/**/src/**/*.{ts,tsx}', 'games/**/src/**/*.{ts,tsx}']` and its own comment says
+apps are exempt. On `main` (`eef6975`) **no `files:`-scoped `rules` block targets `apps/realtime`
+at all** — the single config entry naming `apps/realtime/**/*.ts` sets `languageOptions.globals`
+and carries no `rules` key, so there is no existing scoped block to extend. (Unscoped entries —
+`js.configs.recommended`, `tseslint.configs.recommended`, and the repo-wide `no-unused-vars` /
+`consistent-type-imports` block — do reach room files; what is missing is any _scoped_ block, and
+the determinism block in particular excludes them.) Measured against the
+same fixture placed at `apps/realtime/src/room.ts`: the ban inside the determinism block's
+`files:` catches **0 of 4** and lint passes; the same ban in a block scoped
+`files: ['apps/realtime/src/**/*.ts']` catches **4 of 4**. A layer-3 ban added "to the same
+family" would be green for free.
+
+That is why the negative fixture is part of layer 3's deliverable on
+[PER-15](/PER/issues/PER-15) and not a nicety: without one, a rule that catches 0 of 4 is
+indistinguishable from a clean tree. The rule itself lands with PER-15, not with this revision.
+
+**Where this is weakest, stated plainly.** Layers 1, 2 and 3 are mechanical, but none of them
+exists today: Colyseus appears in no source file in the repo, so there is nothing for them to
+attach to. Only **layer 4 is landed** (`no-game-to-colyseus`, `c50da31`). **Layer 5 lands with
+[PER-17](/PER/issues/PER-17)**; layers 1, 2, 3 and 6 all land with
+[PER-15](/PER/issues/PER-15) and are acceptance criteria on it. `c50da31` is layer 4 and layer 4
+only — no PER-15 deliverable may be ticked off against it. Until then condition 1 rests on
 layer 4 plus review — which is the position rev 4 described, and it is acceptable only because
 there is no room code to leak from yet. **The moment `apps/realtime` gains a room class, layers
-1, 2 and 6 are merge-blocking.** Layer 6 is the one that catches a leak through a path nobody
+1, 2, 3 and 6 are merge-blocking.** Layer 6 is the one that catches a leak through a path nobody
 thought to guard, and it is the layer most likely to be dropped for schedule; it is named here so
 that dropping it is a visible decision rather than an omission.
 

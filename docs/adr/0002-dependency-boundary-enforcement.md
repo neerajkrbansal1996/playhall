@@ -42,6 +42,18 @@
   kept** rather than renaming the code to match the ADR. The rule, its severity, its scope and its
   fixtures are unchanged — only this document was wrong. Found on
   [PER-72](/PER/issues/PER-72).
+- **Amended:** 2026-09-30 (rev 2.3) — **one clarification, no rule-set change.** §2.6 answers a
+  question the rule set never covered: whether a game's PR may edit `pnpm-lock.yaml`. It may, if
+  and only if the diff stays inside that game's own `importers:` stanza, and the manifest change
+  and the stanza must land in the same PR. This is a clarification rather than a rule-set change
+  because `no-illegal-declared-dep` already decides which dependencies are legal; §2.6 only says
+  where the bookkeeping for that decision is allowed to live. It also records why
+  `tsconfig.json` is **not** exempt on the same reasoning, and states the general test for the
+  next generated file that raises this question. **Triggered on**
+  [PER-24](/PER/issues/PER-24), where Game Engineer (Chess) stopped and asked rather than guess:
+  declaring `@playhall/game-sdk` mechanically forces a root lockfile change, which reads as a
+  violation of "a game must never need a change outside its own folder". Ruled there, then written
+  up here on [PER-67](/PER/issues/PER-67) so the next game does not have to ask again.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -417,6 +429,55 @@ because "review will catch it" is not a mechanism.
 - The test-path carve-out starts being used to reach a _second_ package → that is the tunnel this
   section was written to prevent. Escalate to me, not to the config.
 
+#### 2.6 Generated workspace metadata: when a game PR may touch `pnpm-lock.yaml` (rev 2.3 — clarification)
+
+Rule `no-illegal-declared-dep` (§2) says which dependencies a game may _declare_. It says nothing
+about the file that _records_ that declaration for the workspace, so the question "may a game PR
+edit `pnpm-lock.yaml`?" has been answered by reviewer taste. It is answered here instead.
+
+The question is not hypothetical: on [PER-24](/PER/issues/PER-24) the Game Engineer (Chess) hit it
+and correctly stopped to ask, because declaring `@playhall/game-sdk` mechanically forces a root
+lockfile change and this ADR gave no reading under which that was allowed. That round trip is the
+cost of leaving it to taste, and it is paid once per game until the rule is written down.
+
+**The rule.** A game package's PR may modify `pnpm-lock.yaml` **if and only if** the diff is confined
+to that game's own `importers:` stanza.
+
+The lockfile is a derived index of the workspace graph, not platform source. The stanza grants the
+game nothing its `package.json` did not already grant: if the declared dependency is legal under
+`no-illegal-declared-dep`, the lockfile entry is bookkeeping for a decision the gate has already
+approved. Blocking it would mean a game cannot add a legal dependency without a platform PR — which
+is the one rule this ADR exists to defend.
+
+**Splitting the two across PRs is forbidden.** A `main` where the manifest declares a dependency the
+lockfile cannot resolve is a `main` where `pnpm install --frozen-lockfile` is red for everyone,
+including the engineers who touched neither file. The manifest change and its lockfile stanza land
+together or not at all.
+
+**Mechanics.** Regenerate with `pnpm install --lockfile-only`, never a full install, and show
+`git diff -U0 pnpm-lock.yaml` in the PR description. Any _other_ importer moving, or any resolution
+bumping, is workspace drift: it does not ride in on a game PR, and the required reviewer sends it
+back.
+
+**No other root-level file is exempt.** In particular `tsconfig.json` — the solution file — is
+**not** on this list, and a game needs no entry in it. Measured on `9f0292b`:
+
+1. `tsconfig.base.json` declares no `paths`, and `moduleResolution` is `"Bundler"`. A game resolves
+   `@playhall/game-sdk` through the pnpm workspace symlink under `node_modules` — the same path Node
+   and the bundler take. TypeScript config is not part of that resolution.
+2. Root `tsconfig.json` lists six `packages/*` references and no game. That is deliberate: games are
+   plugins, not members of the platform build graph. A game adding itself there would make the
+   platform build depend on every game.
+3. `games/chess` is the standing proof of both. It declares `@playhall/game-sdk: workspace:*`, has
+   its own `importers:` stanza in `pnpm-lock.yaml`, appears nowhere in root `tsconfig.json`, and
+   builds. The reference entry buys nothing, so the file needs no change.
+
+**The generalisation**, for the next generated file that raises this question: a root file is exempt
+only when it is **mechanically derived** from something the game already owns and legally declared,
+**and** the game's slice of it is separable and reviewable in the diff. A file that requires a human
+to make a judgement about the platform is not derived, and is not exempt. `pnpm-lock.yaml` passes
+both tests; `tsconfig.json` fails the first.
+
 ### 3. The one allowlisted platform→game edge
 
 `no-platform-to-game` has exactly **one** exception, and it is narrow by construction:
@@ -593,6 +654,12 @@ supported or not.
   `no-testkit-to-platform`. The rule is what keeps the test-path carve-out from being a tunnel.
 - **A second package wants the §2.5 test-path carve-out** → that is the tunnel. Escalate to me
   for an SDK ADR; the carve-out is for the conformance contract, not for test convenience.
+- **A game PR's `pnpm-lock.yaml` diff touches an importer that is not its own** (rev 2.3, §2.6) →
+  that is workspace drift, not the game's bookkeeping. Send it back; it does not ride in on a game
+  PR.
+- **A second root-level generated file wants the §2.6 carve-out** → apply the two-part test in
+  §2.6 (mechanically derived _and_ separably reviewable) before widening anything. If the file
+  needs a human judgement about the platform, the answer is no.
 - **A rule in §2 is proposed with a path-only target** (rev 2.2, §2.1) → reject it in review. It
   is green on the violation it exists to catch.
 - **A game has a genuine need for something in `no-game-to-colyseus`** → the answer is
