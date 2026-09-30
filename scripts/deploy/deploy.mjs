@@ -94,7 +94,8 @@ const PROVIDERS = {
       )
     }
 
-    const config = process.env.FLY_CONFIG ?? `apps/${target === 'web' ? 'web' : 'realtime'}/fly.toml`
+    const config =
+      process.env.FLY_CONFIG ?? `apps/${target === 'web' ? 'web' : 'realtime'}/fly.toml`
     if (!existsSync(config)) {
       throw new Error(
         `DEPLOY_PROVIDER=fly needs ${config}, which does not exist. The Fly app definition ` +
@@ -285,7 +286,9 @@ async function renderApi(path, method, body) {
   const text = await response.text()
   if (!response.ok) {
     // The path is safe to log; the token is in a header and never echoed.
-    throw new Error(`Render API ${method} ${path} -> HTTP ${response.status}: ${text.slice(0, 300)}`)
+    throw new Error(
+      `Render API ${method} ${path} -> HTTP ${response.status}: ${text.slice(0, 300)}`,
+    )
   }
 
   try {
