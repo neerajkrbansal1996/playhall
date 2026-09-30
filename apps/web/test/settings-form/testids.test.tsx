@@ -13,12 +13,16 @@
  * `fixtures.ts`.
  */
 
+import { visibleFields } from '@playhall/game-sdk/settings-form'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
 import { fieldTestAttributes } from '@/components/settings-form/field-shell'
+import { normalizeSettingsForm } from '@/components/settings-form/normalize'
+import type { SettingsValues } from '@/components/settings-form/types'
 
+import { defined } from './defined'
 import {
   chessDefaultSettingsFixture,
   chessSettingsFormFixture,
@@ -45,6 +49,37 @@ function renderedTestIds(): string[] {
     if (id === null) throw new Error('a settings field rendered without data-testid')
     return id
   })
+}
+
+/**
+ * Every `setting-*` testid in the document, in DOM order — found by the id
+ * itself, not by the field slot.
+ *
+ * `renderedTestIds` above starts from `[data-slot="settings-field"]`, which is
+ * only sound for asking *what did the fields that announced themselves emit*.
+ * It cannot answer *did every field announce itself*, because a field that
+ * emits neither attribute is absent from both sides of that comparison. The
+ * coverage test needs a query that a dropped field cannot hide from.
+ */
+function settingTestIdsInDocument(): string[] {
+  return [...document.querySelectorAll('[data-testid^="setting-"]')].map((el) =>
+    defined(el.getAttribute('data-testid'), 'a data-testid the selector just matched'),
+  )
+}
+
+/**
+ * The ids the *descriptor* says must be on screen, for the values the form is
+ * currently holding.
+ *
+ * This is the half that has to come from outside the DOM. `normalizeSettingsForm`
+ * drops the field kinds this renderer genuinely cannot draw (ADR-0004 §10) and
+ * `visibleFields` drops the ones a `visibleWhen` rule is hiding — between them
+ * that is the exact set the renderer is obliged to draw, computed from the same
+ * descriptor the renderer was handed and nothing else.
+ */
+function expectedTestIds(rawDescriptor: unknown, values: SettingsValues): string[] {
+  const { form } = normalizeSettingsForm(rawDescriptor)
+  return visibleFields(form, values).map((field) => `setting-${field.key}`)
 }
 
 describe('a two-field descriptor', () => {
@@ -79,18 +114,41 @@ describe('a two-field descriptor', () => {
 })
 
 describe('coverage — a field cannot ship untestable', () => {
-  it('gives every rendered field of the chess descriptor a testid', () => {
+  it('gives every field the chess descriptor asks for a testid', () => {
+    // The expectation comes from the descriptor and the assertion from the
+    // document. Reading both from `[data-slot="settings-field"]` would make the
+    // test agree with whatever the renderer did: a field that emits neither the
+    // slot nor the testid drops out of the expectation at the same moment it
+    // drops out of the DOM, and the comparison stays green. That is precisely
+    // the rev-2 regression — `takebacks` and `autoQueen` rendering with no id —
+    // so the two sides have to come from different places.
+    let values: SettingsValues | undefined
     render(
       <Harness
         settingsForm={chessSettingsFormFixture}
         defaultSettings={chessDefaultSettingsFixture}
+        onValues={(next) => {
+          values = next
+        }}
       />,
     )
 
-    const keys = Object.keys(renderedFields())
-    expect(keys.length).toBeGreaterThan(0)
-    // Derived, so this holds for a seventh field nobody has written yet.
-    expect(renderedTestIds()).toEqual(keys.map((key) => `setting-${key}`))
+    const expected = expectedTestIds(
+      chessSettingsFormFixture,
+      defined(values, 'the value map the harness rendered with'),
+    )
+    expect(expected.length).toBeGreaterThan(0)
+
+    // Missing: queried by the derived id, so it holds whatever route the field
+    // took to the DOM — `ToggleField` draws its own row rather than `FieldShell`'s.
+    const found = expected.filter((id) => document.querySelector(`[data-testid="${id}"]`) !== null)
+    expect(found).toEqual(expected)
+
+    // Extra, and in the wrong order: an id a spec did not expect is as much a
+    // contract break as a missing one, because `getByTestId` would then match
+    // two elements. Derived, so both halves hold for a seventh field nobody has
+    // written yet.
+    expect(settingTestIdsInDocument()).toEqual(expected)
   })
 
   it('covers the two toggles rev 2 of the contract lost', () => {
