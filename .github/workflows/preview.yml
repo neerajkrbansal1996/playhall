@@ -126,11 +126,13 @@ jobs:
                 ? 'Each deployed URL above passed a health probe (HTTP 2xx **and** `ok: true`) before this comment was written.'
                 : [
                     'Nothing was deployed, and **this is expected — not a failure.** No hosting',
-                    'provider is configured yet. The board has chosen Fly.io with $120/month of',
-                    'spend authority (PER-2, detail on PER-38); what is still missing is the',
-                    'provisioned apps and secrets, which are PER-7. The pipeline itself is in',
-                    'place — setting the `DEPLOY_PROVIDER` repo variable and its secrets activates',
-                    'previews with no code change. See `docs/ci-cd.md`.',
+                    'provider is configured, because the board has **held all provisioning** — no',
+                    'vendor account, no card on file, no paid tier, no trial, on any provider.',
+                    '**Activating previews needs a board decision lifting that hold**, not just a',
+                    'repo variable, so please do not set one. Context and what would lift it:',
+                    'ADR-0003 §13. M0 AC1 ("a preview deploy per PR") is recorded as **not met**',
+                    'by the board\'s own decision; this comment is the honest record of that gap,',
+                    'not a broken check. The pipeline needs no code change once the hold lifts.',
                   ].join('\n'),
             ].join('\n')
 

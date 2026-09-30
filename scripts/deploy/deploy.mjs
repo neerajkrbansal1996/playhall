@@ -2,19 +2,24 @@
 /**
  * One deploy entry point for every environment and every target.
  *
- * The board chose **Fly.io** for M0–M5 with $120/month of spend authority
- * (PER-2, detail on PER-38), and named **per-PR previews the top spend
- * priority**. `fly` is therefore the provider to set; the others are kept
- * because they are still the right answer for specific jobs — Cloudflare Pages
- * for free-egress static hosting, Render for a free staging service.
+ * **No provider is active, and activating one is a board decision, not a
+ * variable.** The board has held all provisioning — no vendor account, no card
+ * on file, no paid tier, no trial, on any provider. `none` is therefore the
+ * default and the only correct setting today. See ADR-0003 §13
+ * (`docs/adr/0003-hosting-and-cost-model.md`), which is the record of the hold;
+ * §12's buy-list is costed, ratified and **dormant**.
  *
- * The indirection is not hedging. A provider is one `DEPLOY_PROVIDER` variable,
- * so switching hosts is a settings change, and no workflow names a vendor. That
- * matters at M5, when the region decision is revisited.
+ * Deliberately no figures, envelopes or spend priorities in this file. Those
+ * live in ADR-0003 and change there; a number duplicated into a comment is a
+ * number that goes stale where nobody is looking.
+ *
+ * The provider indirection is not hedging. A provider is one `DEPLOY_PROVIDER`
+ * variable, so switching hosts is a settings change and no workflow names a
+ * vendor. That matters at M5, when the region decision is revisited.
  *
  * Nothing here provisions infrastructure. Apps, `fly.toml`, Redis and Postgres
  * belong to PER-7 — a deploy script that creates billable resources on demand
- * is how a $120/month cap becomes a $400 one.
+ * is how a hold gets breached by a script nobody read.
  *
  * Contract:
  *   in  — env DEPLOY_PROVIDER, DEPLOY_ENV (preview|staging|production),
@@ -44,29 +49,37 @@ const target = requireOneOf('DEPLOY_TARGET', ['web', 'realtime'])
 
 const PROVIDERS = {
   /**
-   * The default until the Fly apps and secrets exist. Keeps PRs and `main`
-   * green and states *why* in the run log, rather than leaving a mystery skip
-   * that everyone learns to scroll past.
+   * The default, and correct while the provisioning hold stands. Keeps PRs and
+   * `main` green and states *why* in the run log, rather than leaving a mystery
+   * skip that everyone learns to scroll past.
+   *
+   * The notice deliberately does **not** print the steps to turn a provider on.
+   * Under a hold, an activation runbook in every run log is an instruction to
+   * breach it, addressed to the person most likely to follow it.
    */
   none() {
     console.log(
       '::notice title=Deploy not configured::DEPLOY_PROVIDER is not set; skipping the ' +
         `${environment} deploy of "${target}". This is the expected state of the repo today, ` +
-        'not a broken build. Hosting is ADR-0003 (docs/adr/0003-hosting-and-cost-model.md): ' +
-        'the board chose Fly.io with $120/month of spend authority (PER-2, detail on PER-38), ' +
-        'and what is still missing is the provisioned apps and secrets, which are PER-7. ' +
-        'To activate: set DEPLOY_PROVIDER=fly ' +
-        'plus FLY_API_TOKEN and the FLY_APP_* names (see docs/ci-cd.md, Activating deploys). ' +
-        'No code change needed.',
+        'not a broken build. **The board has held all provisioning** — no vendor account, no ' +
+        'card on file, no paid tier, no trial, on any provider — so there is no host to deploy ' +
+        'to and no variable you should set to make one. Turning a provider on needs a board ' +
+        'decision lifting the hold first; it is not a settings change. Context and what would ' +
+        'lift it: ADR-0003 §13 (docs/adr/0003-hosting-and-cost-model.md). Once the hold is ' +
+        'lifted, PER-7 provisions and docs/ci-cd.md says what to set — no code change here.',
     )
     return { status: 'not_configured', url: '' }
   },
 
   /**
-   * Fly.io — **the board's choice** for M0–M5 ($120/month authorised on
-   * [PER-2], detail on PER-38). Region `bom` (Mumbai) as the interim placement;
-   * "which regions v1 serves" is deferred to M5 and moving a turn-based
-   * deployment is cheap.
+   * Fly.io — the provider the board settled on for M0–M5, and **not one that
+   * may be used yet**: the provisioning hold (ADR-0003 §13) means no Fly
+   * account exists. This adapter is here so that lifting the hold is a
+   * settings change rather than a code change. It is not a green light.
+   *
+   * Region comes from `fly.toml`, which PER-7 writes against ADR-0003 §5.5b —
+   * deliberately not named here, because Fly deletes regions and a region name
+   * copied into a comment is one more place for it to go stale.
    *
    * Handles both targets, which is the point: Fly runs persistent processes, so
    * `apps/realtime` can hold WebSocket connections and later a 30 Hz tick loop
@@ -75,7 +88,7 @@ const PROVIDERS = {
    * Two things this adapter does *not* do, deliberately:
    *   * it does not create apps or write `fly.toml` — provisioning is PER-7's
    *     staging/environment work, and a deploy script that silently creates
-   *     billable infrastructure is how a $120 cap becomes a $400 surprise;
+   *     billable infrastructure is how a hold becomes a bill;
    *   * it does not front static assets with a CDN. Static egress is ~1.7× the
    *     WebSocket egress (ADR-0003 §2.1) and must sit behind free-egress CDN.
    *     Also PER-7.
@@ -89,8 +102,8 @@ const PROVIDERS = {
       throw new Error(
         `DEPLOY_PROVIDER=fly needs ${appVar} (the Fly app name for "${target}" in the ` +
           `${environment} environment). Apps are provisioned on PER-7, not created here — a ` +
-          'deploy script that creates billable infrastructure on demand is how a $120/month ' +
-          'cap becomes a surprise.',
+          'deploy script that creates billable infrastructure on demand is how a provisioning ' +
+          'hold gets breached. Provisioning is currently held by the board (ADR-0003 §13).',
       )
     }
 
@@ -99,7 +112,7 @@ const PROVIDERS = {
     if (!existsSync(config)) {
       throw new Error(
         `DEPLOY_PROVIDER=fly needs ${config}, which does not exist. The Fly app definition ` +
-          '(including the `bom` primary region and the health check) is provisioned on PER-7.',
+          '(primary region per ADR-0003 §5.5b, plus the health check) is provisioned on PER-7.',
       )
     }
 
@@ -185,9 +198,10 @@ const PROVIDERS = {
     if (environment === 'preview') {
       throw new Error(
         'DEPLOY_PROVIDER=render cannot make a per-PR preview on the free tier: preview ' +
-          'environments are a paid Render feature. Since the board authorised $120/month on ' +
-          'Fly.io and named per-PR previews the top spend priority, use DEPLOY_PROVIDER=fly ' +
-          'for previews. Render stays available for a free staging service.',
+          'environments are a paid Render feature. No free-tier substitute exists, and ' +
+          'provisioning a paid one is held by the board (ADR-0003 §13) — so an isolated per-PR ' +
+          'preview is currently unavailable rather than misconfigured, and M0 AC1 is recorded ' +
+          'as not met. Render stays available for a free staging service.',
       )
     }
 

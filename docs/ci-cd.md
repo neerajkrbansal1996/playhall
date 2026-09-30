@@ -7,8 +7,11 @@ branch protection) and the free-tier path in
 [ADR-0003](adr/0003-hosting-and-cost-model.md) §8.
 
 Everything runs on GitHub Actions, which is included with the repository. **No paid
-service is used and none was signed up for** — the standing infrastructure budget is $0
-and the provider choice is board-gated on [PER-2](/PER/issues/PER-2).
+service is used and none was signed up for.** The board has held all provisioning — no
+vendor account, no card on file, no paid tier, no trial, on any provider — so the CI half
+of this pipeline is live and the deploy half is inert by design, not by omission. See
+[ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and
+[Activating deploys](#activating-deploys) below.
 
 ## What runs when
 
@@ -125,24 +128,38 @@ one entry each, with no change to the endpoints, the probe script, or the uptime
 ## Activating deploys
 
 All provider logic is in `scripts/deploy/deploy.mjs`; no workflow names a provider. With
-nothing configured a deploy reports `not_configured` and passes — an undecided board
-question is not a build break.
+nothing configured a deploy reports `not_configured` and passes — infrastructure that has
+not been provisioned is not a build break.
 
-The board authorised **$120/month on Fly.io** for M0–M5 (region `bom`, interim), stepping to
-$250/month at M5 with a $400 hard ceiling. Spend priority, in order: **(1) per-PR preview
-environments, (2) a staging environment that holds a WebSocket, (3) minimum-size production
-until M5.** Previews and staging are the reason the board reversed $0, so production sizing
-must not crowd them out. Sentry, PostHog and the uptime monitor stay on free tiers.
+### The condition that switches deploys on
 
-| Provider           | Targets               | Notes                                                                                                                                                                                                                                        |
-| ------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fly`              | both                  | **The board's choice.** Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app — this script never creates billable infrastructure.    |
-| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong. |
-| `cloudflare-pages` | web only              | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one.                   |
-| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                |
-| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                               |
+**One condition, and it is not technical: the board lifts the provisioning hold.**
 
-Set these in repository settings. No code change needed.
+Provisioning is held — no vendor account, no card on file, no paid tier, no trial, on any
+provider. The hold, and what would lift it, is [ADR-0003](adr/0003-hosting-and-cost-model.md)
+§13. Deliberately not restated here: the provider, the envelope and the spend priorities.
+They are settled, they live in ADR-0003 §10 and §12, and a figure duplicated into four files
+is a figure that goes stale in four files.
+
+Read §13.2 before treating a budget approval as permission. The board ratified the spend
+**authority** and withheld **permission** to exercise it; those are separate answers and only
+the second one gates this section. An approved budget buys nothing.
+
+So the order is: board lifts the hold → [PER-7](/PER/issues/PER-7) provisions and sets the
+variables and secrets below → previews and deploys start producing URLs. **No code change at
+any step.** Until then the honest state of this pipeline is `not_configured`, printed in the
+run log and in the PR comment, and M0 AC1 is recorded as not met.
+
+| Provider           | Targets               | Notes                                                                                                                                                                                                                                                                                      |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `fly`              | both                  | The settled provider for M0–M5, **held, not usable** — no account exists. Runs persistent processes, so `apps/realtime` can hold WebSocket connections and later a 30 Hz tick on dedicated CPU. Needs `fly.toml` and a provisioned app; this script never creates billable infrastructure. |
+| `none` (default)   | both                  | Clean skip with a notice naming what is missing. Unset, empty and whitespace all resolve here, so the repo is green before a provider exists. A value that is set but unrecognised still fails the job — the distinction is unset vs. wrong.                                               |
+| `cloudflare-pages` | web only              | Free-egress static hosting. Still relevant: static egress is ~1.7× the WebSocket egress and must sit behind a free-egress CDN. Chosen over Vercel Hobby, which forbids commercial use — a licence problem, not a cost one.                                                                 |
+| `render`           | realtime, non-preview | Free tier runs a long-lived Node process. Refuses `preview`, because free-tier Render has no per-PR previews.                                                                                                                                                                              |
+| `script`           | both                  | Escape hatch: runs `scripts/deploy/custom.sh`, last line of stdout is the URL.                                                                                                                                                                                                             |
+
+Set these in repository settings **once the hold is lifted**, not before. No code change
+needed at that point.
 
 | Kind     | Name                                              | Purpose                                                                                     |
 | -------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -157,8 +174,9 @@ Set these in repository settings. No code change needed.
 
 **Nothing in this pipeline provisions infrastructure.** Fly apps, `fly.toml`, Redis and
 Postgres belong to [PER-7](/PER/issues/PER-7). A deploy script that creates billable
-resources on demand is how a $120/month cap becomes a $400 one, so the `fly` provider fails
-with a readable error when the app or its config is missing rather than creating either.
+resources on demand is how a provisioning hold gets breached by a script nobody read, so the
+`fly` provider fails with a readable error when the app or its config is missing rather than
+creating either.
 
 A provider must print a `https://` URL; a deploy that reports success with no URL is
 treated as a failure, because nothing downstream could smoke-test it.
@@ -170,17 +188,32 @@ contributor's code.
 
 ## What is still needed
 
-The cost question is discharged: [ADR-0003](adr/0003-hosting-and-cost-model.md) published
-the model, and the board answered on [PER-2](/PER/issues/PER-2) — **Fly.io, $120/month**.
-What the _pipeline_ is still waiting on:
+The cost question is discharged — [ADR-0003](adr/0003-hosting-and-cost-model.md) published
+the model and the board answered — but the answer was _authority without permission_
+(ADR-0003 §13). What the _pipeline_ is still waiting on:
 
-1. **GitHub Actions cannot run at all.** Every push produces `startup_failure` with zero
-   jobs, including an 8-line control workflow on an untouched branch. Account/plan level,
-   not YAML — tracked on [PER-55](/PER/issues/PER-55). Until it clears, every gate here is
-   advisory and ADR-0004's push detector cannot fire, so `main` has neither prevention nor
-   detection. That is below the risk ADR-0004 accepted.
-2. **Provisioned Fly apps and a `FLY_API_TOKEN`.** [PER-7](/PER/issues/PER-7).
-3. **M0 AC1 stays "partially met"** until per-PR previews actually run.
+1. **The provisioning hold, lifted.** Everything below is downstream of it and nothing else
+   here is a code problem. Board decision; ADR-0003 §13.5 says what would lift it.
+2. **Provisioned apps, a CDN in front of `apps/web`, and the deploy credentials.**
+   [PER-7](/PER/issues/PER-7), and blocked by (1).
+3. **M0 AC1 ("a preview deploy per PR") is recorded as not met**, by the board's own decision
+   of 2026-09-30. An end-to-end isolated preview — its own realtime service, Redis and
+   Postgres, so one PR's schema change cannot break another PR's preview — needs spend on
+   every candidate we costed. A shared long-lived URL redeployed per PR is deliberately
+   **not** substituted for it: two concurrent PRs would overwrite each other and a reviewer
+   could not tell which change they were looking at. The gap is recorded rather than
+   engineered around.
+
+GitHub Actions itself is healthy again — [PER-55](/PER/issues/PER-55) (an account-level
+payment failure that produced `startup_failure` with zero jobs on every workflow) is resolved,
+so every gate here executes and ADR-0004's push detector can fire.
+
+**Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
+consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
+preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
+not a verdict. Four of eight gates are PENDING stubs, `integration` boots Redis and Postgres
+service containers with no tests in them, and there is no build caching. Re-measure when M1
+closes before concluding Turborepo is unnecessary.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 
@@ -190,10 +223,6 @@ Two ADR-0003 items land on Platform Engineer but not on this issue:
 - **The match log grows ~31.5 GB/month per 1,000 concurrent players and nothing deletes
   it** — needs a retention policy.
   [PER-15](/PER/issues/PER-15)/[PER-29](/PER/issues/PER-29).
-
-**Measurement owed** (ADR-0001 §2): report CI wall-clock per PR once the pipeline is green,
-so the "add Turborepo above 5 minutes" trigger is checkable rather than decorative. Blocked
-on [PER-55](/PER/issues/PER-55).
 
 ### A real uptime monitor for launch (M5)
 
