@@ -19,6 +19,16 @@
   mechanically by a new ADR-0002 rule, not by memory. **No decision in this ADR carries the
   `Board-gated` status any more** — the hosting provider noted in Context was never a decision in
   this ADR and remains [PER-38](/PER/issues/PER-38).
+- **Amended:** 2026-09-30 (rev 5) — **naming correction, no decision changes.** Rev 4 promised
+  §4.2 condition 2 would be "enforced mechanically by a new ADR-0002 rule" and named that rule
+  `no-platform-framework-in-games`. It landed as **`no-game-to-colyseus`** (`c50da31`,
+  [#28](https://github.com/neerajkrbansal1996/playhall/pull/28)), so rev 4 named a rule that does
+  not exist in `.dependency-cruiser.cjs` — a reader checking condition 2 grepped for it, found
+  nothing, and could reasonably conclude it was unenforced. §4.2 and the downstream-cost table now
+  record the rule as **landed**, under its real name, at `severity: 'error'` with four negative
+  fixtures. See [ADR-0002](./0002-dependency-boundary-enforcement.md) §2 rev 3 for why the
+  vendor-specific name was kept rather than renaming the gate. No decision, condition or
+  consequence in this ADR changes. Found on [PER-72](/PER/issues/PER-72).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -215,12 +225,16 @@ lenses:
 
 Conditions that live only in a decision record are not conditions.
 
-- **ADR-0002 gains a third-party denylist rule for `games/*`** —
-  `no-platform-framework-in-games`, covering both imports and declared `package.json`
-  dependencies. Without it, `pnpm add colyseus` inside `games/chess` fails **nothing** today: the
-  existing `no-illegal-declared-dep` rule denylists `@playhall/*` internals only, never a
-  third-party framework. This gap is why rev 4 is an ADR-0002 change and not just an ADR-0001
-  status flip. Owner: [PER-5](/PER/issues/PER-5). This is condition 2's mechanical half.
+- **ADR-0002 gained a third-party denylist rule for `games/*`** — shipped as
+  **`no-game-to-colyseus`**, covering both imports and declared `package.json` dependencies.
+  Without it, `pnpm add colyseus` inside `games/chess` failed **nothing**: the existing
+  `no-illegal-declared-dep` rule denylists `@playhall/*` internals only, never a third-party
+  framework. This gap is why rev 4 is an ADR-0002 change and not just an ADR-0001 status flip.
+  **Landed** on `main` in `c50da31` ([#28](https://github.com/neerajkrbansal1996/playhall/pull/28),
+  [PER-5](/PER/issues/PER-5)) at `severity: 'error'`, with four negative fixtures. This is
+  condition 2's mechanical half. Rev 4 drafted this rule under the name
+  `no-platform-framework-in-games`; the implementation named it for the framework it denylists,
+  and this ADR follows the code. See ADR-0002 §2 rev 3 for why the vendor-specific name was kept.
 - **Testkit conformance runs with no Colyseus in its dependency tree**
   ([PER-17](/PER/issues/PER-17)). Condition 2's behavioural half — the boundary rule catches the
   declaration, the testkit catches the reach.
@@ -633,8 +647,7 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 - `getViewFor` / `getSnapshotFor` as the only path to a client.
 - **The four binding conditions in §4.2** (rev 4). Colyseus is platform-internal, absent from
   every game's dependency tree, never the redaction path, and never the source of time or
-  randomness. `no-platform-framework-in-games` in ADR-0002 is the mechanical half of that
-  commitment.
+  randomness. `no-game-to-colyseus` in ADR-0002 is the mechanical half of that commitment.
 - **Redis being safe to lose at any instant; Postgres as the sole tier of record** (§6.1,
   amended rev 2 — this replaces rev 1's "Redis configured `noeviction` in every environment").
 - A durable log append on the action hot path, budgeted at ≤ 10 ms p95 (§6.2).
@@ -706,7 +719,7 @@ layer — is now unblocked and builds Colyseus-hosted against §4.2.
 
 | Issue                        | Effect of the decision                                                                                                                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's `no-platform-framework-in-games` rule. **New work**, and it is not optional — condition 2 is unenforced without it                                                                                  |
+| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's game→framework denylist rule. **Done** — shipped as `no-game-to-colyseus` in `c50da31` (#28), `severity: 'error'`, four negative fixtures, green on `main`                                          |
 | [PER-15](/PER/issues/PER-15) | Design constraint lifted. Transport layer is Colyseus-hosted; the four §4.2 conditions are acceptance criteria. Still blocked on [PER-12](/PER/issues/PER-12) / [PER-14](/PER/issues/PER-14) for unrelated reasons |
 | [PER-17](/PER/issues/PER-17) | Add a conformance case: the testkit runs with Colyseus absent from the dependency tree                                                                                                                             |
 | [PER-21](/PER/issues/PER-21) | The M6 engine question is pre-answered. ADR-0005 shifts from _select an engine_ to _validate this one against the tick budget_                                                                                     |
