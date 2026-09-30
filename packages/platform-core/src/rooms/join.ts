@@ -17,20 +17,27 @@
  * | Player already holds a seat                  | `rejoined` (same seat) |
  * | Player already spectating                    | `spectating`         |
  * | Free seat, room in lobby or finished         | `seated`             |
- * | Match in progress (seat belongs to the match)| `spectating`         |
+ * | Mid-match, game declares `fill_empty_seats`  | `seated`             |
+ * | Mid-match, game declares `spectate_only`     | `spectating`         |
  * | No free seat, game allows spectators         | `spectating`         |
  * | No free seat, game forbids spectators        | `room_full`          |
  *
- * Two of these are worth defending. **Mid-match joiners spectate** rather than
- * dropping into a free seat: a seat vacated during a match still belongs to
- * the player who left, and seat substitution is a seats-and-host concern
- * ([PER-13](/PER/issues/PER-13)), not a join concern. And **a finished room
- * does let a new player take a seat**, because the 15-minute rematch window
- * exists precisely so the room can be re-crewed.
+ * Two of these are worth defending. **What happens to a mid-match arrival is
+ * the game's declaration, not this file's opinion** — `lateJoin` on the seating
+ * policy, projected from the manifest. The platform used to hard-code
+ * "mid-match joiners spectate", which is right for chess and wrong for a party
+ * game where a kicked player's seat should not stay dead for the rest of the
+ * round. The declaration defaults to `spectate_only`, so a game that says
+ * nothing gets the conservative answer rather than a surprise. And **a finished
+ * room does let a new player take a seat** whatever `lateJoin` says, because
+ * the 15-minute rematch window exists precisely so the room can be re-crewed —
+ * that is a lobby again, not a late join.
  */
 
 import { normalizeRoomCode } from '@playhall/shared'
 import type { GameCatalogEntry } from '@playhall/game-sdk'
+import { type SeatingPolicy, seatingPolicyFor } from '../seats/policy.js'
+import { assignTeams } from '../seats/teams.js'
 import { isValidRoomCode } from './code.js'
 import { type RoomLifecyclePolicy, evaluateRoomLifecycle } from './lifecycle.js'
 import { type Room, type RoomRevision, freeSeatIndex, reviseRoom, seatIndexOf } from './types.js'
@@ -137,11 +144,17 @@ export function resolveJoin(input: ResolveJoinInput): JoinOutcome {
   if (heldSeat !== null) return { kind: 'rejoined', seatIndex: heldSeat, isRejoin: true }
   if (room.spectatorPlayerIds.includes(playerId)) return { kind: 'spectating', isRejoin: true }
 
+  const policy = seatingPolicyFor(game)
   const free = freeSeatIndex(room)
-  const seatsAreOpen = room.status === 'lobby' || room.status === 'finished'
+  // A lobby and a finished room are both "seats are open": the rematch window
+  // is a lobby with a scoreboard. Mid-match, the game decides.
+  const seatsAreOpen =
+    room.status === 'lobby' ||
+    room.status === 'finished' ||
+    (room.status === 'in_progress' && policy.lateJoin === 'fill_empty_seats')
   if (free !== null && seatsAreOpen) return { kind: 'seated', seatIndex: free, isRejoin: false }
 
-  if (game.supportsSpectators) return { kind: 'spectating', isRejoin: false }
+  if (policy.supportsSpectators) return { kind: 'spectating', isRejoin: false }
   return rejectJoin('room_full')
 }
 
@@ -151,8 +164,19 @@ export function resolveJoin(input: ResolveJoinInput): JoinOutcome {
  * Immutable by design: the room runner writes the returned value back through
  * the store's compare-and-set, so a lost update is detected instead of
  * silently overwriting a concurrent join.
+ *
+ * `policy` is required rather than optional on purpose. A join changes the
+ * roster, and a roster change has to re-derive teams; an optional policy is a
+ * call site that compiles while leaving an auto-balanced room lopsided the
+ * moment a fourth player arrives.
  */
-export function applyJoin(room: Room, playerId: string, outcome: JoinOutcome, now: number): Room {
+export function applyJoin(
+  room: Room,
+  playerId: string,
+  outcome: JoinOutcome,
+  now: number,
+  policy: SeatingPolicy,
+): Room {
   if (outcome.kind === 'rejected') return room
 
   const present = room.presentPlayerIds.includes(playerId)
@@ -170,8 +194,16 @@ export function applyJoin(room: Room, playerId: string, outcome: JoinOutcome, no
 
   if (outcome.kind === 'rejoined') return reviseRoom(room, base, now)
 
-  const seats = room.seats.map((seat) =>
-    seat.index === outcome.seatIndex ? { ...seat, occupantPlayerId: playerId } : seat,
+  // Ready on arrival, and teams re-derived: see `RoomSeatSlot.isReady` for why
+  // readiness is opt-out, and `assignTeams` for why the balance is recomputed
+  // on every roster change rather than only when someone asks.
+  const seats = assignTeams(
+    room.seats.map((seat) =>
+      seat.index === outcome.seatIndex
+        ? { ...seat, occupantPlayerId: playerId, isReady: true }
+        : seat,
+    ),
+    policy,
   )
   // The first seat taken by someone other than the host is what stops the
   // 30-minute no-opponent expiry. Recorded once and never cleared: a room that

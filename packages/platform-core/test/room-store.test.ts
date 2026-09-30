@@ -156,10 +156,7 @@ describe('queries', () => {
     await store.insert({
       ...makeRoom(),
       id: 'safe',
-      seats: [
-        { index: 0, occupantPlayerId: 'host' },
-        { index: 1, occupantPlayerId: 'guest' },
-      ],
+      seats: makeRoom({ seats: ['host', 'guest'] }).seats,
       secondPlayerJoinedAt: T0,
       status: 'in_progress',
     })

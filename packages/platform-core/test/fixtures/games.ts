@@ -8,15 +8,18 @@
  * would itself be the bug.
  */
 
+import type { SeatingDeclarations } from '../../src/seats/policy.js'
 import {
   DEFAULT_DISCONNECT_POLICY,
   SDK_CONTRACT_VERSION,
   SETTINGS_FORM_VERSION,
   type AnyGameModule,
+  type GameCatalogEntry,
   type GameManifest,
   type GameStatus,
   type MatchResult,
   defineTurnBasedGame,
+  toCatalogEntry,
 } from '@playhall/game-sdk'
 import { z } from 'zod'
 
@@ -41,6 +44,9 @@ export interface FakeGameOptions {
   readonly minPlayers?: number
   readonly maxPlayers?: number
   readonly version?: string
+  readonly teams?: 'none' | 'fixed' | 'auto-balanced'
+  readonly teamCount?: number
+  readonly supportsBots?: boolean
 }
 
 export function makeGame(options: FakeGameOptions): AnyGameModule {
@@ -53,12 +59,13 @@ export function makeGame(options: FakeGameOptions): AnyGameModule {
     category: 'board',
     minPlayers: options.minPlayers ?? 2,
     maxPlayers: options.maxPlayers ?? 2,
-    teams: 'none',
+    teams: options.teams ?? 'none',
+    ...(options.teams === 'fixed' ? { teamCount: options.teamCount ?? 2 } : {}),
     turnModel: 'sequential',
     hasHiddenInformation: false,
     usesRandomness: false,
     supportsSpectators: options.supportsSpectators ?? true,
-    supportsBots: false,
+    supportsBots: options.supportsBots ?? false,
     settingsSchema,
     // Mandatory since ADR-0007: every manifest describes its own settings form.
     // Mirrors `settingsSchema` exactly, because `checkSettingsForm` validates
@@ -116,4 +123,19 @@ export function brokenRegistration(slug: string, message = 'boom') {
       throw new Error(message)
     },
   }
+}
+
+/**
+ * A catalogue entry carrying the seating declarations.
+ *
+ * They are not on `GameManifest` yet — `SeatingDeclarations` explains why, and
+ * an ADR to the CTO is what moves them there — so `toCatalogEntry` cannot carry
+ * them and the registry cannot serve them. Until it can, the declaration path is
+ * exercised where it is actually read: at the projection.
+ */
+export function entryWithDeclarations(
+  module: AnyGameModule,
+  declarations: SeatingDeclarations,
+): GameCatalogEntry & SeatingDeclarations {
+  return { ...toCatalogEntry(module.manifest), ...declarations }
 }
