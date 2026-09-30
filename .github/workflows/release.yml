@@ -13,11 +13,12 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # No `inputs:` here on purpose. A free-text "ref to deploy" input would be the
+  # one way to put an arbitrary, untagged commit into production — the exact
+  # bypass the tag trigger exists to close. `workflow_dispatch` already takes a
+  # ref from GitHub's own ref picker, and `release-ref` below rejects anything
+  # that is not a tag.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Tag or SHA to deploy. Must already be tagged for a real release.
-        required: true
 
 concurrency:
   group: release
@@ -27,6 +28,24 @@ permissions:
   contents: read
 
 jobs:
+  # A dispatched run can pick any branch or tag. Production may only ever be cut
+  # from a tag (ADR-0004 §Decision 5), so assert that rather than trust the
+  # person clicking "Run workflow".
+  release-ref:
+    name: release-ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert this run is on a tag
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error title=Not a tag::release.yml ran on ${{ github.ref_type }} \
+          '${{ github.ref_name }}'. Production is cut from a tag and nothing else — \
+          tag the reviewed commit, then let the tag push trigger this workflow."
+            exit 1
+          fi
+          echo "Releasing from tag ${{ github.ref_name }}."
+
   gates:
     name: gates
     # Same reason as `main.yml`: `ci-gate` requests `pull-requests: write`, and a
@@ -37,9 +56,31 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/ci.yml
 
+  # ADR-0004 §Decision 2, on the production path. `main.yml` audits staging, but
+  # a tag can point at *any* commit — including one pushed directly to `main`
+  # whose `main.yml` audit went red and was ignored. Without this job that is a
+  # complete bypass: push, ignore the red, tag it, ship it. Production is the one
+  # environment where the missing control is not recoverable by a revert.
+  #
+  # The script reads `GITHUB_SHA`, not the pull_request event, so it works here
+  # unchanged: on a tag push `GITHUB_SHA` is the tagged commit.
+  push-audit:
+    name: push-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assert the tagged commit arrived via a merged PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/assert-merged-via-pr.mjs
+
   web:
     name: deploy web
-    needs: gates
+    needs: [release-ref, gates, push-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # The GitHub Environment holds the production secrets and is where a
@@ -65,7 +106,7 @@ jobs:
 
   realtime:
     name: deploy realtime
-    needs: gates
+    needs: [release-ref, gates, push-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:

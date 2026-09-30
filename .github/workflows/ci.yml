@@ -98,6 +98,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The repo-wide >= 80% rule (AGENTS.md) is currently enforced only *inside*
+  # `pnpm test`, by each package's own vitest thresholds — so a package that
+  # never configures a threshold is exempt by accident, which is how
+  # `game-sdk` sat at 0% and `games/chess` at 41% while `unit` stayed green.
+  # This gate is the aggregate check that closes that hole. PENDING until its
+  # owning issue (PER-89) lands the root script; see scripts/ci/gate.mjs.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs coverage
+
   # The conformance suite. This is the gate that blocks a game from merging if
   # it leaks hidden information, is non-deterministic, or accepts an illegal
   # action. Separate from `unit` so a game author sees *which* contract broke.
@@ -200,7 +215,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [pr-hygiene, lint, typecheck, boundaries, unit, testkit, integration, e2e]
+    needs: [pr-hygiene, lint, typecheck, boundaries, unit, coverage, testkit, integration, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

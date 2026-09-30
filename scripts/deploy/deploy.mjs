@@ -237,7 +237,12 @@ const PROVIDERS = {
   },
 }
 
-const impl = PROVIDERS[provider]
+// `Object.hasOwn`, not a plain lookup: `PROVIDERS['constructor']` resolves up
+// the prototype chain to `Object`, which is callable and returns `{}`. That
+// walks straight past this check, "succeeds" with an undefined status, and
+// exits 0 — a misconfigured provider name silently reported as a clean skip.
+// `toString` and `valueOf` fail the same way. Own keys only.
+const impl = Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[provider] : undefined
 if (!impl) {
   fail(
     `DEPLOY_PROVIDER is set to "${provider}", which is not a known provider. Known: ` +
