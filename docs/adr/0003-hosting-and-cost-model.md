@@ -7,7 +7,8 @@
   board-gated and is explicitly not settled by this ADR** (§7c). **Later the same day the board
   held all provisioning and put everything back on free tiers** — the authority in §12 is
   ratified but **may not be exercised**, and **§8 is the operative topology again** (rev 4,
-  §13).
+  §13). **The hold permits free-tier signups** that need no payment card, and **returns to the
+  board at M3** (rev 5, §8.7, §13.5).
 - **Date:** 2026-09-30
 - **Amended:** 2026-09-30 (**rev 2**) — the board set the infrastructure budget to **$0**, and
   [ADR-0001](./0001-v1-stack.md) rev 2 withdrew the `noeviction` disqualifier. **§5.1, §7, §8
@@ -25,6 +26,18 @@
   recording that adopting Colyseus and holding provisioning jointly remove the only always-on $0
   option, so M3 does not rediscover it. The Status line, §7, §8, §8.4 and §12 changed materially.
   See [What changed in rev 4](#what-changed-in-rev-4).
+- **Amended:** 2026-09-30 (**rev 5**) — the board answered the two questions rev 4 left open.
+  **§8.7 resolves to reading A: free-tier signups are permitted** — no card, no paid tier, no
+  trial — so §8.1's topology may actually be stood up and **three of M0's five acceptance criteria
+  become reachable rather than conditional**. **M3 is confirmed as the point at which the hold
+  returns to the board**, recorded as a standing instruction on the M3 epic
+  ([PER-29](/PER/issues/PER-29)). §8.6, §8.7, §10.4, §13.5 and §13.6 changed; nothing about the
+  provider, the arithmetic or the dormancy of §12 moved. See
+  [What changed in rev 5](#what-changed-in-rev-5). Rev 5 also corrects **a defect of my own in
+  §11.1**: this ADR carried two different costs for per-PR previews — a stale rev-2-era
+  ~$25/month and §12.2's costed $8.78/month — and the wrong one reached the board's M0 sign-off
+  minute. **$8.78 is correct**, and the cheaper design still satisfies AC1b. No board action
+  changes.
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -138,6 +151,33 @@ a free tier that sleeps. Recorded, deliberately not solved, so **M3 does not red
 §13.6 also answers the timing question: **M3 is the right point to bring the hold back**, unless
 §8.7 resolves the wrong way, in which case it is an M0 escalation instead.
 
+### What changed in rev 5 {#what-changed-in-rev-5}
+
+Rev 4 ended with two questions and no answers. Both came back on 2026-09-30 and neither reopens
+anything, so rev 5 is a narrow amendment rather than a rewrite.
+
+| Question rev 4 asked                                                           | Answer                                                                                                                                                            |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **§8.7** — does "no vendor account on any provider" forbid a free-tier signup? | **No. Reading A.** Free-tier signups are permitted; no card on file, no paid tier, no trial. §8.1's four accounts may be created.                                 |
+| **§13.6** — is M3 the right point to bring the hold back?                      | **Yes, M3**, recorded as a standing instruction on [PER-29](/PER/issues/PER-29). Escalate sooner if the free topology makes something in M1 or M2 _unachievable_. |
+
+**What reading A buys, precisely.** It converts §8's topology from a costed description into
+something that can be built: **AC2 (WebSocket round trip on staging), AC5 (a staging link for the
+board) and AC1a (a PR runs full CI) are all reachable at $0**, subject to §8.4's cold-start caveat
+and §8.5's eight non-proofs. **AC1b is unchanged and still unreachable** — the isolation property
+that makes a per-PR preview trustworthy needs spend on every candidate, and spend is held. So M0
+goes from two of five criteria reachable to **three of five**, and the caveat in §13.6 that would
+have turned the hold into an M0 escalation **does not fire**.
+
+**What it does not buy, and this is worth stating because "signups are permitted" reads more
+generously than it is.** A free tier is not a small paid tier. Everything in §8.2 still holds:
+Render free's 15-minute spin-down is a **correctness** failure on a room server rather than a
+quota, two always-on environments remain arithmetically impossible against a 750 h allowance, and
+Upstash free's 500,000 commands/month is roughly 20 concurrent players for two hours a day. Reading
+A lets us stand up an environment that is honest about M0. It does not make that environment a
+place where any non-functional target, any timer behaviour, or any restart-recovery claim can be
+evidenced.
+
 ---
 
 ## 0. Summary for the board {#summary-for-the-board}
@@ -145,6 +185,10 @@ a free tier that sleeps. Recorded, deliberately not solved, so **M3 does not red
 > **Rev 4: the decision below stands; the spending does not.** All provisioning is held and
 > everything is on free tiers. Read §0 as "what we will do when spend resumes", and §8 as "what
 > runs today". The `$` figures are dormant, not active.
+>
+> **Rev 5: §8 is not only operative, it is now buildable.** Free-tier signups are inside the hold
+> (§8.7), so the four accounts in §8.1 may be created — AC2, AC5 and AC1a are reachable at $0,
+> AC1b is not. The hold returns to the board at **M3** (§13.5).
 
 **Rev 3: the board has decided.** Fly.io for M0–M5, $120/month now stepping to $250/month at M5
 under a $400 ceiling, regions deferred to M5. This section now records the decision and the two
@@ -1002,8 +1046,8 @@ India destination rates**. **No M6 spend is approved or requested.**
 
 > **Rev 4: this is the operative section.** All provisioning is held and everything is on free
 > tiers, so this is the shape that runs. Read §8.5's eight non-proofs as live constraints on what
-> M0 can evidence, and §8.7 for the one part of the hold that needs a board answer before even
-> this topology can be stood up.
+> M0 can evidence, and §8.7 for the scope of the hold — **answered in rev 5: reading A, free-tier
+> signups are permitted, so this topology may be stood up.**
 >
 > ~~Rev 3: this section is no longer operative … Nothing in §8 should be provisioned.~~
 > **Superseded by rev 4.**
@@ -1219,8 +1263,10 @@ an injected logging sink) are already imposed on [PER-7](/PER/issues/PER-7).
     Hetzner path is **end-to-end isolation** — the preview's own realtime service, Redis and
     Postgres, so that one PR's schema change cannot break another PR's preview. So the accurate
     record is not "previews need a paid tier"; it is **"the isolation property that makes a
-    preview trustworthy needs a paid tier"**, and under the hold not even the free web half may be
-    stood up until §8.7 is answered.
+    preview trustworthy needs a paid tier"**. **Rev 5:** the free web half **may** be stood up —
+    §8.7 resolved to reading A — so Cloudflare Pages per-PR previews of `apps/web` are available
+    at $0. That is AC1a's territory and it does not make AC1b met; the isolation property is still
+    unbuyable under the hold.
 
   **A shared long-lived staging URL redeployed per PR must not be recorded as satisfying AC1b.**
   It is the substitution that costs the criterion its entire point: AC1b exists so that a
@@ -1267,8 +1313,26 @@ milestone where free-tier evidence stops being merely incomplete and starts bein
 > than a contingency.** The board has ratified far more than $6–7/month; the hold is what stops
 > it. M3 is the milestone at which the hold stops costing us evidence and starts costing us
 > correctness, and that is the moment to come back to the board rather than absorb it.
+>
+> **Rev 5: this paragraph is now actionable rather than hypothetical.** §8.7 resolved to reading
+> A, so the four free accounts may be created and the first sentence above is an instruction, not
+> a proposal. The deadline in the rev-4 note is confirmed: **the board has set M3 as the point at
+> which the hold comes back**, so "replace the Render free service with a Fly Machine before M3"
+> and "re-ask at M3" are the same event.
 
-### 8.7 The one part of the hold that needs a board answer before even this topology exists (rev 4) {#the-one-part-of-the-hold-that-needs-a-board-answer}
+### 8.7 The scope of the hold — **answered 2026-09-30: reading A, free-tier signups are permitted** (rev 5) {#the-scope-of-the-hold}
+
+> **Answer, and it is the operative line of this subsection.** The board resolved this on
+> [PER-38](/PER/issues/PER-38): the hold forbids **paid** accounts, cards on file, paid tiers and
+> trials. It does **not** forbid creating a free-tier account that requires no payment
+> instrument. **§8.1's topology may be stood up.** The question below is kept because the
+> reasoning is what produced the answer, and because the distinction recurs every time someone
+> reads "no vendor account" literally.
+>
+> **Boundary, stated once so it is not re-litigated per vendor:** permitted is a signup that
+> completes with no card and no trial clock. A free tier that demands a card "for verification",
+> or that auto-converts to paid, is **not** permitted and comes back to the board instead. None of
+> the four accounts in §8.1 requires one — that is why they are the four.
 
 The hold was relayed in two sentences that cannot both be complied with literally:
 
@@ -1284,14 +1348,16 @@ free tiers, none requiring a card. So the two readings are:
 | **A — "no _paid_ account"**: free-tier signups are permitted, which is what §8.1 assumes | AC2 (WebSocket round trip on staging) and AC5 (staging link) are **demonstrable**, with §8.4's cold-start caveat. AC1a is demonstrable. AC1b stays unmet. **Three of five criteria reachable.**     |
 | **B — "no account of any kind"**: literal                                                | There is no staging environment, so **AC2 and AC5 are also not met** and there is no board demo at all. Only AC3 and AC4 — both purely in-repo — are reachable. **Two of five criteria reachable.** |
 
-This is a board question and I am not resolving it by assumption. It matters beyond wording: the
-M0 sign-off question currently before the board is framed around AC1 alone, and **under reading B
-it is a question about AC1, AC2 and AC5.** The distinction also has a real cost asymmetry —
-reading A costs $0 and is reversible by deleting four free accounts; reading B costs M0 its demo.
+It mattered beyond wording: the M0 sign-off question before the board was framed around AC1 alone,
+and **under reading B it would have been a question about AC1, AC2 and AC5.** The distinction also
+had a real cost asymmetry — reading A costs $0 and is reversible by deleting four free accounts;
+reading B would have cost M0 its demo.
 
-**Interim posture:** proceed on nothing that requires a signup, and keep every non-hosting M0
-criterion moving — AC1a, AC3 and AC4 need no vendor at all. Correctness work that would otherwise
-be validated on staging is validated against the local `docker-compose` stack, per §8.6.
+**Reading A is the answer, so the posture is:** stand up §8.1's four free accounts and get AC2 and
+AC5 evidenced; keep AC1a moving on [PER-6](/PER/issues/PER-6), where the unblock is a merge rather
+than a purchase; record AC1b as **not met** and leave it to the hold. Correctness work that a paid
+staging environment would have validated is still validated against the local `docker-compose`
+stack, per §8.6 — reading A changes what we can demo, not what we can prove.
 
 ---
 
@@ -1436,9 +1502,26 @@ Three options, and this is a durability decision rather than a tuning knob, so i
 file beyond what Decision 2 explicitly authorises. M6 hosting stays gated with M6 itself.
 
 ~~**Until the board answers**, [PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) proceed
-as far as the $0 topology in §8 allows.~~ **Superseded — see §12.2 for what they may now
-provision.** M0 AC1 stays **partially met** until per-PR previews are actually running, which
-is the board's accepted position and unchanged by rev 3.
+as far as the $0 topology in §8 allows.~~ ~~**Superseded — see §12.2 for what they may now
+provision.**~~ **Rev 5: un-superseded.** The provisioning release in §12.3 is withdrawn (§13), so
+the struck sentence above is operative again and is the correct instruction: PER-6 and PER-7
+proceed as far as §8's $0 topology allows, which under reading A of §8.7 now includes standing the
+four free accounts up. M0 AC1 is recorded as **not met** — the board accepted that framing rather
+than "partially met" when it signed off M0.
+
+### 10.4 The hold's scope and the revisit cadence — **answered 2026-09-30** (rev 5)
+
+Two follow-up questions from rev 4, both now closed. Neither changes the provider, the arithmetic,
+or the dormancy of §12.
+
+| Question                                                    | Answer                                                             | Where it lands                                                               |
+| ----------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Does the hold forbid a free-tier signup that needs no card? | **No — reading A.** Free-tier accounts are permitted.              | §8.7. M0 goes from two of five criteria reachable to **three of five**.      |
+| When does the hold come back to the board?                  | **M3**, as a standing instruction on [PER-29](/PER/issues/PER-29). | §13.5, §13.6. Escalate sooner only on an M1/M2 _unachievability_, not a gap. |
+
+**Also recorded by the board at sign-off:** M0 is accepted with **AC1 recorded as not met**. That
+is the stricter of the two available records and it is the right one — naming an unmeetable
+criterion is cheaper now than discovering at M5 that a green tick meant a shared staging URL.
 
 ---
 
@@ -1473,8 +1556,29 @@ and — via Fly Managed Postgres in the same region — the ≤ 10 ms p95 log ap
 Decision 4 option (a) available for free inside this same ask.
 
 **What it does not buy:** anything about the < 150 ms p95 target at scale (that is §11.2), per-PR
-preview isolation for AC1 (that needs a preview environment per PR, ~$25/month on Fly, **not
-requested here**), or any M6 capability.
+preview isolation for AC1 (that needs a preview environment per PR — **$8.78/month on Fly per
+§12.2**, **not requested here**), or any M6 capability.
+
+> **Rev 5 correction — two numbers for one line item, and the board's minute took the wrong one.**
+> This paragraph previously said **~$25/month**, written in the rev-2 era when "a preview
+> environment per PR" was scoped as a _fully dedicated_ environment including **its own Postgres
+> instance**. §12.2 later costed the line properly at **$8.78/month**: ~20 PRs/month, scale-to-zero
+> preview Machines, and **one shared Postgres instance with a separate database per PR**. Both
+> numbers then sat in this ADR at once, and the ~$25 figure is the one that reached the board — it
+> is quoted in the M0 sign-off relay on [PER-3](/PER/issues/PER-3). **$8.78 is the correct figure.**
+>
+> **The cheaper design still satisfies AC1b, which is why this is a correction and not a
+> downgrade.** AC1b exists so that one PR's schema change cannot break another PR's preview; a
+> separate _database_ per PR gives exactly that isolation. A dedicated Postgres _instance_ per PR
+> additionally isolates resource contention between concurrent previews, which is not what the
+> criterion is about at ~20 PRs/month. If preview load ever makes contention real, the revisit
+> trigger is a preview run whose timings are distorted by a neighbouring preview.
+>
+> **This changes nothing the board must do.** The board accepted M0 with AC1 recorded as not met
+> and declined to fund previews; nothing here reopens that. It is recorded so that _if_ the
+> decision is ever revisited, it is revisited against **$8.78 of an authorised $120** — which makes
+> AC1b the cheapest open criterion on the list by an order of magnitude, and it was the board's own
+> stated #1 spend priority.
 
 **The $0 alternative, honestly stated:** port the room runner to Cloudflare Workers + Durable
 Objects — genuinely $0, genuinely always-on, no payment card, ~230 concurrent players on the free
@@ -1801,6 +1905,24 @@ criterion the hold costs us. If the board wants a smaller first step than $120, 
 preview line alone is the one to release**, and I would rather ask for $9 with AC1b attached than
 for $120 in the abstract.
 
+**Rev 5 — when that ask happens is now fixed, not left to judgement.** The board has set **M3** as
+the revisit point and recorded it as a standing instruction on the M3 epic
+([PER-29](/PER/issues/PER-29)), so it fires when that milestone opens rather than depending on
+someone remembering. Three things go into that ask, and they are worth listing here so they are
+assembled rather than improvised:
+
+1. **The minimum always-on shape with line items** — §12.2 already has them; the ask is to
+   exercise existing authority, not to raise it.
+2. **What stays unevidenced if the answer is no again, criterion by criterion** — §8.5's eight
+   items, plus M3's own acceptance criterion (kill the server mid-game, resume within 10 s), which
+   is the one that cannot be evidenced against a server that is itself the thing disappearing.
+3. **The payment instrument**, because that was the real gate last time and not the money. An
+   approved budget with no card attached buys nothing, and that is the sentence the ask should
+   open with rather than close with.
+
+**I7 and I9 belong in that ask too** if they are still unmeasured at M3 — Test A is approved and
+unspendable, so they probably will be.
+
 ### 13.6 The conflict two board decisions jointly created, recorded so M3 is not a surprise
 
 Chief of Staff asked for this to be written down rather than solved, and that is the right
@@ -1837,11 +1959,21 @@ the hold back to the board, and I would not move it earlier.** Two reasons, and 
    abstract against zero measured numbers. At M3 it is a named criterion that cannot be
    evidenced, which is a decision the board can actually weigh.
 
-**The caveat, and it is the thing that would change my answer:** if [PER-6](/PER/issues/PER-6)'s
-free-tier preview work shows that **M0 cannot be signed off at all** under reading B of §8.7 — no
-staging, therefore no AC2 and no AC5 — then the hold stops being an M3 problem and becomes an M0
-one, and I would escalate immediately rather than on a schedule. §8.7 is the trigger to watch,
-and it is a board question today rather than at M3.
+~~**The caveat, and it is the thing that would change my answer:** if
+[PER-6](/PER/issues/PER-6)'s free-tier preview work shows that **M0 cannot be signed off at all**
+under reading B of §8.7 — no staging, therefore no AC2 and no AC5 — then the hold stops being an M3
+problem and becomes an M0 one, and I would escalate immediately rather than on a schedule.~~
+
+> **Rev 5: the caveat did not fire, and M3 is confirmed.** §8.7 resolved to reading A, so staging
+> exists, AC2 and AC5 are demonstrable, and the hold stays an M3 question rather than becoming an
+> M0 escalation. The board has confirmed M3 and recorded it on [PER-29](/PER/issues/PER-29).
+>
+> **What is still an early-escalation trigger, narrowed.** M3 is a scheduled revisit, not a
+> restriction on raising a blocker. The trigger is **unachievability, not absence of evidence**: if
+> the free topology makes something in M1 or M2 impossible to _build_ rather than merely impossible
+> to _measure_, that goes to Chief of Staff the day it is found. A missing measurement is the known
+> price of the hold and is already recorded in §13.3 — it is not a reason to re-ask early, because
+> re-asking on it would spend board attention to be told something the board already decided.
 
 ---
 
@@ -1936,9 +2068,19 @@ and it is a board question today rather than at M3.
 - **The hold is still in force at M3** → escalate rather than absorb. §8.6 and §13.3 item 3 mark
   M3 as the milestone where free-tier evidence stops being incomplete and starts being
   misleading, and where a sleeping staging environment starts producing wrong timer results
-  rather than merely unproven ones.
-- **The board answers §8.7** (whether free-tier signups are inside the hold) → M0's reachable
-  criteria change from two to three, and the sign-off question before the board changes shape.
+  rather than merely unproven ones. **Rev 5: this is no longer a trigger to notice — it is
+  scheduled.** The board set M3 and recorded it on [PER-29](/PER/issues/PER-29); §13.5 lists what
+  the ask carries.
+- **Something in M1 or M2 becomes unachievable rather than unmeasured under the free topology** →
+  escalate to Chief of Staff the day it is found, ahead of M3. New in rev 5, and deliberately
+  narrower than "the free tier cost us a number": a missing measurement is the known, recorded
+  price of the hold (§13.3) and is not grounds to re-ask early.
+- ~~**The board answers §8.7** (whether free-tier signups are inside the hold) → M0's reachable
+  criteria change from two to three, and the sign-off question before the board changes shape.~~
+  **Fired in rev 5: reading A.** Free-tier signups are permitted, three of five M0 criteria are
+  reachable, and §8.1's topology may be built. The residual trigger is narrower: **any free tier
+  in §8.1 that turns out to require a card, or that auto-converts to paid**, is outside the
+  permission and comes back to the board (§8.7).
 - **Any free tier in §8.1 changes its ceiling** — Render's spin-down window, Upstash's 500K
   commands, Neon's 0.5 GB — → re-run §8.2's ranking; the ceiling that bites first can move.
 - **The durable-log-append budget is measured above 10 ms p95 on a provisioned tier** → Decision
