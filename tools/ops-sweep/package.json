@@ -1,0 +1,14 @@
+{
+  "name": "@playhall/ops-sweep",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Behaviour tests for scripts/ops/stranded-issue-sweep.mjs, the company-side net for issues with no wake path. The cases are pinned to the recorded pre-restart state of the eight issues that died in the 2026-09-29 20:07-20:09Z batch harness failure (PER-151), so the sweep is proven against the batch it exists to have caught rather than against hand-written shapes.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.5"
+  }
+}
