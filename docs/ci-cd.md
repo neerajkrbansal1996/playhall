@@ -353,14 +353,21 @@ against this target by design. The staging link is for a human to open, not for 
 project's production branch — which is what owns the durable `<project>.pages.dev` hostname.
 No code change at any step.
 
+This table is the **CI-owned** path. The board has chosen the other one (below), where the
+credential lives on the Paperclip connection instead of in a repo secret. GitHub Actions
+cannot read that, so on the chosen path `DEPLOY_PROVIDER` stays `none` and the publish is
+run by the Platform Engineer from a heartbeat. **The URL is durable either way — the Pages
+project owns the hostname — but only the CI path refreshes it automatically on push.**
+Moving from one to the other later is a settings change, not a code change.
+
 #### What is blocking it, precisely
 
-The connection is live. `connections_search` for Cloudflare returns `state: "ready"` —
-_"Connection is installed and usable by this agent"_ — and reads through it work:
-`GET /accounts` returns the board's account and `GET /accounts/{id}/pages/projects` returns
-an empty list. So the board's premise was correct and the 29 Sep connection did survive.
+The connection the board made on 29 Sep **did** survive, and reads through it worked:
+`GET /accounts` returned the board's account (created `2026-09-29T19:47:07Z`) and
+`GET /accounts/{id}/pages/projects` returned an empty list. So the board's premise was
+correct.
 
-**But the grant is read-only.** Measured against the live connection on 2026-09-30:
+**But the grant was read-only.** Measured against the live connection on 2026-09-30:
 
 | Call                                                 | Result                                           |
 | ---------------------------------------------------- | ------------------------------------------------ |
@@ -375,15 +382,24 @@ can be minted through it either. There is also no Cloudflare↔GitHub connection
 account (`GET /accounts/{id}/pages/connections` → `[]`), so the git-integrated Pages path
 is not available without an interactive install.
 
+The read-only OAuth grant then **lapsed**: later the same day `connections_search` returned
+`state: "needs_user_action"` with a null `connectionId`, and a call through the Cloudflare
+MCP server failed with `session expired`. So the connection needs re-establishing regardless
+of scope — which makes re-authorising it with a write-scoped credential strictly the cheaper
+of the two options, not an extra step.
+
 Either of two things unblocks it, both $0 and neither a signup:
 
-1. **A scoped API token, set as the `CLOUDFLARE_API_TOKEN` repo secret.** Cloudflare
+1. **Re-authorise the Cloudflare connection using its `mcp-api-key` method** with a
+   Pages-Edit token. **This is the board's choice (2026-09-30).** The credential stays in
+   Paperclip, never in the repo, and the Platform Engineer publishes from a heartbeat.
+   Consequence: the staging link is durable but its content is only as fresh as the last
+   agent-run publish — CI does not redeploy it on push.
+2. **A scoped API token, set as the `CLOUDFLARE_API_TOKEN` repo secret** — Cloudflare
    dashboard → My Profile → API Tokens → Create Token, permission **Account › Cloudflare
-   Pages › Edit**, scoped to this one account. Nothing else. This is the path the table
-   above is written against and the one that makes the deploy reproducible in CI.
-2. **Re-authorise the Cloudflare connection with write scope** — its catalog entry offers
-   an `mcp-api-key` method alongside `mcp-oauth`, which would carry whatever the supplied
-   token grants.
+   Pages › Edit**, scoped to this one account, nothing else. This is what the
+   ["Switching it on"](#switching-it-on) table is written against, and the only path that
+   makes the deploy reproducible in CI. Worth adding later even on top of (1).
 
 Until one of them lands, `DEPLOY_PROVIDER` stays `none`, the pipeline keeps reporting
 `not_configured`, and **M0 AC5's staging-link half is not met.** What is verified today is
@@ -410,7 +426,9 @@ the model and the board answered — but the answer was _authority without permi
    engineered around — and the `cloudflare-pages` adapter refuses `preview` so that the
    AC5 staging link cannot turn into a back door for it.
 4. **M0 AC5's staging-link half is also not met yet**, but for a smaller reason than the
-   rest of this list: one $0 API token, not a board decision. See
+   rest of this list: one $0 Pages-Edit credential, not a board decision — the board has
+   already chosen how to supply it and a connection card is pending with the account holder.
+   See
    [The free staging link on Cloudflare Pages](#the-free-staging-link-on-cloudflare-pages).
 
 GitHub Actions itself is healthy again — [PER-55](/PER/issues/PER-55) (an account-level
