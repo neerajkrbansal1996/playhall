@@ -15,7 +15,14 @@
  * Usage: node scripts/ci/health-probe.mjs <url> [--attempts 10] [--timeout-ms 5000] [--delay-ms 3000]
  */
 const args = process.argv.slice(2)
-const url = args.find((a) => !a.startsWith('--'))
+const NUMBER_FLAGS = ['--attempts', '--timeout-ms', '--delay-ms']
+// The URL is the first argument that is neither a flag nor a flag's value.
+// Taking "the first arg not starting with --" meant `--attempts 3 <url>` probed
+// `3`: every current call site happens to put the URL first, which makes it a
+// trap rather than a bug.
+const url = args.find(
+  (arg, index) => !arg.startsWith('--') && !NUMBER_FLAGS.includes(args[index - 1]),
+)
 const attempts = numberFlag('--attempts', 10)
 const timeoutMs = numberFlag('--timeout-ms', 5_000)
 const delayMs = numberFlag('--delay-ms', 3_000)
