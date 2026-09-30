@@ -13,9 +13,12 @@
  * within a minute and leaves a permanent marker in the commit list. Detection
  * instead of prevention, stated as such rather than dressed up as a gate.
  *
- * Scope: pushes to `main` only. Any other event or ref is reported as not
- * applicable and passes — see the exemption below for why that is a pass rather
- * than a skipped job.
+ * Scope: the two deploy-bearing refs — a `push` to `main` (staging) and *any*
+ * tag, on any event (production). Narrowing this to `push`-to-`main` alone
+ * disarms the release-side audit, because a `v*` tag push is `push` on
+ * `refs/tags/...`; see point 3 of the exemption below before touching it.
+ * Anything else is reported as not applicable and passes — see point 1 for why
+ * that is a pass rather than a skipped job.
  *
  * Needs `GITHUB_TOKEN` with `contents: read` and `pull-requests: read`.
  */
