@@ -544,7 +544,8 @@ this matters, and both belong in the record:
   only the tip of a rebased set matches. Any hardening has to decide the merge-method question
   first; that is why rev 3 records the weakness rather than asserting a one-line fix.
 
-Owner: Platform Engineer, as a follow-up on [PER-6](/PER/issues/PER-6). Not blocking M0: the
+Owner: Platform Engineer on [PER-130](/PER/issues/PER-130), which carries the measurement above
+and the merge-method question it turns on. Not blocking M0: the
 control's stated job is to make a direct push loud, and it does that for the ordinary case (a
 commit authored on top of `main`, which has no PR at all and fails correctly).
 

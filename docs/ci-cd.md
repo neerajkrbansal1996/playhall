@@ -100,7 +100,7 @@ any associated PR is merged — so it proves the commit _belongs to_ a merged PR
 _arrived on `main` by merging_ one. With squash-merge those differ for every commit that sat on a
 merged PR's head branch and was squashed away, so do not cite `push-audit` as proof that
 everything on `main` was reviewed. Measured and bounded in ADR-0004 rev 3, "The residual weakness";
-the hardening is a Platform Engineer follow-up on [PER-6](/PER/issues/PER-6).
+the hardening is [PER-130](/PER/issues/PER-130), Platform Engineer.
 
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
