@@ -249,15 +249,19 @@ export class TimerService {
   /**
    * Declares a per-player clock. Created stopped: the runner starts it by
    * calling `switchTurnTo` when the first seat is to move.
+   *
+   * `atMs` is the issuing instant, for the same reason `pause` takes one.
    */
   declarePlayerClock(
     timerId: TimerId,
     seatId: SeatId,
     config: Partial<PlayerClockConfig>,
+    atMs?: number,
   ): TimerRecord {
     const merged: PlayerClockConfig = { ...DEFAULT_PLAYER_CLOCK, ...config }
     this.#assertDeclared(timerId)
-    const nowMs = this.#clock.now()
+    const nowMs = atMs ?? this.#clock.now()
+    this.#drainDue(nowMs)
     this.#records.set(
       timerId,
       createTimerRecord({
@@ -271,7 +275,7 @@ export class TimerService {
     // Declaring a clock for the seat that is already on move starts it, which
     // is the only sane reading of "this seat is to move and now has a clock".
     this.#reconcile(nowMs)
-    this.#rearm()
+    this.#afterMutation(nowMs)
     return this.#records.get(timerId) as TimerRecord
   }
 
@@ -327,7 +331,19 @@ export class TimerService {
     return this.#records.get(timerId) as TimerRecord
   }
 
-  clear(timerId: TimerId): void {
+  /**
+   * Removes a timer.
+   *
+   * Drains first. A record whose deadline has already passed owes the game an
+   * expiry, and deleting it without delivering one is the same live/replay
+   * divergence `#drainDue` exists to close: live the scheduler had already
+   * fired it, in replay nothing polls and the timeout is simply swallowed.
+   *
+   * `atMs` is the issuing instant, for the same reason `pause` takes one.
+   */
+  clear(timerId: TimerId, atMs?: number): void {
+    const nowMs = atMs ?? this.#clock.now()
+    this.#drainDue(nowMs)
     this.#heldTimers.delete(timerId)
     if (this.#records.delete(timerId)) this.#rearm()
   }
@@ -462,7 +478,7 @@ export class TimerService {
           })
           break
         case 'clear':
-          this.clear(command.timerId)
+          this.clear(command.timerId, issuedAtMs)
           break
         case 'pause':
           this.pause(command.timerId, issuedAtMs)
@@ -670,6 +686,22 @@ export class TimerService {
    * covers it; a record that should be running and is not gets anchored at
    * `nowMs`, one that should not be and is gets frozen there. Idempotent — a
    * pass that changes nothing bumps no versions.
+   *
+   * ## Why the linear scan is fine
+   *
+   * A match holds roughly four records: two chess clocks, a turn timer, maybe a
+   * match timer. One `set()` is about six full passes over them (the drain's
+   * `poll` and `rearm`, this, then `#afterMutation`'s `poll` and `rearm`). At the
+   * 2,000-rooms-per-instance target and a generous one action per room per five
+   * seconds that is ~400 mutations/s, so ~10k record visits/s — noise beside the
+   * `zod` parse on the same request. Indexing by deadline would cost more to
+   * maintain than it saves, and the scan is what bought the single decision
+   * point that killed the whole pause/resume defect class.
+   *
+   * Revisit when a game declares timers **per entity rather than per seat** — a
+   * real-time game with a timer per prop is the obvious M6/M7 shape. That is
+   * when records-per-match stops being a handful and this becomes worth
+   * indexing.
    */
   #reconcile(nowMs: number): void {
     for (const [id, record] of this.#records) {
@@ -707,11 +739,14 @@ export class TimerService {
    * whatever is still due **without calling `onExpire`**, reporting it through
    * `onDrainExhausted`.
    *
-   * It is not "leave the remainder to the scheduler": in replay there is no
-   * scheduler, so that escape hatch does not exist on the one path this
-   * invariant was introduced for, and the record would sit at zero un-expired,
-   * invisible to `deadlineMsAt`, never reported. Dropping an event loudly beats
-   * a clock the game can never learn about.
+   * It is not "leave the remainder to the scheduler", and the reason is replay
+   * alone. Live there *is* a pickup: the handler re-armed those records, so they
+   * are running with a past deadline, visible to `deadlineMsAt`, and `#rearm`
+   * schedules them — as a `setTimeout(0)` spin, which is its own problem but is
+   * not a lost event. In replay there is no scheduler at all, so on the one path
+   * this invariant was introduced for the record would sit at zero with nothing
+   * that could ever deliver it. Dropping an event loudly beats a clock the game
+   * can never learn about.
    *
    * A no-op while firing — we are already inside a pass, and a handler that
    * mutates must not re-enter one.
@@ -742,7 +777,19 @@ export class TimerService {
     }
     if (dropped.length === 0) return
     dropped.sort((a, b) => a.dueAtMs - b.dueAtMs)
-    this.#onDrainExhausted(dropped)
+    // Inside `#firing`, exactly as `poll` wraps `onExpire`, and for the same
+    // reason. A handler that mutates would otherwise re-enter `#drainDue`,
+    // spend another 32 passes, and arrive back here — unbounded recursion, and
+    // the stack overflow is an uncaught throw inside a mutator on the
+    // 2,000-rooms-per-instance path, so one buggy game takes the process and
+    // every other match on it. The cap exists to make a runaway handler
+    // terminate; its escape hatch must not reintroduce the runaway.
+    this.#firing = true
+    try {
+      this.#onDrainExhausted(dropped)
+    } finally {
+      this.#firing = false
+    }
     this.#rearm()
   }
 
