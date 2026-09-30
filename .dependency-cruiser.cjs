@@ -142,6 +142,24 @@ const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
 const COLYSEUS_PACKAGES = 'colyseus|colyseus\\.js|@colyseus/[^/]+'
 const COLYSEUS_MODULES = `^(${COLYSEUS_PACKAGES})$|(^|/)node_modules/(${COLYSEUS_PACKAGES})/`
 
+/**
+ * The validator, in both the forms it can take in the graph — same two alternations, and for
+ * the same reason, as COLYSEUS_MODULES above. `^zod$` alone matches only the *unresolved* case;
+ * zod is a real declared dependency of the SDK, so in practice it resolves and its path is
+ * `.../node_modules/zod/...`. A rule written against the bare specifier only would therefore
+ * pass on every actual violation, which is the failure mode this whole file warns about.
+ */
+const ZOD_MODULES = '^zod($|/)|(^|/)node_modules/zod/'
+
+/**
+ * The two modules the settings contract is split across, by absolute path.
+ *
+ * `$`-anchored because `apps/web` has its own `settings-form.tsx`, and an unanchored pattern
+ * would catch the renderer instead of the contract.
+ */
+const SDK_PURE_SETTINGS = '^packages/game-sdk/src/settings-form\\.ts$'
+const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
+
 module.exports = {
   forbidden: [
     {
@@ -234,6 +252,24 @@ module.exports = {
         'contract instead.',
       from: { path: '^packages/game-sdk/' },
       to: { path: [...PLATFORM_INTERNALS, ...APP_TARGETS, ...GAME_TARGETS] },
+    },
+    {
+      name: 'no-zod-in-pure-settings',
+      severity: 'error',
+      comment:
+        'settings-form.ts exists so a browser can compute which settings fields to show without ' +
+        'shipping a validator. It is the presentation half of the settings contract: the ' +
+        'descriptor shape plus its pure readers, reachable at ' +
+        `${SDK_NAME}/settings-form and importing nothing. The validating half — the zod schemas ` +
+        'and checkSettingsForm — lives in settings.ts and imports this module, never the other ' +
+        'way round. A zod edge here, direct or through settings.ts, silently puts the whole ' +
+        'validator back in the create-lobby chunk (measured at 79.6 kB raw, PER-115) to ' +
+        're-check JSON the server already validated at registry load. Nothing else in the ' +
+        'suite would go red if that happened, which is why this rule exists rather than a ' +
+        'comment. Need to validate? Put it in settings.ts. Need a new pure reader for the ' +
+        'descriptor? It belongs here, and it must stay dependency-free.',
+      from: { path: SDK_PURE_SETTINGS },
+      to: { path: [ZOD_MODULES, SDK_SETTINGS_SCHEMAS] },
     },
     {
       name: 'no-game-node-builtins',
