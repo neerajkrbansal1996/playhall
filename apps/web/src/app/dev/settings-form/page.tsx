@@ -1,9 +1,6 @@
 import { notFound } from 'next/navigation'
 
-import {
-  normalizeSettingsForm,
-  warnAboutSkippedFields,
-} from '@/components/settings-form/normalize'
+import { normalizeSettingsForm, warnAboutSkippedFields } from '@/components/settings-form/normalize'
 
 import { CreateLobbyPreview } from './create-lobby-preview'
 import catalogEntry from './catalog-entry.json'
