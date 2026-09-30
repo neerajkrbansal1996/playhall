@@ -2,7 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
-- **Amended:** 2026-09-30 (rev 2) — **§2 gains one rule**, `no-platform-framework-in-games`.
+- **Amended:** 2026-09-30 (rev 2) — **§2 gains one rule** forbidding a game from depending on the
+  platform's server framework, drafted here as `no-platform-framework-in-games` and shipped as
+  **`no-game-to-colyseus`** (see rev 3).
   [ADR-0001](./0001-v1-stack.md) §4 was decided the other way by the board (approval
   [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), rejected 2026-09-30): Colyseus
   is the server framework. ADR-0001 §4.2 condition 2 forbids a game from depending on it, and
@@ -29,6 +31,17 @@
   (widening, §2.5). Both rule-set changes are decided here rather than deferred because we are
   pre-M2: after M2 the same two changes cost a board approval, and neither is a close call.
   The config work is [PER-139](/PER/issues/PER-139).
+- **Amended:** 2026-09-30 (rev 3) — **naming correction, no decision changes.** Rev 2 drafted the
+  game→framework rule as `no-platform-framework-in-games`. The implementation
+  ([#28](https://github.com/neerajkrbansal1996/playhall/pull/28), `c50da31`) shipped it as
+  **`no-game-to-colyseus`**, and revs 2–2.2 kept citing the drafted name in six places. So this
+  ADR named a rule that does not exist in `.dependency-cruiser.cjs`: a reader checking whether
+  ADR-0001 §4.2 condition 2 is enforced grepped for the name the ADR gave, found nothing, and
+  could reasonably conclude it was unenforced. It is enforced. This rev makes the document
+  describe the rule that is actually running, and §2.2 records **why the vendor-specific name was
+  kept** rather than renaming the code to match the ADR. The rule, its severity, its scope and its
+  fixtures are unchanged — only this document was wrong. Found on
+  [PER-72](/PER/issues/PER-72).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -87,11 +100,11 @@ find it, and concluding the rule was never implemented.
 The gate is **three** tools, not one, and the split is not arbitrary — each owns the half the
 others cannot see:
 
-| Surface                                    | Owns                                                                                                                | Is it the gate?                   |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `.dependency-cruiser.cjs`                  | **Import edges.** Every rule in §2 whose violation is an `import`/`require`/dynamic `import()`.                     | Yes                               |
-| `tools/boundaries/check-declared-deps.mjs` | **Manifest declarations.** `no-illegal-declared-dep`, and the declaration half of `no-platform-framework-in-games`. | Yes — same `pnpm boundaries` job. |
-| `eslint.config.mjs` (`games/**` block)     | Editor-time feedback for the game rules, plus the determinism bans in §4.                                           | No. Advisory mirror.              |
+| Surface                                    | Owns                                                                                                     | Is it the gate?                   |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `.dependency-cruiser.cjs`                  | **Import edges.** Every rule in §2 whose violation is an `import`/`require`/dynamic `import()`.          | Yes                               |
+| `tools/boundaries/check-declared-deps.mjs` | **Manifest declarations.** `no-illegal-declared-dep`, and the declaration half of `no-game-to-colyseus`. | Yes — same `pnpm boundaries` job. |
+| `eslint.config.mjs` (`games/**` block)     | Editor-time feedback for the game rules, plus the determinism bans in §4.                                | No. Advisory mirror.              |
 
 Two consequences that are easy to get wrong, so they are written down:
 
@@ -129,21 +142,47 @@ Two consequences that are easy to get wrong, so they are written down:
 All rules are `severity: error`. Every rule carries a `comment` that states _why_, because the
 CI output is where an engineer meets this rule for the first time.
 
-| Rule name                        | From                                 | To (forbidden)                                                                                                       | Why                                                                                                                            |
-| -------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `no-game-to-platform`            | `^games/`                            | every package under `^packages/` **except** `game-sdk`; `game-testkit` is legal from game **test paths** only (§2.5) | A game talks to the platform **only** through `game-sdk`.                                                                      |
-| `no-game-to-app`                 | `^games/`                            | `^apps/`                                                                                                             | A game may not reach into the web shell or the server.                                                                         |
-| `no-game-to-game`                | `^games/((?:_examples/)?[^/]+)/`     | `^games/` **except** `^games/$1/` (see note)                                                                         | Games are independent plugins. Chess is not a special case.                                                                    |
-| `no-testkit-to-platform`         | `^packages/game-testkit/`            | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/`                                                        | The testkit is reachable from games (§2.5), so it must not be a tunnel to the internals games may not reach. Added in rev 2.2. |
-| `no-platform-to-game`            | `^(packages\|apps)/`                 | `^games/`                                                                                                            | The platform never imports a game. Exception in §3.                                                                            |
-| `no-sdk-to-platform`             | `^packages/game-sdk/`                | `^packages/(platform-core\|netcode\|ui\|game-testkit)`, `^apps/`, `^games/`                                          | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable.              |
-| `no-game-node-builtins`          | `^games/`                            | `core` (`node:*`, `fs`, `net`, `crypto`, …)                                                                          | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                                  |
-| `no-illegal-declared-dep`        | `games/*/package.json`               | any `@playhall/*` except `@playhall/game-sdk`; plus `@playhall/game-testkit` in `devDependencies` **only** (§2.5)    | A declared dependency is as much a violation as an import.                                                                     |
-| `no-platform-framework-in-games` | `^games/` and `games/*/package.json` | `colyseus`, `colyseus.js`, `@colyseus/*`                                                                             | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2.               |
-| `no-circular`                    | any                                  | itself (cycle)                                                                                                       | Cycles make version pinning and incremental build unreliable.                                                                  |
+| Rule name                 | From                                 | To (forbidden)                                                                                                       | Why                                                                                                                                |
+| ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `no-game-to-platform`     | `^games/`                            | every package under `^packages/` **except** `game-sdk`; `game-testkit` is legal from game **test paths** only (§2.5) | A game talks to the platform **only** through `game-sdk`.                                                                          |
+| `no-game-to-app`          | `^games/`                            | `^apps/`                                                                                                             | A game may not reach into the web shell or the server.                                                                             |
+| `no-game-to-game`         | `^games/((?:_examples/)?[^/]+)/`     | `^games/` **except** `^games/$1/` (see note)                                                                         | Games are independent plugins. Chess is not a special case.                                                                        |
+| `no-testkit-to-platform`  | `^packages/game-testkit/`            | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/`                                                        | The testkit is reachable from games (§2.5), so it must not be a tunnel to the internals games may not reach. Added in rev 2.2.     |
+| `no-platform-to-game`     | `^(packages\|apps)/`                 | `^games/`                                                                                                            | The platform never imports a game. Exception in §3.                                                                                |
+| `no-sdk-to-platform`      | `^packages/game-sdk/`                | `^packages/(platform-core\|netcode\|ui\|game-testkit)`, `^apps/`, `^games/`                                          | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable.                  |
+| `no-game-node-builtins`   | `^games/`                            | `core` (`node:*`, `fs`, `net`, `crypto`, …)                                                                          | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                                      |
+| `no-illegal-declared-dep` | `games/*/package.json`               | any `@playhall/*` except `@playhall/game-sdk`; plus `@playhall/game-testkit` in `devDependencies` **only** (§2.5)    | A declared dependency is as much a violation as an import.                                                                         |
+| `no-game-to-colyseus`     | `^games/` and `games/*/package.json` | `colyseus`, `colyseus.js`, `@colyseus/*`                                                                             | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2; renamed in rev 3. |
+| `no-circular`             | any                                  | itself (cycle)                                                                                                       | Cycles make version pinning and incremental build unreliable.                                                                      |
 
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
 is not a boundary violation and failing the build on it trains people to ignore the tool.
+
+**Reconciling this table against the config (rev 3 — normative).** This table is the contract, and
+the contract is allowed to lead the config. But a reader must be able to tell which rows are live
+**without** grepping, because not being able to is the exact defect rev 3 exists to fix. Every
+`severity: error` rule in `.dependency-cruiser.cjs` must appear in exactly one line below, and
+every row above must too. As of rev 3:
+
+- **Live, and in this table** — `no-game-to-platform`, `no-game-to-app`, `no-game-to-game`,
+  `no-platform-to-game`, `no-sdk-to-platform`, `no-game-node-builtins`, `no-game-to-colyseus`,
+  `no-circular` are dependency-cruiser rules. `no-illegal-declared-dep`, and the manifest half of
+  `no-game-to-colyseus`, are in `tools/boundaries/check-declared-deps.mjs` — equally normative
+  (§1).
+- **Live, but decided in another section or ADR** — not defects, listed so the config reconciles:
+  `no-static-game-import-in-registry` is §3's dynamic-import requirement (the rule the prose there
+  describes), and `no-zod-in-pure-settings` belongs to
+  [ADR-0007](./0007-settings-form-descriptor.md) (Consequences), which owns the
+  `settings-form.ts` / `settings.ts` split it enforces.
+  `no-orphans` and `not-to-unresolvable` run at `warn` by design.
+- **Contract-only, not yet in the config** — `no-testkit-to-platform`, and the §2.3 retirement of
+  `no-game-to-shared-internals`, which is still a live `error` rule in `.dependency-cruiser.cjs`
+  even though §2.3 retires it and this table no longer lists it. Both are rev 2.2 decisions whose
+  config work is [PER-139](/PER/issues/PER-139). Until that lands, "all rules are
+  `severity: error`" above describes the **contract**, not the current config.
+
+A rule added to either side without a line here is the drift rev 3 had to come back and correct.
+**Name the state when you add the rule.**
 
 #### 2.1 Every target above is matched three ways, not one (rev 2.2 — normative)
 
@@ -184,14 +223,14 @@ Two obligations follow:
 code here; it states the requirement so the next rule written against this ADR is not written
 path-only, shipped green, and believed.
 
-#### 2.2 Note on `no-platform-framework-in-games` (rev 2)
+#### 2.2 Note on `no-game-to-colyseus` (rev 2, renamed rev 3)
 
 This is the only rule here that names a third-party package, and that asymmetry is deliberate
 rather than an oversight to be tidied up later. `no-illegal-declared-dep` denylists `@playhall/*`, so it catches a game reaching for
 _our_ internals and misses a game reaching for the framework _underneath_ them. Once ADR-0001 §4
 put Colyseus in the tree as the server framework, `pnpm add colyseus` inside `games/chess` became
 a change that fails nothing — an import boundary a reviewer has to remember, which is exactly
-what this ADR exists to eliminate. Two properties keep it honest:
+what this ADR exists to eliminate. These properties keep it honest:
 
 - **It denylists, it does not allowlist.** Games may use any third-party library they like; the
   list names only packages whose presence in a game would mean the game had become coupled to a
@@ -208,6 +247,18 @@ what this ADR exists to eliminate. Two properties keep it honest:
   only as a `not-to-unresolvable` **warning**. The lesson generalises past Colyseus: when this
   list gains an entry, enumerate the package's **published names**, not the one the ADR happened
   to be arguing about.
+- **The name is vendor-specific on purpose (rev 3).** `no-game-to-colyseus` reads worse as a
+  _principle_ than the drafted `no-platform-framework-in-games`, and rev 3 kept the vendor name
+  anyway rather than renaming the config to match this ADR. Three reasons. The pattern **is**
+  vendor-specific — it matches `colyseus`, `colyseus.js` and `@colyseus/*` and nothing else — and
+  a generic name over a specific pattern is precisely the failure mode where a reader assumes
+  coverage the regex does not have. It matches the `no-<from>-to-<to>` convention every other rule
+  in §2 follows. And it is the **reversible** direction: the rule is `severity: error`, green on
+  `main`, and named by four fixture headers and the test harness's expectation map, so renaming
+  the document costs a diff while renaming the gate risks a silent hole. **When a second platform
+  framework appears, add a second sibling rule** — `no-game-to-<framework>` — rather than widening
+  this one behind a generic name; the ADR amendment that admits the framework is where that
+  decision belongs.
 
 The behavioural half of the same condition lives in the testkit: a game module must pass
 `packages/game-testkit` conformance with Colyseus **absent from the dependency tree**
@@ -430,7 +481,7 @@ breaks the build is not acceptable. The committed form is:
   it proves the _right_ rule fired, not merely that something failed.
 - One fixture per rule in §2. A rule with no fixture is a rule we have not proven works.
 
-**Rev 2: one fixture per _violation path_, not per rule.** `no-platform-framework-in-games` is
+**Rev 2: one fixture per _violation path_, not per rule.** `no-game-to-colyseus` is
 the first rule where "one fixture per rule" is not enough, because the same rule is enforced
 through several code paths and a fixture only proves the path it exercises. All four are
 required:
@@ -438,15 +489,18 @@ required:
 1. **Declared** in a game's `package.json` — caught by `check-declared-deps.mjs`, not by
    dependency-cruiser, which sees no edge until something imports it. This is the half that is
    easiest to write by accident (`pnpm add colyseus`), so it is the half least acceptable to
-   leave unproven.
+   leave unproven. → `no-game-to-colyseus-declared.fixture`
 2. **Imported and resolving** — the installed case, where the module's path in the graph is
-   `node_modules/…`.
+   `node_modules/…`. → `no-game-to-colyseus.fixture`
 3. **Imported but unresolved** — the same import written before `pnpm install`, where
    dependency-cruiser keeps the bare specifier as the path. A pattern matching only form 2 is
    green here, which is the worst failure mode a gate has: silent on the state an author is in
-   while writing the violation.
+   while writing the violation. → `no-game-to-colyseus-unresolved.fixture`
 4. **The browser client**, `colyseus.js` — the spelling that matches neither `^colyseus$` nor
-   `@colyseus/*`. See the rev-2 note in §2.
+   `@colyseus/*`. See the rev-2 note in §2. → `no-game-to-colyseus-client.fixture`
+
+All four live in `tools/boundary-fixtures/` (rev 3 records the filenames so each form above is
+greppable against the committed proof rather than taken on trust).
 
 The generalisation: a fixture proves one path through one rule. Where a rule is enforced in more
 than one tool, or over more than one package name, or against more than one resolution state,
@@ -541,7 +595,7 @@ supported or not.
   for an SDK ADR; the carve-out is for the conformance contract, not for test convenience.
 - **A rule in §2 is proposed with a path-only target** (rev 2.2, §2.1) → reject it in review. It
   is green on the violation it exists to catch.
-- **A game has a genuine need for something in `no-platform-framework-in-games`** → the answer is
+- **A game has a genuine need for something in `no-game-to-colyseus`** → the answer is
   not to allowlist it. Either the capability is general, in which case it belongs in
   `game-sdk` behind our own type (**generality test**), or it is specific, in which case the game
   finds another way. ADR-0001 §4.2 condition 2 is the constraint being enforced; relaxing the
