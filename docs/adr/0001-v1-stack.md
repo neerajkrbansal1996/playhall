@@ -339,8 +339,12 @@ repo-wide; it belongs in a block narrowly scoped by `files:` to the room source,
 `colyseusEgress()` module itself in that block's `ignores`. It also cannot simply be appended to
 the determinism block: that block is
 `files: ['packages/**/src/**/*.{ts,tsx}', 'games/**/src/**/*.{ts,tsx}']` and its own comment says
-apps are exempt. On `main` (`eef6975`) **no `rules` block covers `apps/realtime` at all** —
-`apps/realtime/**/*.ts` appears only in a `languageOptions.globals` block. Measured against the
+apps are exempt. On `main` (`eef6975`) **no `files:`-scoped `rules` block targets `apps/realtime`
+at all** — the single config entry naming `apps/realtime/**/*.ts` sets `languageOptions.globals`
+and carries no `rules` key, so there is no existing scoped block to extend. (Unscoped entries —
+`js.configs.recommended`, `tseslint.configs.recommended`, and the repo-wide `no-unused-vars` /
+`consistent-type-imports` block — do reach room files; what is missing is any _scoped_ block, and
+the determinism block in particular excludes them.) Measured against the
 same fixture placed at `apps/realtime/src/room.ts`: the ban inside the determinism block's
 `files:` catches **0 of 4** and lint passes; the same ban in a block scoped
 `files: ['apps/realtime/src/**/*.ts']` catches **4 of 4**. A layer-3 ban added "to the same
