@@ -79,8 +79,23 @@ export { clearTimer, pauseTimer, resumeTimer, setTimer } from './timers.js'
 export type { Viewer } from './viewer.js'
 export { REPLAY, SPECTATOR, seatViewer, viewerSeatId } from './viewer.js'
 
-export type { MatchResult, ResultReason, SeatOutcome, Standing } from './result.js'
-export { RESULT_REASONS, drawStandings, standingsFromWinners } from './result.js'
+export type {
+  MatchResult,
+  MatchResultProblem,
+  ResultReason,
+  SeatOutcome,
+  Standing,
+  UnrecordedResultReason,
+} from './result.js'
+export {
+  RESULT_REASONS,
+  UNRECORDED_RESULT_REASONS,
+  drawStandings,
+  isRecordedResult,
+  standingsFromWinners,
+  unrecordedStandings,
+  validateMatchResult,
+} from './result.js'
 
 export type { DisconnectAction, DisconnectPolicy, DisconnectReason } from './disconnect.js'
 export { DEFAULT_DISCONNECT_POLICY } from './disconnect.js'
@@ -114,30 +129,31 @@ export {
   validateManifest,
 } from './manifest.js'
 
+// The settings surface is split across two modules so a browser can reach the
+// pure readers without the validator. Both halves are re-exported here, so the
+// barrel is unchanged for everyone who does not care — see
+// `settings-form.ts` for why the line is where it is.
 export type {
   FieldVisibility,
   GameSettingsShape,
   NumberField,
   SelectField,
   SelectOption,
-  SettingsContract,
   SettingsField,
   SettingsFieldKind,
   SettingsFormDescriptor,
-  SettingsFormIssue,
-  SettingsFormIssueCode,
   SettingsValue,
   ToggleField,
-} from './settings.js'
+} from './settings-form.js'
 export {
   SETTINGS_FORM_VERSION,
   canonicalSettingsKey,
-  checkSettingsForm,
   isFieldVisible,
-  settingsFieldSchema,
-  settingsFormDescriptorSchema,
   visibleFields,
-} from './settings.js'
+} from './settings-form.js'
+
+export type { SettingsContract, SettingsFormIssue, SettingsFormIssueCode } from './settings.js'
+export { checkSettingsForm, settingsFieldSchema, settingsFormDescriptorSchema } from './settings.js'
 
 export type { Semver, VersionPin, VersionPinFailure } from './versioning.js'
 export {

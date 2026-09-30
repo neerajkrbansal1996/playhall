@@ -244,6 +244,14 @@ proves the two agree.
 - **Cost to reverse:** **cheap** for a game (the descriptor is data — chess's `settingsForm`
   re-shapes in one file with no logic change), **moderate** for the platform (the renderer and
   the checker are the only consumers).
+- **Packaging: the pure half is its own module.** `isFieldVisible`, `visibleFields` and
+  `canonicalSettingsKey` live in `src/settings-form.ts`, which imports no zod; the schemas stay in
+  `src/settings.ts` and import their types from it. `@playhall/game-sdk` is marked
+  `sideEffects: false` and exports `./settings-form`, so a client renders a form — visibility rules
+  included — without the validator in its graph (79.6 kB raw removed from the create-lobby chunk,
+  PER-115). `.` still re-exports all three, so server-side callers are unaffected. The
+  `no-zod-in-pure-settings` boundary rule keeps the split honest, because nothing else would fail if
+  it were reversed.
 
 ## Revisit triggers
 

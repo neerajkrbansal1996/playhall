@@ -19,7 +19,7 @@ See [ADR-0003](adr/0003-hosting-and-cost-model.md) §13 and §13.7, and
 
 | Workflow                        | Trigger                                                   | What it does                                                                            |
 | ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | The nine gates plus the `ci-gate` aggregate.                                            |
+| `.github/workflows/ci.yml`      | every PR, merge queue, manual, called by `main`/`release` | Every gate in [The gates](#the-gates), plus the `ci-gate` aggregate.                    |
 | `.github/workflows/preview.yml` | PR opened / pushed / reopened                             | Preview deploy per target, health-probed, URL posted on the PR.                         |
 | `.github/workflows/main.yml`    | push to `main`                                            | Re-runs the gates, audits for a direct push, then deploys to **staging**.               |
 | `.github/workflows/release.yml` | push of a `v*` tag, manual                                | Asserts a tag, re-runs the gates, audits the tagged commit, then deploys to production. |
@@ -95,12 +95,41 @@ real release. A tag is never exempt, whatever the event. This scope is
 (rev 3); Decision 2's older "push to `main`" wording is corrected there rather than left to be
 read as the scope.
 
-**What this audit does and does not prove.** It asks GitHub `commits/{sha}/pulls` and passes if
-any associated PR is merged — so it proves the commit _belongs to_ a merged PR, not that it
-_arrived on `main` by merging_ one. With squash-merge those differ for every commit that sat on a
-merged PR's head branch and was squashed away, so do not cite `push-audit` as proof that
-everything on `main` was reviewed. Measured and bounded in ADR-0004 rev 3, "The residual weakness";
-the hardening is [PER-130](/PER/issues/PER-130), Platform Engineer.
+### What the audit asserts: arrival, not PR membership
+
+The predicate is that the audited commit **arrived via** a merged PR — it is that PR's
+`merge_commit_sha`, or an ancestor of it. That is deliberately narrower than the obvious
+reading of `GET commits/{sha}/pulls`, and the difference is not academic
+([PER-130](/PER/issues/PER-130)). A commit that sat on a merged PR's head branch keeps its
+association with that PR forever, including when a squash-merge discarded it — so
+"associated with a merged PR" does not mean "was ever merged". Measured against the live API
+on 2026-09-30:
+
+| commit    | what it is                             | `merge_commit_sha` | `compare` | ancestor of `main`? | verdict |
+| --------- | -------------------------------------- | ------------------ | --------- | ------------------- | ------- |
+| `45aa812` | the squash commit of PR #43            | `45aa812`          | identical | yes                 | pass    |
+| `d79f02e` | head of PR #43 **before** its squash   | `45aa812`          | diverged  | **no**              | fail    |
+| `ee460b0` | head of PR #56, merged as merge commit | `1452723`          | ahead     | yes                 | pass    |
+
+`d79f02e` is the case the loose predicate got wrong: not on `main`, reported as landed.
+
+The comparison, rather than `merge_commit_sha === GITHUB_SHA`, is load-bearing. The repo
+allows squash, merge-commit **and** rebase merges, and under either of the latter two a PR
+puts several commits on `main` while only the tip equals `merge_commit_sha` — `ee460b0` above
+is a real commit on `main` that bare equality would fail. A detector that cries wolf gets
+ignored, which is the failure mode ADR-0004 exists to avoid, so the audit tolerates all three
+merge methods instead of requiring a repo-settings change to squash-only.
+
+**What it still does not prove.** That the PR was _reviewed_. There is no GitHub review
+record to check (one account, see below), so the audit proves the change went through a pull
+request, not that anyone approved it. The Paperclip issue thread is the review trail, and
+`pr-hygiene` is what makes the link to it mandatory.
+
+A **force-push to `main`** is reported separately and always fails, even when the arrival
+check passes: the `push` payload's `forced`/`before` say that whatever was on `main` before
+is gone, which no PR records. If the payload cannot be read the audit warns rather than
+failing — the arrival predicate independently catches the same residual path, so failing
+there would trade a real detection for a false one.
 
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
@@ -113,18 +142,19 @@ issue. `pr-hygiene` and `workflows` call their script directly instead: both are
 checks over files already on disk, so they skip `./.github/actions/setup` and still report
 when an install would not succeed.
 
-| Gate          | Runs                              | Status                                                                                                 |
-| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                         |
-| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                        |
-| `lint`        | `pnpm lint`                       | Live.                                                                                                  |
-| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                                  |
-| `boundaries`  | `pnpm boundaries`                 | Live since [PER-5](/PER/issues/PER-5) landed. [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                       | Live.                                                                                                  |
-| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                            |
-| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                            |
-| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                                  |
-| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                      |
+| Gate          | Runs                              | Status                                                                                                  |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                          |
+| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: `actionlint` plus the reusable-caller check. No install, no token.                        |
+| `lint`        | `pnpm lint`                       | Live.                                                                                                   |
+| `format`      | `pnpm format:check`               | Live. Fix a failure with `pnpm format`; it needs no thought, which is why it is not folded into `lint`. |
+| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                                   |
+| `boundaries`  | `pnpm boundaries`                 | Live since [PER-5](/PER/issues/PER-5) landed. [ADR-0002](adr/0002-dependency-boundary-enforcement.md).  |
+| `unit`        | `pnpm test`                       | Live.                                                                                                   |
+| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                             |
+| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                             |
+| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                                   |
+| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                       |
 
 A pending gate logs a `::notice` naming its owner and **passes**. This is deliberate: a
 workflow calling a script that does not exist fails with `ERR_PNPM_NO_SCRIPT`, which is
@@ -144,6 +174,21 @@ with owner `unassigned` and leaving `ci-gate` green while lint no longer runs.
 A gate name that is not in the registry exits `2`. That check uses `Object.hasOwn`, not a
 plain lookup — `gate.mjs constructor` would otherwise resolve up the prototype chain,
 read an undefined `script`, land in the PENDING branch and pass as "owner: unassigned".
+
+### What proves the gate runner itself
+
+`tools/ci-gate` is the gate runner's own test suite, and it runs under `unit`. Every branch
+above is asserted against a scratch repo root: PENDING passes and names its owner, PENDING
+under `CI_STRICT_GATES=1` fails, a live gate with a missing script fails in both modes, an
+unknown or prototype-chain gate name exits `2`, and a live gate's exit code is propagated.
+So the strict switch is proven **before** it is flipped rather than by the first red
+pipeline. It also checks statically that every registry gate has a job in `ci.yml` and sits
+in `ci-gate`'s `needs` — a registry entry with no job never runs, and a job missing from
+`needs` cannot fail the one required check.
+
+The same suite proves the `format` gate fails closed: `prettier --check` with this repo's
+config rejects a misformatted file and accepts the formatted equivalent. That belongs in a
+test rather than in a deliberately-red PR, which is only true of the run it happened on.
 
 ### Why `coverage` is its own gate
 
@@ -176,13 +221,13 @@ never matches would stop gating while the required check stayed green.
 Per ADR-0004, `main` is unprotected through M0–M4 and that is an accepted risk, not an
 open problem. The gate moved from **prevention** to **detection**:
 
-| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                   |
-| ------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                     |
-| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                 |
-| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                       |
-| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit is not reachable from a merged PR. `main` turns red within a minute and the commit list records it forever. |
-| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                       |
+| Rule ([PER-2](/PER/issues/PER-2) §12) | Enforced?                        | By what                                                                                                                                                                                                                                                                          |
+| ------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linked Paperclip issue in the PR body | **Yes**                          | `pr-hygiene`. ADR-0004 §Decision 4 — with no GitHub review record, the issue thread _is_ the audit trail, so a missing link is a review defect, not a formatting nit.                                                                                                            |
+| Conventional PR title                 | **Yes**                          | `pr-hygiene`. A squash-merge takes the commit subject from the PR title, so commitlint cannot catch it and the CHANGELOG breaks silently.                                                                                                                                        |
+| Green CI                              | Observable, not required         | `ci.yml` on every PR. Merging red is a visible choice rather than an invisible one.                                                                                                                                                                                              |
+| No direct push to `main`              | **Detected, not prevented**      | `push-audit`, in **both** `main.yml` and `release.yml`. Fails when the commit did not _arrive via_ a merged PR (not merely belong to one), and on a force-push to `main`. It does **not** prove review. `main` turns red within a minute and the commit list records it forever. |
+| CTO review                            | **No** — Paperclip workflow only | Not fixable at any plan. See below.                                                                                                                                                                                                                                              |
 
 The linked-issue check has to be able to _fail_, which took two attempts. The first version
 matched any `\b[A-Z]+-\d+\b` anywhere in the body, so the unedited template satisfied it
@@ -336,13 +381,12 @@ so every gate here executes and ADR-0004's push detector can fire.
 **Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
-not a verdict. **Five of the nine gates that existed at measurement time were PENDING stubs** —
-four of ten are today, because `boundaries` went live when PER-5 landed the root script.
-`integration` boots Redis and Postgres service containers with no tests in them, and there is no
-build caching. Re-measure when M1 closes before concluding Turborepo is unnecessary — and note the
-measurement predates the `coverage` job, so it is a nine-job number for a ten-job pipeline. The
-floor rises as each pending gate acquires real work; do not quote this number as the pipeline's
-steady-state cost.
+not a verdict. **Four of the eleven gates are PENDING stubs** — `coverage`, `testkit`,
+`integration` and `e2e` — `integration` boots Redis and Postgres service containers with no tests
+in them, and there is no build caching. Re-measure when M1 closes before concluding Turborepo is
+unnecessary — and note the measurement predates the `coverage` job, so it is a nine-job number for
+a ten-job pipeline. The floor rises as each pending gate acquires real work; do not quote this
+number as the pipeline's steady-state cost.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 
@@ -365,15 +409,6 @@ on both services.
 
 ## Things deliberately not done
 
-- **`prettier --check` is not a CI gate.** PER-6 lists lint, typecheck, boundaries, unit,
-  testkit, integration and E2E; formatting is not among them. The figure previously given
-  here — "~24 unformatted files" — is stale: measured at this head, `prettier --check .`
-  reports **two**, `docs/adr/0004-pr-gate-without-branch-protection.md` and
-  `docs/adr/README.md`. So the "large mechanical diff" argument is mostly spent, and what is
-  left is one registry line, one job, and two documents to reformat.
-  [PER-98](/PER/issues/PER-98) owns it and must re-measure immediately before landing —
-  "clean" is a property of a head, not of the repo, and this number moves every time a
-  document lands.
 - **No `CODEOWNERS`.** Rejected by ADR-0004, and the reasoning is right: without branch
   protection it enforces nothing, and a file that looks like a control but is not one is
   worse than no file, because it invites the belief that the gate exists.
@@ -384,6 +419,9 @@ on both services.
   `@v4` is a third party that can change what runs in CI after review.
 - **Secret scanning / CodeQL are not configured.** Both are worth having; neither is in
   this issue's scope.
-- **`actionlint` is not yet a CI step.** It was used to verify these workflows (1.7.12,
-  zero findings across all 7 files) and is worth wiring in, but it needs a binary download
-  and there is no point adding it while Actions cannot run — [PER-55](/PER/issues/PER-55).
+- **`actionlint` does not cover `ci.yml` on a pull request.** It now runs inside the
+  `workflows` job (1.7.12, pinned by version and SHA-256), but it has one blind spot that
+  cannot be closed from inside the workflow: GitHub parses the head ref's workflow files
+  _before_ it builds the run, so a syntax error in `ci.yml` itself is a `startup_failure`
+  and this job never starts to report it. It still covers the other workflow files on every
+  PR, and covers `ci.yml` on `workflow_dispatch`.
