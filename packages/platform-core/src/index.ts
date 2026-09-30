@@ -11,6 +11,8 @@
 import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '@playhall/shared'
 import { ROOM_CODE_SPACE } from './rooms/code.js'
 
+export * from './identity/index.js'
+
 export const PLATFORM_CORE_VERSION = '0.0.0'
 
 export function platformBuildInfo(): { platformCore: string; roomCodeSpace: number } {
