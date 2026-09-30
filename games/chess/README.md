@@ -52,13 +52,10 @@ standings** — the match is not recorded.
 ## The SDK boundary
 
 `src/sdk/contract.ts` is the module's single point of contact with `@playhall/game-sdk`: every
-SDK type the rules use is re-exported from there rather than imported across a dozen files,
-so an SDK contract change has a one-file blast radius and a reach outside the contract is
-visible in one place.
-
-`src/sdk/settings-contract.ts` is still a local shim — the settings **form descriptor**
-(how the platform renders a create-lobby form from a game's schema) is not in the SDK yet.
-Its header comment is the ADR request.
+SDK type chess uses — the rules types and the settings **form descriptor** (how the platform
+renders a create-lobby form from a game's schema, ADR-0007) — is re-exported from there rather
+than imported across a dozen files, so an SDK contract change has a one-file blast radius and a
+reach outside the contract is visible in one place.
 
 This package imports from `@playhall/game-sdk`, `chess.js`, `zod`, and itself. Nothing else —
 no platform internals, no other game.
