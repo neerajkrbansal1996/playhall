@@ -68,8 +68,12 @@ export type ValidationResult<TCode extends string = StandardActionErrorCode> =
 /**
  * The single shared "this action is legal" value.
  *
- * Typed as the bare success branch rather than `ValidationResult<string>` so
- * that returning it does not widen a game's own error-code union to `string`.
+ * Typed as the success arm rather than as `ValidationResult<string>`: the union
+ * carries `ActionError<TCode>` in its error arm, so a `ValidationResult<string>`
+ * is not assignable to a `ValidationResult<StandardActionErrorCode>` and every
+ * game returning `VALID` from a strictly-typed `validateAction` failed to
+ * compile. The success arm has no `TCode` in it, so this widens cleanly to every
+ * instantiation. Runtime value is unchanged.
  */
 export const VALID: { readonly ok: true } = Object.freeze({ ok: true })
 
