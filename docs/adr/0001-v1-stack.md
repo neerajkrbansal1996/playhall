@@ -1,6 +1,6 @@
 # ADR-0001: The v1 stack
 
-- **Status:** Accepted, **except §4.4 (real-time server framework) which is Board-gated**
+- **Status:** Accepted
 - **Date:** 2026-09-30
 - **Amended:** 2026-09-30 (rev 2) — board resolved the budget, the data-store tier, the
   repository and the product name. See [Board decisions](#board-decisions-applied-rev-2).
@@ -9,6 +9,16 @@
   `brand.ts` and left a fail-open default that could ship the codename to a player. Resolved in
   §10. The repository decision's knock-on effect on the PR gate is
   [ADR-0004](./0004-pr-gate-without-branch-protection.md).
+- **Amended:** 2026-09-30 (rev 4) — **§4 only, and it is a reversal.** The board decided §4.4 and
+  **declined the CTO's amendment** (approval
+  [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), rejected 2026-09-30, no
+  decision note). **Colyseus is the server framework, for turn-based and real-time both** —
+  Option B on rev 1's own table. §4 is rewritten to record that: the decision in §4.1, **four
+  binding conditions** in §4.2, and the losing case kept verbatim in §4.3 because it names the
+  failure modes this choice now has to be defended against. The conditions are enforced
+  mechanically by a new ADR-0002 rule, not by memory. **No decision in this ADR carries the
+  `Board-gated` status any more** — the hosting provider noted in Context was never a decision in
+  this ADR and remains [PER-38](/PER/issues/PER-38).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -107,27 +117,77 @@ registry that uses dynamic `import()`. See ADR-0002 §3 for the enforced form of
 
 ### 4. `apps/realtime` — server framework
 
-This is the decision the board asked to be confirmed or amended. The proposal on the table
-was Colyseus for both kinds of game. **I am recommending we amend it.**
+**Decision (rev 4): Colyseus, for turn-based and real-time both, subject to the four binding
+conditions in §4.2.**
 
-#### 4.1 Decision for M1–M5 (turn-based, the milestones we are actually building)
+Rev 1 recorded the opposite recommendation. The proposal in the agreed stack was Colyseus for
+both kinds of game; I recommended amending it to an in-house room runner, escalated that on
+[PER-2](/PER/issues/PER-2) as a change to a major tech choice, and the board **considered the
+recommendation and declined it** on 2026-09-30 (approval
+[15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df)). Colyseus therefore stands. This
+is Option B on rev 1's own table in this section, and rev 1 priced it: _expensive_ to reverse.
 
-`apps/realtime` is a **thin Node service that hosts our own room runner**, with:
+The reasoning that lost is **not deleted** — it is §4.3, verbatim. It is the most useful part of
+this section now, because each of those four bullets names a specific way this choice can go
+wrong, and three of them map one-to-one onto a condition in §4.2: redaction completeness →
+condition 1, plugin boundary → condition 2, determinism → condition 3. The fourth,
+**reversibility**, cannot be reduced to a condition on a pull request — it is answered structurally
+by keeping `RoomRunner` as the seam (§4.1), which is what stops the engine choice from spreading
+into the lobby. Condition 4 covers the related but distinct risk that a deploy breaks a live match.
+A decision record that quietly rewrites itself to agree with the outcome is worth nothing in six
+months.
 
-- `ws` as the WebSocket server, behind a **transport adapter** in `packages/netcode` so
-  WebTransport or WebRTC data channels can be added later without touching game or platform
-  code.
-- A **`Codec` interface** in `packages/netcode` from day one. v1 ships a JSON codec; the
-  interface exists so a binary codec is a swap, not a migration. **No message type may be
-  defined in a way that assumes JSON** — no bare `any`, no unbounded string maps, every
+#### 4.1 What we adopt
+
+- `apps/realtime` is a **Colyseus server**. A Colyseus room hosts a platform room.
+- Colyseus is a **platform-internal dependency**. It is declared in `apps/realtime` and
+  `packages/platform-core` only. It appears in **no** `games/*` package — not as an import, not
+  in a `package.json` — and **no public type in `packages/game-sdk` is Colyseus-shaped**.
+  Enforced, not trusted: see §4.4.
+- **`RoomRunner` / `RoomDriver` in `packages/platform-core` stay**, exactly as
+  [ADR-0005](./0005-the-real-time-path.md) §1 specifies them, with Colyseus as the host
+  underneath. This is what keeps the choice bounded: the lobby, seats, invites, chat, results and
+  reconnection sit above that interface and never learn what is hosting them, so replacing the
+  engine later is a swap behind an interface rather than a rewrite of the platform. ADR-0005 §1
+  and §2 need no change for this reversal — that is the seam earning its keep on its first test.
+- **The transport adapter and the `Codec` interface in `packages/netcode` stay.** Colyseus owns
+  its own wire for its own framework traffic; the `Codec` seam governs **our** payloads — the
+  redacted views and snapshots we send as explicit messages — so the JSON-to-binary swap that §7
+  requires for M6 is still ours to make and does not wait on the framework. **No message type may
+  be defined in a way that assumes JSON** — no bare `any`, no unbounded string maps, every
   message versioned.
-- The room runner, seat model, timer service and match log in `packages/platform-core`,
-  driving games purely through the `packages/game-sdk` contract.
+- The seat model, timer service and match log stay in `packages/platform-core`, driving games
+  purely through the `packages/game-sdk` contract. None of that moves into a Colyseus room class.
 
-#### 4.2 Why not Colyseus as the platform framework
+#### 4.2 Four binding conditions on its use
+
+These are **conditions, not preferences**. A pull request that breaks one does not merge.
+
+1. **Colyseus state sync is not the redaction path.** Game state lives in plain objects owned by
+   the SDK contract, not in `@colyseus/schema` classes. Every byte a client receives is the
+   return value of `getViewFor` / `getSnapshotFor`, sent as an explicit message. Using
+   `this.state` + `@filter()` for game state requires a **new ADR** that demonstrates visibility
+   is opt-in rather than opt-out. _(Redaction completeness)_
+2. **No game imports the framework.** A game module must run in `packages/game-testkit` with
+   Colyseus **absent from the dependency tree**. That is the test — not a reviewer's opinion —
+   and [PER-17](/PER/issues/PER-17) owns it. _(Plugin boundary)_
+3. **Time and randomness stay ours.** `ctx.now` and `ctx.rng` come from the platform with the
+   seed stored on the match — never `room.clock`, never `Math.random()`. The Colyseus room calls
+   into the SDK; the room object is not the game. _(Determinism)_
+4. **A match in progress stays on the module version it started on.** Room re-creation on deploy
+   restores from `(seed, module version, ordered action log, last snapshot)` per §6.1 — never from
+   framework state. _(Version pinning / blast radius)_
+
+#### 4.3 The case against, kept on the record
+
+The board weighed the four objections below against the cost of building and testing a room
+runner in M1, and chose to **carry** them as the conditions in §4.2 rather than avoid them. They
+are reproduced unchanged from rev 1, so a future reader can see what was traded and check whether
+the conditions actually held.
 
 Colyseus is a good product and solves real problems — rooms, matchmaking, delta-encoded
-binary state sync, multi-process allocation. It lost on four of our lenses:
+binary state sync, multi-process allocation. It lost, in rev 1's assessment, on four of our
+lenses:
 
 - **Redaction completeness.** Our contract requires that _every byte_ leaving the server
   passes through `getViewFor` / `getSnapshotFor`. Colyseus's model is "mutate `this.state`,
@@ -151,40 +211,46 @@ binary state sync, multi-process allocation. It lost on four of our lenses:
   The mandated package layout already implies the platform owns the room runner; adopting
   Colyseus would leave those two packages as thin wrappers or dead weight.
 
-#### 4.3 Where Colyseus stays a live candidate
+#### 4.4 How the conditions are enforced
 
-Not adopting it now is not rejecting it. Colyseus remains a **first-class candidate for the
-M6 real-time game-server fleet**, evaluated against a hand-rolled runner in the M4 real-time
-spike ([PER-30](/PER/issues/PER-30)) and decided in the real-time ADR
-([PER-21](/PER/issues/PER-21)). The transport adapter and `Codec` seam in §4.1 are precisely
-what keep that option open: a real-time fleet can run a different engine from the
-turn-based service without the lobby, seats, invites or results knowing.
+Conditions that live only in a decision record are not conditions.
 
-#### 4.4 What the board must decide — **board-gated**
+- **ADR-0002 gains a third-party denylist rule for `games/*`** —
+  `no-platform-framework-in-games`, covering both imports and declared `package.json`
+  dependencies. Without it, `pnpm add colyseus` inside `games/chess` fails **nothing** today: the
+  existing `no-illegal-declared-dep` rule denylists `@playhall/*` internals only, never a
+  third-party framework. This gap is why rev 4 is an ADR-0002 change and not just an ADR-0001
+  status flip. Owner: [PER-5](/PER/issues/PER-5). This is condition 2's mechanical half.
+- **Testkit conformance runs with no Colyseus in its dependency tree**
+  ([PER-17](/PER/issues/PER-17)). Condition 2's behavioural half — the boundary rule catches the
+  declaration, the testkit catches the reach.
+- **CTO review checks condition 1 on every PR that touches room state.** Judgement is the only
+  thing that catches "state moved into `this.state` because it was convenient"; there is no
+  linter for it. That is precisely why condition 1 escalates to a **new ADR** rather than to a
+  reviewer's discretion.
 
-Colyseus was named in the agreed stack. Dropping it from M1–M5 is a **change to a major tech
-choice**, which I may not make unilaterally. Recorded here as a recommendation and escalated
-on [PER-2](/PER/issues/PER-2).
+#### 4.5 What would make us revisit
 
-The recommendation, stated as the board's actual choice:
+- **Any hidden-information leak traced to framework state sync.** This **reverses** the decision;
+  it does not get patched. §4.3's first bullet predicts exactly that failure, so observing it is
+  not new information — it is confirmation, and the answer is the room runner.
+- Colyseus tick cost above the M6 budget (< 5 ms p99 for a 12-player room), measured in the M4
+  real-time spike ([PER-30](/PER/issues/PER-30)) against ADR-0005 §1.3's decomposition.
+- `colyseus` or `@colyseus/schema` appearing in a `games/*` package, or any Colyseus type
+  reaching the public API of `packages/game-sdk`.
+- A Colyseus major version that changes the state-sync default or the `@filter()` model.
 
-| Option                                        | Cost to reverse | Risk carried                                                                                    |
-| --------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
-| **A. Our room runner now** _(recommended)_    | Moderate        | We write and test a room runner. Real-time engine choice deferred to M4/M6 with better data.    |
-| B. Colyseus now for turn-based too            | Expensive       | Opt-in redaction, framework types in games, determinism friction. Saves room-runner work in M1. |
-| C. Colyseus for real-time only, ours for turn | Moderate        | Effectively A plus a pre-commitment to Colyseus for M6 made before the M4 spike has any data.   |
+> **Measurement owed, and a warning against over-reading this.** What the decision saves is the
+> transport and broadcast layer inside [PER-15](/PER/issues/PER-15) — **not**
+> [PER-14](/PER/issues/PER-14), [PER-15](/PER/issues/PER-15) and [PER-17](/PER/issues/PER-17) in
+> whole. The `RoomRunner` interface, the match log and the timer service are needed under any
+> engine, because a lobby that is not tied to one kind of game needs them either way. Nobody
+> should plan M1 on the assumption that §4 deleted those issues.
 
-> **Measurement owed.** Option A's cost is real work, and I am not going to claim a number I
-> have not measured. The honest figure is: the room runner, match log and timer service are
-> already scoped as [PER-14](/PER/issues/PER-14), [PER-15](/PER/issues/PER-15) and
-> [PER-17](/PER/issues/PER-17) regardless of this choice, because a lobby that is not tied to
-> one kind of game needs them either way. What Option B would save is the transport and
-> broadcast layer inside [PER-15](/PER/issues/PER-15), not those issues entirely.
-
-**Until the board answers, M1 work proceeds on the parts that are identical under all three
-options**: the SDK contract, guest identity, rooms/codes/registry, seats, and the timer
-service. None of those change based on this answer. Only
-[PER-15](/PER/issues/PER-15)'s transport layer waits.
+**[PER-15](/PER/issues/PER-15) is unblocked by this decision** and builds its transport layer
+Colyseus-hosted, with the four conditions in §4.2 as acceptance criteria. Everything else in M1 —
+the SDK contract, guest identity, rooms/codes/registry, seats, the timer service — was identical
+under all three options and was never waiting on it.
 
 ### 5. Postgres access layer: Drizzle
 
@@ -413,6 +479,12 @@ codec arrives without a protocol migration. Candidate binary formats to be evalu
 [PER-21](/PER/issues/PER-21): msgpackr, FlatBuffers, `@colyseus/schema`, and a hand-rolled
 `DataView` encoder.
 
+> **Rev 4 note.** §4 now puts Colyseus in the tree, so `@colyseus/schema` is present as a
+> transitive dependency and is therefore _easier to reach for_. That does not make it legal for
+> game state: §4.2 condition 1 stands, and [ADR-0005](./0005-the-real-time-path.md) §4.4 has
+> already rejected it for the snapshot codec on the same grounds. Availability is not permission,
+> and this is the single most likely way condition 1 gets broken by accident.
+
 **Version pinning.** A match in progress stays on the game module version it started on. A
 deploy must never break a live game. The match record stores the module version and the
 seed; `migrateState` exists for the case where we must move a live match forward. This
@@ -544,8 +616,11 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 
 **Harder**
 
-- We write and test our own room runner instead of adopting one. This is real work and the
-  main cost of the §4 recommendation.
+- ~~We write and test our own room runner instead of adopting one.~~ **Retired in rev 4** — the
+  board declined that amendment. The cost moved, it did not disappear: instead of room-runner
+  work we carry the four §4.3 risks as the §4.2 conditions, and **every PR that touches room
+  state is now a redaction review**. A framework whose safe path is opt-in makes the reviewer,
+  not the compiler, the thing standing between us and a hidden-information leak.
 - Drizzle makes deep relational reads more verbose than Prisma would.
 - Every shadcn/ui component we paste is ours to make accessible.
 
@@ -554,6 +629,10 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 - Deterministic game modules. No `Date.now()`, no `Math.random()`, no I/O — mechanically
   enforced (ADR-0002 §4).
 - `getViewFor` / `getSnapshotFor` as the only path to a client.
+- **The four binding conditions in §4.2** (rev 4). Colyseus is platform-internal, absent from
+  every game's dependency tree, never the redaction path, and never the source of time or
+  randomness. `no-platform-framework-in-games` in ADR-0002 is the mechanical half of that
+  commitment.
 - **Redis being safe to lose at any instant; Postgres as the sole tier of record** (§6.1,
   amended rev 2 — this replaces rev 1's "Redis configured `noeviction` in every environment").
 - A durable log append on the action hot path, budgeted at ≤ 10 ms p95 (§6.2).
@@ -567,7 +646,7 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 | Task runner (§2)           | Cheap                                                                                                                                                                      |
 | Codec / transport (§4.1)   | Cheap — that is the point of the seam                                                                                                                                      |
 | ORM (§5)                   | Moderate                                                                                                                                                                   |
-| Room runner vs Colyseus    | Moderate now, **expensive** after M2 once games depend on the contract shape                                                                                               |
+| Colyseus (§4, rev 4)       | **Expensive**, as rev 1 priced Option B. Bounded by `RoomRunner` staying the seam: the engine is replaceable, the lobby above it is not affected                           |
 | Redis as cache only (§6.1) | **Cheap — and cheaper than rev 1's design, which is the point.** Making Redis losable means adding, removing or swapping it is a config change, not a correctness argument |
 | Postgres as tier of record | Expensive — this is now the load-bearing durability choice                                                                                                                 |
 
@@ -575,8 +654,12 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 
 - A measured 30 Hz tick on Node misses < 5 ms p99 for a 12-player room by more than 2× → §1.
 - CI wall-clock for a single-package change exceeds 5 minutes → §2 (add Turborepo).
-- The M4 real-time spike shows a hand-rolled runner cannot hit the netcode budgets while
-  Colyseus can → §4, reopen for the M6 fleet.
+- ~~The M4 real-time spike shows a hand-rolled runner cannot hit the netcode budgets while
+  Colyseus can → §4, reopen for the M6 fleet.~~ **Reversed in rev 4**, since Colyseus is now the
+  incumbent. The trigger is its mirror image: the M4 spike measuring **Colyseus** above < 5 ms
+  p99 for a 12-player room → §4.5, and the room runner comes back.
+- A hidden-information leak traced to Colyseus state sync → §4.5. This one **reverses** §4
+  rather than amending it.
 - ~~A managed Redis tier we want cannot be set to `noeviction`~~ → **retired in rev 2.** The
   design no longer depends on it, so this can no longer trigger anything (§6.1).
 - The measured match-log append exceeds 10 ms p95 → §6.2, and the group-commit fallback goes
@@ -588,28 +671,47 @@ epic thread on [PER-3](/PER/issues/PER-3), not taken here, because this ADR does
 
 ---
 
-## 11. Board decisions applied (rev 2) {#board-decisions-applied-rev-2}
+## 11. Board decisions applied (rev 2, row 1 closed in rev 4) {#board-decisions-applied-rev-2}
 
-Rev 1 escalated four items to the board on [PER-2](/PER/issues/PER-2). Three are resolved.
+Rev 1 escalated four items to the board on [PER-2](/PER/issues/PER-2). **All four are now
+resolved** — row 1 closed in rev 4.
 
-| #   | Item                                                      | Outcome                                                                                                               | Effect on this ADR                                                                         |
-| --- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| 1   | **§4.4** — drop Colyseus from M1–M5, keep as M6 candidate | **Still open** — approval [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), endorsed by Chief of Staff | §4.4 stays `Board-gated`. Not blocking; see §11.1                                          |
-| 2   | Paid tiers for Sentry / PostHog / uptime                  | **Denied. Budget $0, free tiers only**                                                                                | §8 rewritten as a standing constraint                                                      |
-| 3   | Managed Redis + Postgres                                  | **Free tiers or Docker; costed proposal at M4. Assume no persistence guarantees and cold-start latency**              | **§6 materially amended** — §6.1, §6.2, §6.3                                               |
-| 4   | Code repository                                           | **Resolved** — private repo `neerajkrbansal1996/gameroom` ([PER-35](/PER/issues/PER-35) closed)                       | This ADR lands there; unblocks [PER-36](/PER/issues/PER-36) and [PER-6](/PER/issues/PER-6) |
-| +   | Final product name                                        | **Decided: Playhall.** Domain and logo still open                                                                     | §10 amended; the string lives only in `BRAND.name`                                         |
+| #   | Item                                                      | Outcome                                                                                                                                                                            | Effect on this ADR                                                                                           |
+| --- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1   | **§4.4** — drop Colyseus from M1–M5, keep as M6 candidate | **Rejected 2026-09-30** — approval [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df); the amendment was declined, no decision note given. Colyseus stands (Option B) | **§4 rewritten in rev 4** and no longer gated. Four binding conditions in §4.2; new ADR-0002 rule; see §11.1 |
+| 2   | Paid tiers for Sentry / PostHog / uptime                  | **Denied. Budget $0, free tiers only**                                                                                                                                             | §8 rewritten as a standing constraint                                                                        |
+| 3   | Managed Redis + Postgres                                  | **Free tiers or Docker; costed proposal at M4. Assume no persistence guarantees and cold-start latency**                                                                           | **§6 materially amended** — §6.1, §6.2, §6.3                                                                 |
+| 4   | Code repository                                           | **Resolved** — private repo `neerajkrbansal1996/playhall` ([PER-35](/PER/issues/PER-35) closed)                                                                                    | This ADR lands there; unblocks [PER-36](/PER/issues/PER-36) and [PER-6](/PER/issues/PER-6)                   |
+| +   | Final product name                                        | **Decided: Playhall.** Domain and logo still open                                                                                                                                  | §10 amended; the string lives only in `BRAND.name`                                                           |
 
 Hosting provider remains open and is deliberately still out of scope here — it is
 [PER-38](/PER/issues/PER-38), and it needs cost per 1,000 concurrent players. The $0 budget
 narrows it rather than deciding it.
 
-### 11.1 Why §4.4 staying open blocks nothing
+### 11.1 §4.4 is closed (rev 4)
 
-Identical under all three options on the approval: the SDK contract, guest identity,
-rooms/codes/registry, seats, and the timer service. Only [PER-15](/PER/issues/PER-15)'s
-transport layer depends on the answer, and no real-time implementation work starts before the
-board opens M6 — [PER-21](/PER/issues/PER-21) stays design-only.
+**Decided 2026-09-30: the amendment was rejected and Colyseus stands** (approval
+[15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df)). §4 records it, and no decision in
+this ADR is `Board-gated` any more. Hosting (§Context, [PER-38](/PER/issues/PER-38)) is still open,
+but it was never a decision here.
+
+Rev 2 said the open gate blocked nothing, and that held: the SDK contract, guest identity,
+rooms/codes/registry, seats and the timer service were identical under all three options and
+proceeded throughout. The one item that was waiting — [PER-15](/PER/issues/PER-15)'s transport
+layer — is now unblocked and builds Colyseus-hosted against §4.2.
+
+**What the decision costs downstream**, so it is not discovered one issue at a time:
+
+| Issue                        | Effect of the decision                                                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's `no-platform-framework-in-games` rule. **New work**, and it is not optional — condition 2 is unenforced without it |
+| [PER-15](/PER/issues/PER-15) | Unblocked. Transport layer is Colyseus-hosted; the four §4.2 conditions are acceptance criteria                                   |
+| [PER-17](/PER/issues/PER-17) | Add a conformance case: the testkit runs with Colyseus absent from the dependency tree                                            |
+| [PER-21](/PER/issues/PER-21) | The M6 engine question is pre-answered. ADR-0005 shifts from _select an engine_ to _validate this one against the tick budget_    |
+| [PER-30](/PER/issues/PER-30) | The M4 spike measures **Colyseus** against < 5 ms p99 for a 12-player room. That measurement is now a revisit trigger (§4.5)      |
+
+[PER-21](/PER/issues/PER-21) stays design-only and no real-time implementation work starts before
+the board opens M6. That is unchanged.
 
 ### 11.2 Consequences the board has accepted by choosing $0
 

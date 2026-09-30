@@ -42,8 +42,8 @@ so per decision rather than downgrading the whole document.
 
 | ADR                                                 | Title                                           | Status                                              |
 | --------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------- |
-| [0001](./0001-v1-stack.md)                          | The v1 stack                                    | Accepted (rev 3), except §4.4 which is board-gated  |
-| [0002](./0002-dependency-boundary-enforcement.md)   | Dependency-boundary enforcement                 | Accepted                                            |
+| [0001](./0001-v1-stack.md)                          | The v1 stack                                    | Accepted (rev 4)                                    |
+| [0002](./0002-dependency-boundary-enforcement.md)   | Dependency-boundary enforcement                 | Accepted (rev 2)                                    |
 | 0003                                                | Hosting + cost per 1,000 concurrent players     | Reserved — drafting on [PER-38](/PER/issues/PER-38) |
 | [0004](./0004-pr-gate-without-branch-protection.md) | Enforcing the PR gate without branch protection | Accepted                                            |
 | [0005](./0005-the-real-time-path.md)                | The real-time path (design only, M6)            | Mixed — see its own status table; §9 board-gated    |
