@@ -90,7 +90,10 @@ The audit's scope is therefore **commits reaching `main`, plus every tag** — n
 `refs/tags/...`, so a `push`-to-`main`-only test makes `release.yml`'s audit report "not
 applicable" and exit 0 while its step still says it asserted the tagged commit arrived via a
 merged PR. Production would deploy unaudited, and the first time anyone found out would be a
-real release. A tag is never exempt, whatever the event.
+real release. A tag is never exempt, whatever the event. This scope is
+[ADR-0004 §Decision 8](adr/0004-pr-gate-without-branch-protection.md#decision-8--the-audits-scope-is-deploy-bearing-refs-and-a-tag-is-never-exempt)
+(rev 3); Decision 2's older "push to `main`" wording is corrected there rather than left to be
+read as the scope.
 
 ### What the audit asserts: arrival, not PR membership
 
@@ -379,10 +382,11 @@ so every gate here executes and ADR-0004's push detector can fire.
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
 not a verdict. **Four of the eleven gates are PENDING stubs** — `coverage`, `testkit`,
-`integration` and `e2e` — `integration` boots Redis and
-Postgres service containers with no tests in them, and there is no build caching. Re-measure
-when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
-the `coverage` job, so it is a nine-job number for a ten-job pipeline.
+`integration` and `e2e` — `integration` boots Redis and Postgres service containers with no tests
+in them, and there is no build caching. Re-measure when M1 closes before concluding Turborepo is
+unnecessary — and note the measurement predates the `coverage` job, so it is a nine-job number for
+a ten-job pipeline. The floor rises as each pending gate acquires real work; do not quote this
+number as the pipeline's steady-state cost.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 
