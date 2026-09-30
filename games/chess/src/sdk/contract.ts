@@ -16,12 +16,26 @@ export type {
   GameContext,
   MatchRecord,
   MatchResult,
+  MatchResultProblem,
   ResultReason,
   SeatId,
   SeatOutcome,
   Standing,
   Viewer,
 } from '@playhall/game-sdk'
+
+/**
+ * The unrecorded-result contract (ADR-0006).
+ *
+ * `isRecordedResult` is the single answer to "did this match count", derived by
+ * the SDK from `reason`. Chess does not author that flag: the platform owns the
+ * fact, and two sources of truth with no tiebreak is how a player ends up with
+ * a phantom win on an aborted game.
+ *
+ * `unrecordedStandings()` is the empty standings array for those reasons, named
+ * so the abort path reads as a decision rather than an oversight.
+ */
+export { isRecordedResult, unrecordedStandings, validateMatchResult } from '@playhall/game-sdk'
 
 /**
  * The create-lobby form descriptor (ADR-0007). Presentation metadata only —

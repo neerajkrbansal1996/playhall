@@ -21,7 +21,6 @@ describe('resignation', () => {
         chessReason: 'resignation',
         description: 'White resigned',
         moves: 2,
-        recorded: true,
       },
     })
   })
@@ -172,13 +171,12 @@ describe('abort', () => {
     if (!result.ok) throw new Error(result.error)
     expect(getResult(result.state)).toEqual({
       reason: 'aborted',
-      // No seat won, lost or drew it, and `recorded: false` says so out loud.
+      // No seat won, lost or drew it: `unrecordedStandings()` per ADR-0006 §1.
       standings: [],
       detail: {
         chessReason: 'abort',
         description: 'Aborted before both players moved',
         moves: 0,
-        recorded: false,
       },
     })
   })
@@ -211,7 +209,6 @@ describe('the 30-second first move', () => {
         chessReason: 'abort',
         description: 'Aborted — no first move within 30 seconds',
         moves: 0,
-        recorded: false,
       },
     })
   })
