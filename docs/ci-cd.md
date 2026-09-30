@@ -101,18 +101,18 @@ issue. `pr-hygiene` and `workflows` call their script directly instead: both are
 checks over files already on disk, so they skip `./.github/actions/setup` and still report
 when an install would not succeed.
 
-| Gate          | Runs                              | Status                                                                                             |
-| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                     |
-| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                    |
-| `lint`        | `pnpm lint`                       | Live.                                                                                              |
-| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                              |
-| `boundaries`  | `pnpm boundaries`                 | **Pending** — [PER-5](/PER/issues/PER-5), [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
-| `unit`        | `pnpm test`                       | Live.                                                                                              |
-| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                        |
-| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                        |
-| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                              |
-| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                  |
+| Gate          | Runs                              | Status                                                                                                 |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `pr-hygiene`  | `scripts/ci/pr-hygiene.mjs`       | Live. PR only.                                                                                         |
+| `workflows`   | `pnpm check:workflow-permissions` | Live. Static: no install, no token, no network.                                                        |
+| `lint`        | `pnpm lint`                       | Live.                                                                                                  |
+| `typecheck`   | `pnpm typecheck`                  | Live.                                                                                                  |
+| `boundaries`  | `pnpm boundaries`                 | Live since [PER-5](/PER/issues/PER-5) landed. [ADR-0002](adr/0002-dependency-boundary-enforcement.md). |
+| `unit`        | `pnpm test`                       | Live.                                                                                                  |
+| `coverage`    | `pnpm test:coverage`              | **Pending** — [PER-89](/PER/issues/PER-89).                                                            |
+| `testkit`     | `pnpm test:testkit`               | **Pending** — [PER-17](/PER/issues/PER-17).                                                            |
+| `integration` | `pnpm test:integration`           | **Pending** — M1. Postgres + Redis services already wired in the job.                                  |
+| `e2e`         | `pnpm test:e2e`                   | **Pending** — M1/M3, QA Engineer.                                                                      |
 
 A pending gate logs a `::notice` naming its owner and **passes**. This is deliberate: a
 workflow calling a script that does not exist fails with `ERR_PNPM_NO_SCRIPT`, which is
