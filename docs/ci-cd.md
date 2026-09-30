@@ -90,7 +90,17 @@ The audit's scope is therefore **commits reaching `main`, plus every tag** — n
 `refs/tags/...`, so a `push`-to-`main`-only test makes `release.yml`'s audit report "not
 applicable" and exit 0 while its step still says it asserted the tagged commit arrived via a
 merged PR. Production would deploy unaudited, and the first time anyone found out would be a
-real release. A tag is never exempt, whatever the event.
+real release. A tag is never exempt, whatever the event. This scope is
+[ADR-0004 §Decision 8](adr/0004-pr-gate-without-branch-protection.md#decision-8--the-audits-scope-is-deploy-bearing-refs-and-a-tag-is-never-exempt)
+(rev 3); Decision 2's older "push to `main`" wording is corrected there rather than left to be
+read as the scope.
+
+**What this audit does and does not prove.** It asks GitHub `commits/{sha}/pulls` and passes if
+any associated PR is merged — so it proves the commit _belongs to_ a merged PR, not that it
+_arrived on `main` by merging_ one. With squash-merge those differ for every commit that sat on a
+merged PR's head branch and was squashed away, so do not cite `push-audit` as proof that
+everything on `main` was reviewed. Measured and bounded in ADR-0004 rev 3, "The residual weakness";
+the hardening is a Platform Engineer follow-up on [PER-6](/PER/issues/PER-6).
 
 ADR-0004 records the revisit trigger — if the repo goes public at M5 and protection becomes
 free, `main` -> production can come back.
@@ -326,10 +336,13 @@ so every gate here executes and ADR-0004's push detector can fire.
 **Measurement discharged** (ADR-0001 §2): **53 s and 52 s** CI wall-clock per PR on two
 consecutive green runs, 9 jobs fully parallel; 63–82 s end-to-end including the concurrent
 preview workflow. Comfortably under the 5-minute Turborepo trigger — but treat it as a floor,
-not a verdict. **Five of nine gates are PENDING stubs**, `integration` boots Redis and
-Postgres service containers with no tests in them, and there is no build caching. Re-measure
-when M1 closes before concluding Turborepo is unnecessary — and note the measurement predates
-the `coverage` job, so it is a nine-job number for a ten-job pipeline.
+not a verdict. **Five of the nine gates that existed at measurement time were PENDING stubs** —
+four of ten are today, because `boundaries` went live when PER-5 landed the root script.
+`integration` boots Redis and Postgres service containers with no tests in them, and there is no
+build caching. Re-measure when M1 closes before concluding Turborepo is unnecessary — and note the
+measurement predates the `coverage` job, so it is a nine-job number for a ten-job pipeline. The
+floor rises as each pending gate acquires real work; do not quote this number as the pipeline's
+steady-state cost.
 
 Two ADR-0003 items land on Platform Engineer but not on this issue:
 

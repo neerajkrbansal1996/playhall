@@ -12,11 +12,21 @@
   decision, not by drift). Decisions 1–5 stand unchanged. New section:
   [Rev 2 — the review verdict](#rev-2--the-review-verdict). Rev 2 also **closes rev 1's one owed
   measurement**: the board read billing on 2026-09-30, the account is on **Free**, and Pro was
-  declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan *and* by
+  declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan _and_ by
   decision, which is now a premise of this ADR rather than an assumption in it.
+- **Amended:** 2026-09-30 (rev 3) — **Decision 2's stated scope was wrong, and the wrong text
+  produced the same bug twice.** Rev 1 wrote the compensating control as "a CI workflow triggered
+  on `push` to `main`". The control that exists audits **two** deploy-bearing refs: commits
+  reaching `main`, and _every tag, on any event_. The tag half is what makes Decision 5's
+  containment a control rather than a convention, and rev 1 never wrote it down — so two separate
+  edits narrowed the script back to `push`-to-`main` and disarmed the release audit while CI stayed
+  green. Rev 3 adds **Decision 8** (the scope is deploy-bearing refs, and a tag is never exempt),
+  records a **measured residual weakness** in what the audit can actually prove, and corrects
+  Decision 2 in place. Decisions 1 and 3–7 stand unchanged. New section:
+  [Rev 3 — the audit's scope](#rev-3--the-audits-scope).
 - **Author:** CTO
 - **Milestone:** M0
-- **Issue:** [PER-3](/PER/issues/PER-3) (arising from [PER-35](/PER/issues/PER-35), implemented in [PER-6](/PER/issues/PER-6)); rev 2 on [PER-78](/PER/issues/PER-78)
+- **Issue:** [PER-3](/PER/issues/PER-3) (arising from [PER-35](/PER/issues/PER-35), implemented in [PER-6](/PER/issues/PER-6)); rev 2 on [PER-78](/PER/issues/PER-78); rev 3 on [PER-107](/PER/issues/PER-107)
 
 ## Context
 
@@ -63,11 +73,16 @@ Revisited at M5 (see triggers). Nobody should spend further time looking for a f
 the three facts above are the answer.
 
 **2. The gate moves from prevention to detection, and detection must be mechanical.** Add a CI
-workflow triggered on `push` to `main` that fails when the pushed commit is not reachable from
-a merged pull request. A direct push therefore turns `main` red within a minute and is visible
-in the commit list forever. This does not stop the push — nothing available to us does — but it
-converts a silent policy violation into a loud one. Implemented in
-[PER-6](/PER/issues/PER-6).
+job that fails when the audited commit is not reachable from a merged pull request. A direct
+push therefore turns `main` red within a minute and is visible in the commit list forever. This
+does not stop the push — nothing available to us does — but it converts a silent policy violation
+into a loud one. Implemented in [PER-6](/PER/issues/PER-6).
+
+> **Rev 3 —** rev 1 wrote this as "a CI workflow triggered on `push` to `main`", and that phrase
+> is the defect. It describes _one_ of the two refs the control has to cover, and it reads as an
+> exhaustive scope. **Decision 8** states the scope properly: commits reaching `main`, plus every
+> tag. Treat the sentence above as the _purpose_ of the control and Decision 8 as its _scope_ —
+> the wording in this bullet is not a licence to narrow the trigger.
 
 **3. CI runs on `pull_request` for every PR regardless of the fact that it cannot be
 _required_.** "Green CI" stays observable even when it is not mandatory. An engineer merging a
@@ -88,6 +103,13 @@ nit.
 **5. Releases are cut from tags, never from "whatever is on `main`".** This is the containment:
 an unreviewed commit reaching `main` cannot become a release without a human cutting a tag.
 Without it, the blast radius of one bad push is production.
+
+> **Rev 3 —** "a human cutting a tag" is a step, not a control. On its own this decision says only
+> that shipping an unreviewed commit takes one deliberate act by someone who may not know the
+> commit is unreviewed — which is the "trust and a written process doc, with no mechanism"
+> alternative this ADR rejected two sections below. What makes Decision 5 a containment is that
+> the tag push is **itself audited** (Decision 8). Rev 1 built that in `release.yml` and did not
+> record it here, which is how the tag half came to be treated as optional.
 
 ## Alternatives considered
 
@@ -159,6 +181,7 @@ Without it, the blast radius of one bad push is production.
   `57162da`. The lesson is not the outage, it is that rev 1's "window between the push and the red
   build" is bounded only by the detector's own health, and nothing watches the watcher. See
   Consequences (rev 2).
+
 - The §12 audit trail lives outside the repository. A future contributor, or anyone with only
   the git history, cannot reconstruct who reviewed what. Decision 4 is what keeps this
   recoverable, and it depends on engineers actually writing the link.
@@ -290,6 +313,7 @@ the repository alone cannot answer the question. Revisit triggers below.
   routine admin bypass is worse than no rule because it trains the operator to click through the
   control. That is a second, independent reason not to buy protection before a reviewer identity
   exists.
+
 - **`github-actions[bot]` posting the verdict review (the free version of the above).** _Folded
   into Decision 6 as presentation only, and explicitly not the gate._ `GITHUB_TOKEN` acts as a
   distinct actor from the PR author, so GitHub should accept a verdict from it, and the `ci-gate`
@@ -323,18 +347,18 @@ the repository alone cannot answer the question. Revisit triggers below.
 
 All observed 2026-09-30 against `neerajkrbansal1996/playhall`.
 
-| Claim                                     | Observation                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------- |
-| Author cannot approve                     | `422 Review Can not approve your own pull request`                     |
-| Author cannot request changes             | `422 Review Can not request changes on your own pull request`          |
-| Refusal is specific to the verdict events | Pending review created, then deleted, on PR #23 — both succeeded       |
-| No review record exists at all            | 27 PRs: `reviews` empty, `reviewDecision` `""` on every one            |
-| Nothing blocks a merge today              | PR #23 `mergeStateStatus: CLEAN`, `reviewDecision: null`               |
-| Blocking remains unavailable              | `403 Upgrade to GitHub Pro` on both protection and rulesets endpoints  |
-| No second identity exists today           | Paperclip's GitHub broker resolves to the same user id `22657452`      |
-| Decision 6 is buildable                   | `pr-hygiene`, `ci-gate`, `scripts/ci/pr-hygiene.mjs` on `main` via #25 |
-| Engineers able to merge                   | still **1** — rev 1's spend trigger has not fired                      |
-| Plan is Free, confirmed not inferred      | Board read `settings/billing` 2026-09-30; Pro declined ([PER-83](/PER/issues/PER-83)) |
+| Claim                                     | Observation                                                                                                          |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Author cannot approve                     | `422 Review Can not approve your own pull request`                                                                   |
+| Author cannot request changes             | `422 Review Can not request changes on your own pull request`                                                        |
+| Refusal is specific to the verdict events | Pending review created, then deleted, on PR #23 — both succeeded                                                     |
+| No review record exists at all            | 27 PRs: `reviews` empty, `reviewDecision` `""` on every one                                                          |
+| Nothing blocks a merge today              | PR #23 `mergeStateStatus: CLEAN`, `reviewDecision: null`                                                             |
+| Blocking remains unavailable              | `403 Upgrade to GitHub Pro` on both protection and rulesets endpoints                                                |
+| No second identity exists today           | Paperclip's GitHub broker resolves to the same user id `22657452`                                                    |
+| Decision 6 is buildable                   | `pr-hygiene`, `ci-gate`, `scripts/ci/pr-hygiene.mjs` on `main` via #25                                               |
+| Engineers able to merge                   | still **1** — rev 1's spend trigger has not fired                                                                    |
+| Plan is Free, confirmed not inferred      | Board read `settings/billing` 2026-09-30; Pro declined ([PER-83](/PER/issues/PER-83))                                |
 | Decision 2's detector can fail silently   | `Main` `startup_failure`, zero jobs, on the three commits #25→#37; green on `57162da` ([PER-88](/PER/issues/PER-88)) |
 
 **Measurement owed.** Whether `github-actions[bot]` may submit `REQUEST_CHANGES` on an
@@ -404,13 +428,194 @@ with the plan in front of them, so the missing number is settled policy, not an 
 **One trigger, two halves — do not let them wait on each other.** The single phrase "the PR gate"
 covers two failures with different causes, and rev 2's predecessor treated them as one:
 
-| Failure                                       | Cause                    | Fixed by the plan?                   | Fixed by a second identity? |
-| --------------------------------------------- | ------------------------ | ------------------------------------ | --------------------------- |
-| Red code can be merged                        | protection-ineligible plan | **Yes** — required checks on `ci-gate` | No                          |
-| No PR can carry `APPROVED`/`CHANGES_REQUESTED` | one identity             | No                                   | **Yes** (necessary, not sufficient) |
+| Failure                                        | Cause                      | Fixed by the plan?                     | Fixed by a second identity?         |
+| ---------------------------------------------- | -------------------------- | -------------------------------------- | ----------------------------------- |
+| Red code can be merged                         | protection-ineligible plan | **Yes** — required checks on `ci-gate` | No                                  |
+| No PR can carry `APPROVED`/`CHANGES_REQUESTED` | one identity               | No                                     | **Yes** (necessary, not sufficient) |
 
 The consequence for sequencing: required status checks are blocked **only** by the plan decision,
 and Platform Engineer has already built the pipeline, so they switch on with no rework the moment
 protection is available. Required _reviews_ additionally need an identity. When the trigger above
 fires, adopt required status checks without waiting on the identity question — the cheap half should
 never queue behind the expensive one.
+
+## Rev 3 — the audit's scope
+
+Rev 2 settled _who_ can record a verdict. Rev 3 settles _which commits the compensating control
+looks at_, because rev 1 wrote that down wrongly and the wrong text has now caused two defects.
+
+### What we found
+
+`scripts/ci/assert-merged-via-pr.mjs` is called from two workflows, and they are not symmetric:
+
+| Workflow      | Triggers                                  | What `push-audit` guards                                                    |
+| ------------- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| `main.yml`    | `push` to `main`, `workflow_dispatch`     | `staging-web`, `staging-realtime` (`needs: [gates, push-audit]`)            |
+| `release.yml` | `push` of a `v*` tag, `workflow_dispatch` | `deploy web`, `deploy realtime` (`needs: [release-ref, gates, push-audit]`) |
+
+Rev 1 described the control as "a CI workflow triggered on `push` to `main`". That sentence is
+true of the first row and silently false of the second — and the second row is production.
+
+The script originally had no event or ref guard at all, which made `main` safe (it audited
+everything) and made `workflow_dispatch` fail **by construction**: a dispatched run has no merged
+PR to be reachable from, so `push-audit` failed, so staging never deployed. Dispatch is the only
+way to exercise a staging deploy without landing a commit on `main`, which is the M0 AC2 path, so
+the over-broad check blocked the acceptance criterion it was supposed to sit alongside.
+
+The obvious repair is the dangerous one, and it was written twice:
+
+1. In the first draft of PR [#43](https://github.com/neerajkrbansal1996/playhall/pull/43), as
+   code — `eventName === 'push' && ref === 'refs/heads/main'` as the _only_ audited case.
+2. After the code was fixed, in that same file's docblock — "Scope: pushes to `main` only. Any
+   other event or ref is reported as not applicable and passes" — which contradicted the code
+   forty lines below it. Caught in review and fixed at `d79f02e` before merge.
+
+Both are the same mistake, and neither is a typo: **a `v*` tag push is a `push` event on
+`refs/tags/v1.2.3`, not on `refs/heads/main`.** Under the narrow rule, `release.yml`'s
+`push-audit` prints "not applicable", exits 0, and stays green — while its step is still named
+_"Assert the tagged commit arrived via a merged PR"_. Production would deploy with no audit and a
+green check, restoring in full the bypass the release-side audit exists to close:
+
+> push straight to `main` → ignore the red `main.yml` audit → tag that commit → ship it.
+
+Nothing would have surfaced it except a real production cut. The important part is not that an
+engineer made the mistake; it is that **the ADR text told them to**. An editor who reads Decision 2,
+sees "push to `main`", and tightens the guard to match has done the diligent thing and introduced a
+production hole. That is a defect in this document, which is why rev 3 exists.
+
+`workflow_dispatch` on a tag is the second route in, and it is not hypothetical: `release.yml`
+deliberately keeps `workflow_dispatch` (with no `inputs:`, so the ref comes from GitHub's own
+picker and `release-ref` rejects a non-tag). So an event-name test alone can never be sufficient.
+
+### Decision 8 — the audit's scope is deploy-bearing refs, and a tag is never exempt
+
+**The audit runs on every ref that can cause a deploy, and on nothing else:**
+
+- a **`push` to `refs/heads/main`** — the staging path;
+- **any ref under `refs/tags/`, on any event whatsoever** — the production path.
+
+Everything else (`workflow_dispatch` or `schedule` on a branch, a push to a feature branch) is
+reported as not applicable and **passes**, because it deploys nothing and there is nothing to
+audit.
+
+Three properties of the implementation are part of the decision, not incidental:
+
+1. **The exemption lives inside the script, not in a job-level `if:`.** A skipped job skips its
+   dependents, and `staging-web`/`staging-realtime` are `needs: [gates, push-audit]` — so a
+   job-level condition would take staging down instead of exempting it. The job must run and pass.
+2. **A tag is audited whatever the event.** Never test the event name alone. The predicate on the
+   production side is `ref.startsWith('refs/tags/')`, full stop.
+3. **A missing `GITHUB_EVENT_NAME` or `GITHUB_REF` is a misconfiguration, not an exemption**
+   (exit 2). A control whose scope test cannot evaluate must not conclude "out of scope"; the same
+   principle already applies to an unreachable GitHub API, which exits 1 rather than passing.
+
+This is a scoping correction, not a weakening: the audited set now covers strictly more of the
+deploy path than rev 1's stated rule, and strictly less than the unguarded script's "every run".
+
+### The residual weakness, measured
+
+Decision 8 fixes _which commits_ are audited. It does not fix _what the audit can prove_, and the
+gap is worth stating plainly rather than discovering later.
+
+The check asks GitHub `commits/{sha}/pulls` and passes if any returned PR has a non-null
+`merged_at`. That answers **"does this commit belong to a merged PR?"** It does not answer **"did
+this commit reach `main` by merging that PR"** — and with squash-merge as this repo's convention,
+those two questions come apart for every commit that sat on a merged PR's head branch and was
+squashed away.
+
+Measured on this very change (2026-09-30):
+
+```
+commit d79f02e  (head of PR #43 before the squash)
+  commits/d79f02e/pulls  ->  #43, merged_at 2026-09-30T11:13:39Z, merge_commit_sha 45aa812
+  merge-base --is-ancestor d79f02e origin/main  ->  NO, not on main
+```
+
+So `d79f02e` is not on `main`, yet the audit would call it reviewed. Two things bound how much
+this matters, and both belong in the record:
+
+- **It is not a free bypass.** To put such a commit on `main` as-is, its parent must already be
+  `main`'s tip; after a squash merge it is not, so the push would be a non-fast-forward. The
+  residual path is therefore **force-pushing `main`**, which the audit neither inspects nor
+  reports even though the `push` payload carries `forced` and `before`.
+- **The discriminator is already in the response the script fetches.** `merge_commit_sha` is
+  returned alongside `merged_at`. Comparing it to `GITHUB_SHA` closes the squash case directly —
+  but it would produce false failures under **rebase-merge**, which this repo also allows, since
+  only the tip of a rebased set matches. Any hardening has to decide the merge-method question
+  first; that is why rev 3 records the weakness rather than asserting a one-line fix.
+
+Owner: Platform Engineer, as a follow-up on [PER-6](/PER/issues/PER-6). Not blocking M0: the
+control's stated job is to make a direct push loud, and it does that for the ordinary case (a
+commit authored on top of `main`, which has no PR at all and fails correctly).
+
+### Evidence (rev 3)
+
+- **Exemption matrix, 7/7**, with the deploy-bearing cases asserted to _fail closed_ (API
+  unreachable → exit 1) rather than merely "not exit early":
+
+  ```
+  workflow_dispatch on main (staging re-run)   exempt     exit 0
+  schedule on main                             exempt     exit 0
+  push to a feature branch                     exempt     exit 0
+  push to main                                 audit      exit 1  (fails closed)
+  push of a v* tag             -- PRODUCTION   audit      exit 1  (fails closed)
+  workflow_dispatch on a tag   -- PRODUCTION   audit      exit 1  (fails closed)
+  GITHUB_EVENT_NAME/REF unset                  misconfig  exit 2
+  ```
+
+- **Against the live GitHub API**, proving the tag path passes for the right reason rather than
+  vacuously:
+
+  ```
+  tag at a merged-PR commit    (d90858a)  ->  exit 0  passes
+  tag at a never-merged commit (45be4d2)  ->  exit 1  "not reachable from any merged pull request"
+  push to main, merged commit  (d90858a)  ->  exit 0  passes
+  ```
+
+- Landed as `45aa812` on `main` (PR #43), reviewed on [PER-107](/PER/issues/PER-107). The
+  docblock contradiction was fixed in review at `d79f02e` before merge.
+
+- **Measurement owed:** none of the above is a committed test. `scripts/ci/` has no test runner,
+  so the matrix is a hand-built fixture run by hand, and nothing re-runs it. These are the files
+  that decide whether a PR is gated and whether a deploy happens, and they are the only untested
+  code in the repository. A permanent harness is folded into
+  [PER-89](/PER/issues/PER-89). **This is accepted for M0 and must not survive M1**: rev 3's whole
+  finding is that this script's scope is easy to narrow by accident and the narrowing is green, and
+  a regression test for the matrix above is the only thing that catches the third occurrence.
+
+### Consequences (rev 3)
+
+**Easier**
+
+- Staging is reachable by `workflow_dispatch`, which is the only way to exercise a deploy without
+  landing a commit on `main`. M0 AC2 has a path that does not require a push.
+- The scope is now written down once, in Decision 8, in the same terms the code uses.
+
+**Harder, and we should say so plainly**
+
+- **The failure mode inverted.** Before, the audit fired when it should not have — loudly, and
+  staging stayed broken until someone looked. Now it can fail to fire when it should — silently,
+  and green. The second is strictly worse to operate, and it is the cost of making the exemption
+  exist at all.
+- **The exemption is a widenable surface.** Every new event or ref added to `main.yml` or
+  `release.yml` implicitly asks "is this deploy-bearing?", and answering it wrongly is a green
+  build. Decision 8's revisit trigger below is the compensating habit; the harness in PER-89 is
+  the compensating mechanism.
+- The audit proves membership of a merged PR, not arrival via one — see "The residual weakness"
+  above. Anyone citing this check as proof that everything on `main` was reviewed is overstating
+  it, and this paragraph exists to be quoted back at them.
+
+### Revisit triggers (rev 3)
+
+- **Any new trigger on `main.yml` or `release.yml`** → classify it as deploy-bearing or not,
+  in the script _and_ in Decision 8. A new trigger with no entry here is an unanswered question,
+  not a default exemption.
+- **A second deploy target, or a deploy from a branch other than `main`** → Decision 8's ref list
+  is enumerated, not inferred; extend it explicitly.
+- **`release.yml` stops calling `push-audit`, or `push-audit` leaves a deploy job's `needs:`** →
+  the tag half of the control is gone and Decision 5 reverts to a convention. Treat as an incident.
+- **[PER-89](/PER/issues/PER-89) lands the `scripts/ci/` harness** → the matrix above becomes a
+  committed suite; replace the Evidence block with a pointer to it and close the owed measurement.
+- **The repo settles on a single merge method** → the residual-weakness hardening becomes
+  decidable. With squash-only, `merge_commit_sha === GITHUB_SHA` is the fix; with rebase allowed,
+  it is not.
