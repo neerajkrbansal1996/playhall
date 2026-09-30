@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BRAND,
-  INTERNAL_CODENAME,
   isValidRoomCode,
   normalizeRoomCode,
   redactRoomCode,
@@ -11,9 +9,11 @@ import {
 } from '../src/index'
 
 /**
- * `room-code` and `brand` shipped with the M0.1 skeleton and had no runner to
- * cover them. Adding the runner in this package without covering them would put
- * a false 80% badge on the package, so they are covered here.
+ * `room-code` shipped with the M0.1 skeleton and had no runner to cover it.
+ * Adding the runner in this package without covering it would put a false 80%
+ * badge on the package, so it is covered here. `brand` is covered by
+ * `brand.test.ts` against the ADR-0001 §10 rev 3 semantics — this file no
+ * longer asserts on `BRAND`, whose old assertion predated that revision.
  */
 
 describe('normalizeRoomCode', () => {
@@ -56,12 +56,5 @@ describe('redactRoomCode', () => {
   it('redacts a code a call site holds, and leaves an empty string alone', () => {
     expect(redactRoomCode('TCQ4MN')).toBe(REDACTED)
     expect(redactRoomCode('')).toBe('')
-  })
-})
-
-describe('brand', () => {
-  it('reads from one constant and admits it is provisional', () => {
-    expect(BRAND.name.length).toBeGreaterThan(0)
-    expect(BRAND.isProvisional).toBe(BRAND.name === INTERNAL_CODENAME)
   })
 })

@@ -188,6 +188,10 @@ importers:
         version: link:../shared
 
   packages/shared:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@vitest/coverage-v8':
         specifier: ^2.1.8
