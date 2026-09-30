@@ -33,11 +33,18 @@ Two things make this worth an ADR rather than a comment on the PR:
 2. **M2 freezes the contracts.** After M2 a `MatchResult` change needs an ADR _and_ board
    approval (ADR-0002 §"Committed to"). The window where this is a few lines closes with M2.
 
-The second question on [PER-42](/PER/issues/PER-42) is narrower: chess has eleven distinct
-endings and `ResultReason` has seven values, so fivefold repetition, the fifty-move rule,
-stalemate and insufficient material all collapse to `'completed'` with the real reason in
-`detail.chessReason`. Chess asks whether `detail` is the sanctioned home for that or a
-private field it should not rely on.
+The second question on [PER-42](/PER/issues/PER-42) is narrower: chess has fourteen distinct
+endings and `ResultReason` has seven values, so stalemate, insufficient material, threefold
+and fivefold repetition, the fifty-move rule and the seventy-five-move rule — six of the
+fourteen — all collapse to `'completed'` with the real reason in `detail.chessReason`. Chess
+asks whether `detail` is the sanctioned home for that or a private field it should not rely
+on.
+
+> PER-42 was opened when `ChessEnding` had eleven arms and says "eleven" throughout. The
+> union is at fourteen as of `games/chess/src/rules/types.ts` on `43f0151` —
+> `fivefold_repetition`, `seventy_five_move_rule` and `abandonment_draw` were added after the
+> issue was written. The counts in this ADR are the measured ones; the decision does not turn
+> on them, and does not turn on the count staying at fourteen.
 
 ## Decision
 
@@ -180,17 +187,33 @@ there is no latency or byte number to cite. The checkable claims:
 - `RESULT_REASONS` has 7 members; `UNRECORDED_RESULT_REASONS` selects 2 of them, both of whose
   existing docstrings already state that no winner is recorded. The partition is a restatement
   of what the SDK already claimed, not a new concept.
-- Chess has 11 `ChessEnding` arms mapping onto those 7 reasons; 1 of the 11 (`abort`) is
-  unrecorded. Two arms (`timeout_vs_insufficient_material`, `abandonment_draw`) produce a
-  `reason`/`outcome` pairing that no inference rule would predict — the measured basis for §3.
+- Chess has 14 `ChessEnding` arms mapping onto 6 of those 7 reasons; exactly 1 of the 14
+  (`abort` → `'aborted'`) is unrecorded. Two arms (`timeout_vs_insufficient_material` →
+  `'timeout'` with two `draw` standings, `abandonment_draw` → `'disconnect_forfeit'` with two
+  `draw` standings) produce a `reason`/`outcome` pairing that no inference rule would predict —
+  the measured basis for §3. Counted against `games/chess/src/rules/types.ts` and
+  `games/chess/src/result.ts` on `43f0151`.
+- The one reason chess never reaches is `'abandoned'`: in a two-seat game one side leaving is
+  `abandonment` → `'disconnect_forfeit'`, and both leaving is not modelled. So the second
+  member of `UNRECORDED_RESULT_REASONS` has no game exercising it yet. That is a coverage gap
+  in the partition's evidence, not a hole in the partition: `'abandoned'`'s own docstring
+  already said no winner is recorded, which is what §1 leans on.
 - Blast radius of the code change: `packages/game-sdk/src/result.ts` (+ its barrel), one
-  conformance-check name in `packages/game-testkit`, and `games/chess/src/result.ts` (drop one
-  `detail` key). No platform-core, no app, no other game.
+  conformance check in `packages/game-testkit`, and `games/chess/src/result.ts` (drop one
+  `detail` key, plus its tests and README). No platform-core, no app, no other game.
 
-> **Measurement owed.** Nothing numeric is owed for this decision. The enforcement is owed:
-> the `result-standings-well-formed` conformance check must be _implemented_ (not just
-> declared) in `packages/game-testkit` on [PER-47](/PER/issues/PER-47) before M2 is accepted.
-> Until it is, this ADR rests on review rather than on CI, and review is not a gate.
+> **Enforcement owed — discharged.** Nothing numeric was owed for this decision; the
+> enforcement was. `result-standings-well-formed` is now _implemented_, not merely declared:
+> `packages/game-testkit/src/checks/result-standings.ts` is the 11th entry in
+> `TURN_BASED_CHECKS` and delegates the rules to `validateMatchResult` rather than
+> reimplementing them. Landed on `main` via [PER-47](/PER/issues/PER-47)
+> ([#63](https://github.com/neerajkrbansal1996/playhall/pull/63)). This ADR no longer rests on
+> review alone.
+>
+> Two residual holes in the check's abort half are filed as [PER-132](/PER/issues/PER-132).
+> They weaken the gate; they do not change the contract above. In particular a game that
+> declares no `abortScenarios` reports `passed` without ever producing empty standings, so a
+> green check is not yet proof that §1 was exercised.
 
 ## Consequences
 
