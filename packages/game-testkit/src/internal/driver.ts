@@ -22,6 +22,7 @@ import {
   type SeatId,
   type SeatRoster,
   type TimerCommand,
+  type ValidationResult,
   asGameId,
   asMatchId,
   asMatchSeed,
@@ -141,12 +142,17 @@ export interface DriverServer<TState, TAction, TSettings, TEvent extends GameEve
     settings: TSettings,
     seats: SeatRoster,
   ): ApplyResult<TState, TEvent>
+  /**
+   * `ValidationResult<string>` rather than `{ ok: boolean }`: a rejection's
+   * `code` is the only thing that tells a game author *why* the runner would
+   * have refused their action, so the driver has to be able to read it.
+   */
   validateAction(
     ctx: GameContext,
     state: TState,
     seatId: SeatId,
     action: TAction,
-  ): { readonly ok: boolean }
+  ): ValidationResult<string>
   applyAction(
     ctx: GameContext,
     state: TState,
@@ -357,6 +363,20 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
     }
   }
 
+  // The undershoot direction. The loop above also stops when the game has no
+  // `getLegalActions` (it is optional) or when `chooseAction` declines, and an
+  // abort from move 0 is not the abort a scenario asking for `afterSteps` moves
+  // declared — `afterSteps` is exactly what separates "abort is legal here"
+  // from "abort is legal somewhere else".
+  if (stepsPlayed < options.afterSteps) {
+    return {
+      state,
+      result: null,
+      stepsPlayed,
+      unreachable: `played ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves before the driver ran out of moves`,
+    }
+  }
+
   const chosen = run(() => options.abortAction(state, roster))
   if (chosen === null) {
     return {
@@ -367,10 +387,34 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
     }
   }
 
+  // The abort is deliberately outside `getLegalActions`, so it is the one
+  // action in the suite that no other check cross-references against
+  // `validateAction`. The real runner validates before it applies, and it is
+  // this call that keeps the driver on the runner's call sequence: without it
+  // a game can ship green conformance and an abort production refuses.
+  const ctx = contextAt(context, sequence)
+  let verdict: ValidationResult<string>
+  try {
+    verdict = run(() => server.validateAction(ctx, state, chosen.seatId, chosen.action))
+  } catch (error) {
+    return {
+      state,
+      result: null,
+      stepsPlayed,
+      unreachable: `validateAction threw on the abort action instead of returning a typed rejection: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+  if (!verdict.ok) {
+    return {
+      state,
+      result: null,
+      stepsPlayed,
+      unreachable: `the game's own validateAction rejected the abort action with '${verdict.error.code}'`,
+    }
+  }
+
   const before = state
-  state = run(() =>
-    server.applyAction(contextAt(context, sequence), before, chosen.seatId, chosen.action),
-  ).state
+  state = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action)).state
 
   return { state, result: run(() => server.getResult(state)), stepsPlayed, unreachable: null }
 }

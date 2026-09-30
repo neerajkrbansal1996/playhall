@@ -122,6 +122,21 @@ describe('validateMatchResult', () => {
     expect(problems).toContainEqual({ code: 'missing_seat', seatId: BLACK })
   })
 
+  it('reports a repeated unknown seat as unknown once and then duplicate', () => {
+    // Two distinct problems about two distinct entries. Reporting
+    // `unknown_seat` twice says nothing about the repetition.
+    const ghost = asSeatId('ghost')
+    const problems = validateMatchResult(
+      result('completed', [
+        { seatId: ghost, rank: 1, outcome: 'win' },
+        { seatId: ghost, rank: 2, outcome: 'loss' },
+      ]),
+      SEATS,
+    )
+    expect(problems.filter((problem) => problem.code === 'unknown_seat')).toHaveLength(1)
+    expect(problems).toContainEqual({ code: 'duplicate_seat', seatId: ghost })
+  })
+
   it('rejects a rank below 1 or non-integer', () => {
     const problems = validateMatchResult(
       result('completed', [

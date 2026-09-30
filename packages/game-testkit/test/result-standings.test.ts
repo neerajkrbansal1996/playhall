@@ -143,6 +143,49 @@ describe('result-standings-well-formed', () => {
     expect(check(run({ abortAfterSteps: 'omit' })).status).toBe('passed')
   })
 
+  it('fails an abort the driver could not reach, because the game has no getLegalActions', () => {
+    // The undershoot direction of `afterSteps`. `getLegalActions` is optional,
+    // so the driver has no moves to play and aborts from the opening position
+    // instead — a different position from the one the scenario declared.
+    const report = run({ omitGetLegalActions: true })
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain('played 0 of the requested 1 moves')
+  })
+
+  it('fails an abort the driver could not reach, because chooseAction declined', () => {
+    const report = run({ declineMoves: true })
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain('played 0 of the requested 1 moves')
+  })
+
+  it("fails an abort the game's own validateAction rejects, naming the code", () => {
+    // The real runner validates before it applies, so it would refuse this
+    // abort outright. A suite that applies it anyway certifies an abort that
+    // does nothing in production.
+    const report = run({ abortNotAllowed: true })
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain("rejected the abort action with 'not_allowed'")
+  })
+
+  it('fails, rather than crashing the run, when validateAction throws on the abort', () => {
+    const report = run({ abortValidateThrows: true })
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain('race: validateAction blew up on the abort')
+  })
+
+  it('fails a reason that is not a ResultReason at all', () => {
+    // Only a JavaScript game or a hand-built blob gets here; the SDK validator
+    // trusts the type, so this check is the thing that does not.
+    const report = run({ bogusReason: 'victory_royale' })
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain("result.reason 'victory_royale' is not one of")
+  })
+
   it('leaves a truncated playout to random-playout-terminates', () => {
     // No result to validate, so this check must not invent a failure for it.
     const report = runTurnBasedConformance(makeRace(), {
