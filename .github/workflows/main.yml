@@ -1,0 +1,106 @@
+name: Main
+
+# What happens when something lands on `main`.
+#
+# Per ADR-0004 as amended by the CTO on PER-6: `main` -> **staging** stays
+# automatic, and production comes from a **tag** (`release.yml`). That split is
+# the containment for `main` being unprotectable — one direct push, including an
+# accidental one, can reach `main`, but it cannot reach production without a
+# human cutting a tag.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Re-run the gates on the merge commit rather than trusting "CI was green on
+  # the PR". Two PRs can each be green alone and red together, and with no
+  # branch protection nothing forces a rebase before merge.
+  gates:
+    name: gates
+    # A called workflow cannot exceed the caller's grant, and `ci-gate` requests
+    # `pull-requests: write` to post its gate table. Without this the whole run
+    # fails at startup with zero jobs — not a failed job, no annotation on any
+    # step, just a red `main` and "a workflow file issue". So the grant has to be
+    # here even though the step that uses it is `if: pull_request` and can never
+    # fire on a push to `main`.
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/ci.yml
+
+  # ADR-0004 §Decision 2. Cannot prevent a direct push; makes one loud.
+  push-audit:
+    name: push-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assert this commit arrived via a merged PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/assert-merged-via-pr.mjs
+
+  # Staging deploys wait on `push-audit` as well as the gates: an unreviewed
+  # commit should not reach the environment the board clicks on, even though
+  # staging is not production.
+  staging-web:
+    name: staging (web)
+    needs: [gates, push-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: staging-web
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP_WEB: ${{ vars.FLY_APP_WEB_STAGING }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: staging
+          target: web
+          health-path: /api/health
+          provider: ${{ vars.DEPLOY_PROVIDER }}
+          probe-attempts: '30'
+
+  staging-realtime:
+    name: staging (realtime)
+    needs: [gates, push-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: staging-realtime
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP_REALTIME: ${{ vars.FLY_APP_REALTIME_STAGING }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: deploy
+        uses: ./.github/actions/deploy
+        with:
+          environment: staging
+          target: realtime
+          health-path: /health
+          provider: ${{ vars.REALTIME_DEPLOY_PROVIDER || vars.DEPLOY_PROVIDER }}
+          probe-attempts: '30'

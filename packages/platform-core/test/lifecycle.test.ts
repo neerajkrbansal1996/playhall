@@ -1,0 +1,197 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_ROOM_LIFECYCLE,
+  evaluateRoomLifecycle,
+  nextRoomDeadline,
+  roomDeadlines,
+  roomKeyTtlMs,
+} from '../src/rooms/lifecycle.js'
+import { T0, makeRoom } from './fixtures/rooms.js'
+
+const MINUTE = 60_000
+const { noOpponentMs, emptyMs, finishedMs, ttlGraceMs } = DEFAULT_ROOM_LIFECYCLE
+
+/**
+ * The shipped policy, named at every call site below.
+ *
+ * `policy` is a required argument on all four functions rather than defaulting
+ * to this, because an optional one is exactly how the store came to compute
+ * sweep deadlines under the shipped numbers while the service ran a configured
+ * policy. These cases assert the shipped numbers, so they pass it explicitly;
+ * `describe('custom policy')` at the bottom is the case that varies it.
+ */
+const SHIPPED = DEFAULT_ROOM_LIFECYCLE
+
+describe('the stated windows', () => {
+  it('matches the product requirement exactly', () => {
+    expect(noOpponentMs).toBe(30 * MINUTE)
+    expect(emptyMs).toBe(5 * MINUTE)
+    expect(finishedMs).toBe(15 * MINUTE)
+  })
+})
+
+describe('no second player -> expire after 30 min', () => {
+  const room = makeRoom({ presentPlayerIds: ['host'] })
+
+  it('keeps the room one millisecond before the deadline', () => {
+    const verdict = evaluateRoomLifecycle(room, T0 + noOpponentMs - 1, SHIPPED)
+    expect(verdict.action).toBe('keep')
+    expect(verdict.deadlineAt).toBe(T0 + noOpponentMs)
+  })
+
+  it('expires exactly at the deadline', () => {
+    const verdict = evaluateRoomLifecycle(room, T0 + noOpponentMs, SHIPPED)
+    expect(verdict).toMatchObject({ action: 'expire', reason: 'no_opponent' })
+  })
+
+  it('does not expire once a second player has joined', () => {
+    const joined = makeRoom({
+      seats: ['host', 'guest'],
+      secondPlayerJoinedAt: T0 + MINUTE,
+    })
+    expect(evaluateRoomLifecycle(joined, T0 + 10 * 60 * MINUTE, SHIPPED).action).toBe('keep')
+  })
+
+  it('does not apply once the match is running, even with one seat filled', () => {
+    const playing = makeRoom({ status: 'in_progress', presentPlayerIds: ['host'] })
+    expect(evaluateRoomLifecycle(playing, T0 + noOpponentMs + MINUTE, SHIPPED).action).toBe('keep')
+  })
+})
+
+describe('empty -> close after 5 min', () => {
+  const emptied = makeRoom({
+    seats: ['host', 'guest'],
+    secondPlayerJoinedAt: T0,
+    presentPlayerIds: [],
+    emptySince: T0 + MINUTE,
+  })
+
+  it('keeps the room inside the grace window', () => {
+    expect(evaluateRoomLifecycle(emptied, T0 + MINUTE + emptyMs - 1, SHIPPED).action).toBe('keep')
+  })
+
+  it('closes at the deadline', () => {
+    const verdict = evaluateRoomLifecycle(emptied, T0 + MINUTE + emptyMs, SHIPPED)
+    expect(verdict).toMatchObject({ action: 'close', reason: 'empty' })
+  })
+
+  it('wins over the 30-minute no-opponent timer when both are armed', () => {
+    // A host who opened a lobby and immediately closed the tab is both
+    // "never got an opponent" and "empty". Five minutes is the right answer.
+    const soloAndGone = makeRoom({ presentPlayerIds: [], emptySince: T0 })
+    const deadlines = roomDeadlines(soloAndGone, SHIPPED)
+    expect(deadlines.map((d) => d.reason)).toEqual(['empty', 'no_opponent'])
+    expect(evaluateRoomLifecycle(soloAndGone, T0 + emptyMs, SHIPPED)).toMatchObject({
+      action: 'close',
+      reason: 'empty',
+    })
+  })
+})
+
+describe('finished -> stay open 15 min for rematch and chat', () => {
+  const finished = makeRoom({
+    status: 'finished',
+    seats: ['host', 'guest'],
+    secondPlayerJoinedAt: T0,
+    finishedAt: T0 + 5 * MINUTE,
+  })
+
+  it('stays open for the whole rematch window', () => {
+    expect(evaluateRoomLifecycle(finished, T0 + 5 * MINUTE + finishedMs - 1, SHIPPED).action).toBe(
+      'keep',
+    )
+  })
+
+  it('closes when the rematch window elapses', () => {
+    expect(evaluateRoomLifecycle(finished, T0 + 5 * MINUTE + finishedMs, SHIPPED)).toMatchObject({
+      action: 'close',
+      reason: 'rematch_window_elapsed',
+    })
+  })
+
+  it('still closes after 5 empty minutes if everyone leaves first', () => {
+    const abandoned = { ...finished, presentPlayerIds: [], emptySince: T0 + 6 * MINUTE }
+    expect(evaluateRoomLifecycle(abandoned, T0 + 11 * MINUTE, SHIPPED)).toMatchObject({
+      action: 'close',
+      reason: 'empty',
+    })
+  })
+})
+
+describe('already closed -> remove after the grace window', () => {
+  const tombstone = makeRoom({
+    status: 'closed',
+    closedAt: T0,
+    closeReason: 'no_opponent',
+  })
+
+  it('arms exactly one deadline: its own removal', () => {
+    expect(roomDeadlines(tombstone, SHIPPED)).toEqual([
+      { at: T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs, action: 'remove', reason: 'no_opponent' },
+    ])
+    expect(nextRoomDeadline(tombstone, SHIPPED)).toBe(T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+  })
+
+  it('is kept until the grace window elapses, then removed', () => {
+    expect(
+      evaluateRoomLifecycle(tombstone, T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs - 1, SHIPPED),
+    ).toMatchObject({ action: 'keep' })
+    expect(
+      evaluateRoomLifecycle(tombstone, T0 + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs, SHIPPED),
+    ).toMatchObject({
+      action: 'remove',
+      reason: 'no_opponent',
+    })
+  })
+
+  /**
+   * A tombstone that armed nothing would drop out of the sweeper's range
+   * query and sit in Redis until its own key TTL fired — a leaked key, which
+   * is the failure mode the whole lifecycle module exists to avoid.
+   */
+  it('stays visible to the sweeper rather than leaking', () => {
+    expect(nextRoomDeadline(tombstone, SHIPPED)).not.toBeNull()
+  })
+
+  it('arms nothing at all if it was somehow closed without a timestamp', () => {
+    const undated = makeRoom({ status: 'closed' })
+    expect(roomDeadlines(undated, SHIPPED)).toEqual([])
+    expect(evaluateRoomLifecycle(undated, T0 + 10 * noOpponentMs, SHIPPED)).toMatchObject({
+      action: 'keep',
+      deadlineAt: null,
+    })
+  })
+})
+
+describe('TTL hygiene', () => {
+  it('gives every room a TTL, including one with no armed deadline', () => {
+    const playing = makeRoom({
+      status: 'in_progress',
+      seats: ['host', 'guest'],
+      secondPlayerJoinedAt: T0,
+    })
+    expect(nextRoomDeadline(playing, SHIPPED)).toBeNull()
+    expect(roomKeyTtlMs(playing, T0, SHIPPED)).toBe(noOpponentMs + ttlGraceMs)
+  })
+
+  it('outlives the deadline by the grace window so the sweeper can observe it', () => {
+    const room = makeRoom({ presentPlayerIds: ['host'] })
+    expect(roomKeyTtlMs(room, T0, SHIPPED)).toBe(noOpponentMs + ttlGraceMs)
+    expect(roomKeyTtlMs(room, T0 + noOpponentMs - MINUTE, SHIPPED)).toBe(MINUTE + ttlGraceMs)
+  })
+
+  it('never returns a non-positive TTL for an overdue room', () => {
+    const room = makeRoom({ presentPlayerIds: ['host'] })
+    expect(roomKeyTtlMs(room, T0 + noOpponentMs + 10 * MINUTE, SHIPPED)).toBe(ttlGraceMs)
+  })
+})
+
+describe('custom policy', () => {
+  it('is honoured end to end', () => {
+    const policy = { noOpponentMs: 1000, emptyMs: 500, finishedMs: 2000, ttlGraceMs: 10 }
+    const room = makeRoom({ presentPlayerIds: ['host'] })
+    expect(evaluateRoomLifecycle(room, T0 + 999, policy).action).toBe('keep')
+    expect(evaluateRoomLifecycle(room, T0 + 1000, policy).action).toBe('expire')
+    expect(roomKeyTtlMs(room, T0, policy)).toBe(1010)
+  })
+})

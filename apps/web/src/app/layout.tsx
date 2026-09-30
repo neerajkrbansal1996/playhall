@@ -1,11 +1,11 @@
 import type { Metadata, Viewport } from 'next'
-import { BRAND } from '@atrium/shared'
+import { BRAND } from '@playhall/shared'
 
 import './globals.css'
 
 export const metadata: Metadata = {
-  // Brand comes from one constant. The final name/domain is a board decision
-  // (PER-2); never hard-code a string here.
+  // Brand comes from one constant. The name is approved; the domain and logo are
+  // still a board decision (PER-2). Never hard-code a brand string here.
   title: BRAND.name,
   description: 'Open a lobby, share a link, play with friends. No downloads, no sign-up.',
 }

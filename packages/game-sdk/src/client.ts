@@ -113,6 +113,16 @@ export interface HUDProps<TSnapshot> {
   readonly isSpectator: boolean
 }
 
+/**
+ * Props for the **optional** custom settings form.
+ *
+ * ADR-0007: `manifest.settingsForm` is the floor and it is mandatory — the shell
+ * must be able to configure any lobby from the descriptor alone, with no game
+ * code loaded, because the create-lobby path is the LCP path. A game may
+ * additionally ship a `SettingsForm` component as progressive enhancement; the
+ * shell lazy-loads it only after the descriptor-driven form is already
+ * interactive, and a game may never require it.
+ */
 export interface SettingsFormProps<TSettings> {
   readonly value: TSettings
   readonly onChange: (next: TSettings) => void
@@ -171,5 +181,36 @@ export interface RealtimeClientModule<TSnapshot, TInput, TSettings> {
   readonly sounds?: SoundMap
 }
 
-export type AnyTurnBasedClientModule = TurnBasedClientModule<unknown, unknown, unknown>
-export type AnyRealtimeClientModule = RealtimeClientModule<unknown, unknown, unknown>
+/**
+ * A component slot with its props erased.
+ *
+ * The registry holds modules for many unlike games, so it needs a type every
+ * concrete module satisfies. `TurnBasedClientModule<unknown, unknown, unknown>`
+ * does not work: component props are contravariant, so a component that
+ * accepts `GameViewProps<ChessView, ChessAction>` is *not* assignable to one
+ * accepting `GameViewProps<unknown, unknown>` — it would be a promise to
+ * render props it cannot handle.
+ *
+ * `never` is the correct erasure. It is assignable to every props type, which
+ * is exactly the relationship "this thunk yields a component whose props the
+ * registry will not inspect". The platform passes runtime props through the
+ * render boundary; the concrete types are checked where the game is defined.
+ */
+export type ErasedLazyComponent = () => Promise<{ default: (props: never) => unknown }>
+
+export interface AnyTurnBasedClientModule {
+  readonly GameView: ErasedLazyComponent
+  readonly SettingsForm?: ErasedLazyComponent
+  readonly ResultPanel?: ErasedLazyComponent
+  readonly HowToPlay?: ErasedLazyComponent
+  readonly sounds?: SoundMap
+}
+
+export interface AnyRealtimeClientModule {
+  readonly GameScene: ErasedLazyComponent
+  readonly HUD: ErasedLazyComponent
+  readonly SettingsForm?: ErasedLazyComponent
+  readonly ResultPanel?: ErasedLazyComponent
+  readonly HowToPlay?: ErasedLazyComponent
+  readonly sounds?: SoundMap
+}

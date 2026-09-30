@@ -1,8 +1,4 @@
-import {
-  availableDrawClaims,
-  detectAutomaticEnding,
-  timeoutEnding,
-} from './rules/endings.js'
+import { availableDrawClaims, detectAutomaticEnding, timeoutEnding } from './rules/endings.js'
 import { analyse, replay, START_FEN, tryMove } from './rules/position.js'
 import {
   opponent,
@@ -13,21 +9,8 @@ import {
   type MoveInput,
 } from './rules/types.js'
 import type { GameContext, SeatId } from './sdk/contract.js'
-
-/** Host's colour choice for a new game. `random` is resolved from `ctx.rng`. */
-export type ColorPreference = 'white' | 'black' | 'random'
-
-/**
- * The slice of chess settings the *rules* care about.
- *
- * The full settings schema (time controls, presets, zod validation) is PER-24;
- * this is deliberately only what the reducer reads, so the two do not fight.
- */
-export interface ChessRulesSettings {
-  readonly takebacksEnabled: boolean
-}
-
-export const DEFAULT_RULES_SETTINGS: ChessRulesSettings = { takebacksEnabled: false }
+import { assignColors } from './settings/color.js'
+import { defaultChessSettings, type ChessSettings } from './settings/schema.js'
 
 /**
  * A player gets 30 seconds to make their first move, or the game aborts.
@@ -50,7 +33,7 @@ export interface ChessMatchState {
   /** The whole game, in SAN. The FEN is derived from this, never stored as truth. */
   readonly moves: readonly string[]
   readonly colors: ColorAssignment
-  readonly settings: ChessRulesSettings
+  readonly settings: ChessSettings
   /** Pending draw offer, if any. Redacted from spectators. */
   readonly drawOffer: { readonly by: Color } | null
   /** Ply index at which each side last offered a draw, for the cooldown. */
@@ -105,11 +88,12 @@ const fail = (error: ChessActionError): ChessActionResult => ({ ok: false, error
 const done = (state: ChessMatchState): ChessActionResult => ({ ok: true, state })
 
 export interface SetupInput {
-  /** The two seats, in the order the platform assigned them. */
-  readonly seats: readonly [SeatId, SeatId];
-  /** `seats[0]` is the host, so the preference is read from their point of view. */
-  readonly colorPreference: ColorPreference
-  readonly settings?: ChessRulesSettings
+  /** The player who opened the lobby. The colour preference is theirs. */
+  readonly hostSeatId: SeatId
+  /** Whoever joined through the link or the code. */
+  readonly guestSeatId: SeatId
+  /** Validated lobby settings. Defaults are used when omitted. */
+  readonly settings?: ChessSettings
   /** Non-standard starting position, for tests and (later) puzzles. */
   readonly initialFen?: string
 }
@@ -121,21 +105,16 @@ export interface SetupInput {
  * match log with the stored seed reproduces the same assignment.
  */
 export function setup(input: SetupInput, ctx: GameContext): ChessMatchState {
-  const [host, guest] = input.seats
-
-  const hostIsWhite =
-    input.colorPreference === 'white'
-      ? true
-      : input.colorPreference === 'black'
-        ? false
-        : ctx.rng() < 0.5
+  const settings = input.settings ?? defaultChessSettings()
 
   return {
     phase: 'awaiting_first_move',
     initialFen: input.initialFen ?? START_FEN,
     moves: [],
-    colors: hostIsWhite ? { w: host, b: guest } : { w: guest, b: host },
-    settings: input.settings ?? DEFAULT_RULES_SETTINGS,
+    // `ctx.rng` is an SDK stream object, not a bare function; adapt it rather
+    // than widening the settings layer's `Rng` type.
+    colors: assignColors(settings.color, input.hostSeatId, input.guestSeatId, () => ctx.rng.next()),
+    settings,
     drawOffer: null,
     lastDrawOfferPly: { w: null, b: null },
     ending: null,
@@ -171,7 +150,8 @@ export function canAbort(state: ChessMatchState): boolean {
  */
 export function firstMoveDeadline(state: ChessMatchState): number | null {
   if (state.phase === 'finished' || state.moves.length >= 2) return null
-  const reference = state.moves.length === 0 ? state.startedAt : (state.lastMoveAt ?? state.startedAt)
+  const reference =
+    state.moves.length === 0 ? state.startedAt : (state.lastMoveAt ?? state.startedAt)
   return reference + FIRST_MOVE_TIMEOUT_MS
 }
 
@@ -293,11 +273,7 @@ function offerDraw(state: ChessMatchState, color: Color): ChessActionResult {
   })
 }
 
-function claimDraw(
-  state: ChessMatchState,
-  claim: DrawClaim,
-  color: Color,
-): ChessActionResult {
+function claimDraw(state: ChessMatchState, claim: DrawClaim, color: Color): ChessActionResult {
   const position = analyse(state.initialFen, state.moves)
   // FIDE 9.2/9.3: the claim belongs to the player whose turn it is.
   if (position.turn !== color) return fail('not_your_turn')

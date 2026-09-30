@@ -4,7 +4,7 @@
  * This is a *contract fixture*, not the shipping game — `games/_examples/tic-tac-toe`
  * (PER-18) is that, and it is owned by Platform Engineer. Its job here is to
  * prove, in the same commit that defines the contracts, that a complete
- * turn-based game can be written using nothing but `@atrium/game-sdk`: no
+ * turn-based game can be written using nothing but `@playhall/game-sdk`: no
  * platform internals, no I/O, no `Date.now`, no `Math.random`.
  *
  * Note the single import below. That is the whole point.
@@ -137,8 +137,39 @@ export const manifest: GameManifest<TicTacToeSettings> = {
       settings: { moveTimeoutSeconds: 30, firstMove: 'seat-order' },
       isDefault: true,
     },
-    { id: 'blitz', label: 'Blitz', settings: { moveTimeoutSeconds: 5, firstMove: 'random' } },
+    {
+      id: 'blitz',
+      label: 'Blitz',
+      settings: { moveTimeoutSeconds: 5, firstMove: 'random' },
+      featured: true,
+    },
   ],
+  // The generality test for ADR-0007: tic-tac-toe is nothing like chess and
+  // needs no field kind chess did not need, and no chess concept.
+  settingsForm: {
+    version: 1,
+    fields: [
+      {
+        kind: 'number',
+        key: 'moveTimeoutSeconds',
+        label: 'Seconds per move',
+        unit: 's',
+        min: 5,
+        max: 300,
+        step: 5,
+      },
+      {
+        kind: 'select',
+        key: 'firstMove',
+        label: 'Who moves first',
+        display: 'chips',
+        options: [
+          { value: 'seat-order', label: 'Host' },
+          { value: 'random', label: 'Coin flip' },
+        ],
+      },
+    ],
+  },
   timers: [
     {
       id: 'move',

@@ -1,5 +1,23 @@
 import { Chess, type Move } from 'chess.js'
-import type { Color, MoveInput } from './types.js'
+import type { Color, MoveInput, PromotionPiece } from './types.js'
+
+const PROMOTION_PIECES: readonly string[] = ['q', 'r', 'b', 'n']
+
+/**
+ * chess.js types `Move.promotion` as any piece symbol, including `p` and `k`,
+ * which a promotion can never be. Narrow it rather than casting at the call site.
+ */
+function asPromotion(piece: string | undefined): PromotionPiece | undefined {
+  return piece !== undefined && PROMOTION_PIECES.includes(piece)
+    ? (piece as PromotionPiece)
+    : undefined
+}
+
+/** Build a `MoveInput`, omitting `promotion` entirely when there is none. */
+function moveInput(from: string, to: string, promotion: string | undefined): MoveInput {
+  const piece = asPromotion(promotion)
+  return piece ? { from, to, promotion: piece } : { from, to }
+}
 
 /** The standard starting position, as a FEN. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -115,6 +133,12 @@ export function tryMove(chess: Chess, input: MoveInput): string | null {
  * Accepts SAN ("e4", "Nf3", "O-O", "exd8=Q+") and long algebraic ("e2e4",
  * "e7e8q"). Resolves against the legal move list, so an ambiguous or illegal
  * string returns `null` rather than a guess.
+ *
+ * "Ambiguous" includes a promoting push written without its promotion letter:
+ * "e7e8" names four distinct legal moves, so it is rejected and the caller has
+ * to ask which piece. Defaulting silently — to a queen, or to whatever chess.js
+ * happens to list first — would let the server apply a move the player never
+ * chose, and an unwanted knight in a won endgame loses the game.
  */
 export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const trimmed = text.trim()
@@ -127,15 +151,17 @@ export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const coordinate = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/i.exec(trimmed)
   if (coordinate) {
     const [, from, to, promotion] = coordinate
-    const match = legal.find(
+    const candidates = legal.filter(
       (move: Move) =>
         move.from === from?.toLowerCase() &&
         move.to === to?.toLowerCase() &&
         (promotion === undefined || move.promotion === promotion.toLowerCase()),
     )
-    return match
-      ? { from: match.from, to: match.to, ...(match.promotion ? { promotion: match.promotion } : {}) }
-      : null
+    // Exactly one, mirroring the SAN branch below. A from/to pair normally
+    // identifies a single move; the one case where it does not is a promotion
+    // with the piece left off, which lands here as four candidates.
+    const match = candidates.length === 1 ? candidates[0] : undefined
+    return match ? moveInput(match.from, match.to, match.promotion) : null
   }
 
   // SAN, compared with decorations stripped so "Nf3+" and "Nf3" both resolve.
@@ -145,9 +171,5 @@ export function parseMoveInput(chess: Chess, text: string): MoveInput | null {
   const only = matches.length === 1 ? matches[0] : undefined
   if (!only) return null
 
-  return {
-    from: only.from,
-    to: only.to,
-    ...(only.promotion ? { promotion: only.promotion } : {}),
-  }
+  return moveInput(only.from, only.to, only.promotion)
 }

@@ -121,7 +121,7 @@ export function createRng(seed: string): Rng {
 /**
  * The single place where a match's per-mutation stream is derived.
  *
- * Both `@atrium/platform-core` (production) and `@atrium/game-testkit`
+ * Both `@playhall/platform-core` (production) and `@playhall/game-testkit`
  * (conformance tests) call this, so a replay in a test and a replay on the
  * server cannot drift.
  */

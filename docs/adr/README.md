@@ -40,7 +40,38 @@ so per decision rather than downgrading the whole document.
 
 ## Index
 
-| ADR                                                | Title                             | Status                                    |
-| -------------------------------------------------- | --------------------------------- | ----------------------------------------- |
-| [0001](./0001-v1-stack.md)                         | The v1 stack                      | Accepted, except §4.4 which is board-gated |
-| [0002](./0002-dependency-boundary-enforcement.md)  | Dependency-boundary enforcement   | Accepted                                  |
+| ADR                                                 | Title                                           | Status                                                                                                      |
+| --------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [0001](./0001-v1-stack.md)                          | The v1 stack                                    | Accepted (rev 4)                                                                                            |
+| [0002](./0002-dependency-boundary-enforcement.md)   | Dependency-boundary enforcement                 | Accepted (rev 2)                                                                                            |
+| [0003](./0003-hosting-and-cost-model.md)            | Hosting + cost per 1,000 concurrent players     | Accepted as to the choice (Fly.io); spend suspended, provisioning held, free-tier signups permitted, one carved Cloudflare Pages exception for `apps/web` (rev 6, §13.7) |
+| [0004](./0004-pr-gate-without-branch-protection.md) | Enforcing the PR gate without branch protection | Accepted (rev 2)                                                                                                    |
+| [0005](./0005-the-real-time-path.md)                | The real-time path (design only, M6)            | Mixed — see its own status table; §9 board-gated                                                            |
+| 0006                                                | Empty standings for a match that did not count  | Reserved — drafting on [PER-42](/PER/issues/PER-42)                                                         |
+| [0007](./0007-settings-form-descriptor.md)          | Settings-form descriptor contract               | Accepted                                                                                                    |
+| [0008](./0008-game-sdk-contract-v1.md)              | Fix the Game SDK contract at v1                 | Accepted                                                                                                    |
+| [0009](./0009-m0-websocket-transport-probe.md)      | M0's WebSocket criterion: a transport probe     | Accepted                                                                                                    |
+
+Numbers are reserved as soon as an ADR is assigned, so two people drafting concurrently cannot
+collide on one. A reserved row with no file means someone is writing it.
+
+## Amending an ADR that has landed
+
+An ADR is a dated record of a decision, not a description of the current code, so the two kinds
+of edit are handled differently and by different people:
+
+- **A mechanical identifier sweep** — a package name, a path, a rule literal quoted in the ADR
+  text — travels with the refactor that renames it. A stale identifier in an ADR is a wrong
+  instruction to whoever reads it next, and ADR-0002's rule table in particular is the spec CI
+  is keyed on, so it must match reality.
+- **A change to what the ADR records** — the decision, its alternatives, its status, a
+  consequence — is an amendment, and the CTO writes it. Add a `**Rev N —**` note in place and a
+  dated `**Amended:**` line in the header, rather than editing the original text to look like it
+  always said the new thing. The superseded reasoning is the most useful part of the file in six
+  months, and an amendment that contradicts the text above it without saying so is how ADR-0001
+  ended up needing a rev 3.
+- **When an amendment contradicts the code**, the ADR is not automatically right. Say which one
+  is wrong and name the issue that fixes it; do not leave the two disagreeing.
+
+When one commit would do both to the same file, the CTO takes the whole file and the refactor
+excludes `docs/adr/**`. One owner per file beats a merge conflict in a decision record.

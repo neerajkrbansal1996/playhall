@@ -26,7 +26,13 @@
 import type { z } from 'zod'
 import type { GameContext } from './context.js'
 import type { DisconnectPolicy, DisconnectReason } from './disconnect.js'
-import type { ActionError, MigrationError, Result, StandardActionErrorCode, ValidationResult } from './errors.js'
+import type {
+  ActionError,
+  MigrationError,
+  Result,
+  StandardActionErrorCode,
+  ValidationResult,
+} from './errors.js'
 import type { GameEvent } from './events.js'
 import type { SeatId, TimerId } from './ids.js'
 import type { GameManifest } from './manifest.js'
@@ -123,7 +129,12 @@ export interface TurnBasedGameServer<
    * A timer the game asked for has fired. `timerId` always corresponds to a
    * `TimerSpec` declared in the manifest.
    */
-  onTimer?(ctx: GameContext, state: TState, timerId: TimerId, seatId: SeatId | null): ApplyResult<TState, TEvent>
+  onTimer?(
+    ctx: GameContext,
+    state: TState,
+    timerId: TimerId,
+    seatId: SeatId | null,
+  ): ApplyResult<TState, TEvent>
 
   /** Declarative; the platform runs the grace window and the countdown UI. */
   readonly disconnectPolicy: DisconnectPolicy

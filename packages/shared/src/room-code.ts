@@ -7,26 +7,26 @@ export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ' as const
 
 export const ROOM_CODE_LENGTH = 6
 
-/** Characters a human is likely to substitute, mapped to the canonical form. */
-const CONFUSABLES: Record<string, string> = { O: '0', '0': 'O', I: '1', L: '1' }
-
 /**
- * Normalise user input into a candidate room code: upper-case, strip anything
- * outside the alphabet, and fold the obvious confusables. Does not validate
- * length — callers decide whether a partial code is acceptable.
+ * Normalise user input into a candidate room code: upper-case, then keep only
+ * alphabet characters. Does not validate length — callers decide whether a
+ * partial code is acceptable.
+ *
+ * **There is deliberately no confusable folding.** The obvious idea is to map
+ * a typed `O` to `0`, or `I` to `1` — but both halves of every such pair are
+ * excluded from the alphabet, so there is no in-alphabet character to fold
+ * *to*. Excluding the ambiguity at generation time is what solves the problem;
+ * a fold table on top of that is dead code pretending to be a safety net.
+ *
+ * Dropping the stray character rather than rejecting the whole input is what
+ * makes `ABC-234`, `abc 234` and a code with a trailing period all resolve. A
+ * genuinely misread character leaves five usable characters, which fails the
+ * length check and lands on the friendly not-found path.
  */
 export function normalizeRoomCode(input: string): string {
   const out: string[] = []
   for (const raw of input.toUpperCase()) {
-    const ch = ROOM_CODE_ALPHABET.includes(raw) ? raw : undefined
-    if (ch) {
-      out.push(ch)
-      continue
-    }
-    // '0' -> 'O' is not a legal target (O is excluded), so only fold the
-    // directions that land inside the alphabet.
-    const folded = CONFUSABLES[raw]
-    if (folded && ROOM_CODE_ALPHABET.includes(folded)) out.push(folded)
+    if (ROOM_CODE_ALPHABET.includes(raw)) out.push(raw)
   }
   return out.join('')
 }

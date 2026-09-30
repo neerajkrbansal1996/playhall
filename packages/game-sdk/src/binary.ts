@@ -1,7 +1,7 @@
 /**
  * Binary encoding contract for real-time traffic.
  *
- * Types only in M1. `@atrium/netcode` implements the reader/writer in M6.
+ * Types only in M1. `@playhall/netcode` implements the reader/writer in M6.
  *
  * Why this exists now: the budget is < 30 KB/s down per client for a 12-player
  * room at 30 Hz. That is ~1 KB per snapshot. JSON spends most of that on

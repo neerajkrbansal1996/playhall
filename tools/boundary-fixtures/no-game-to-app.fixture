@@ -1,0 +1,9 @@
+# expect: no-game-to-app
+# why: a game reaching into the realtime server it is hosted by
+=== file: games/fx-a/src/index.ts ===
+// Apps are not libraries. A game is a plugin an app loads; the arrow never points back.
+// Written as a relative path because an app is not a resolvable package — which is how this
+// violation actually shows up in practice.
+import { boot } from '../../../apps/realtime/src/index'
+
+export const id = boot()

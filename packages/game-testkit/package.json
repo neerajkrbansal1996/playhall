@@ -1,5 +1,5 @@
 {
-  "name": "@atrium/game-testkit",
+  "name": "@playhall/game-testkit",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@atrium/shared": "workspace:*",
-    "@atrium/game-sdk": "workspace:*"
+    "@playhall/shared": "workspace:*",
+    "@playhall/game-sdk": "workspace:*"
   }
 }

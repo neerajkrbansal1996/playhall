@@ -12,8 +12,6 @@ export interface MaterialCount {
   readonly bishopSquareColors: ReadonlySet<'light' | 'dark'>
 }
 
-const FILES = 'abcdefgh'
-
 export function countMaterial(fen: string, color: Color): MaterialCount {
   const board = new Chess(fen).board()
   const counts = { p: 0, n: 0, b: 0, r: 0, q: 0 }

@@ -1,0 +1,78 @@
+name: Deploy and probe
+description: >-
+  Deploys one target to one environment through scripts/deploy/deploy.mjs, then
+  proves the result is reachable by probing its health endpoint. Shared by the
+  preview and production workflows so "deployed" means the same thing in both.
+
+inputs:
+  environment:
+    description: preview | staging | production
+    required: true
+  target:
+    description: web | realtime
+    required: true
+  health-path:
+    description: Path appended to the deployed URL for the health probe.
+    required: true
+  provider:
+    description: Value of the DEPLOY_PROVIDER repo variable. Empty means "not configured".
+    required: false
+    default: ''
+  probe-attempts:
+    description: How many times to retry the health probe before failing.
+    required: false
+    default: '20'
+
+outputs:
+  url:
+    description: The deployed base URL, or empty when no provider is configured.
+    value: ${{ steps.deploy.outputs.url }}
+  status:
+    description: deployed | not_configured
+    value: ${{ steps.deploy.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy ${{ inputs.target }} (${{ inputs.environment }})
+      id: deploy
+      shell: bash
+      env:
+        DEPLOY_PROVIDER: ${{ inputs.provider }}
+        DEPLOY_ENV: ${{ inputs.environment }}
+        DEPLOY_TARGET: ${{ inputs.target }}
+      run: node scripts/deploy/deploy.mjs
+
+    # A URL nobody probed is a claim, not evidence. This step is what makes
+    # "a reachable preview URL" and "a merge to main reaches production"
+    # checkable rather than asserted.
+    - name: Probe ${{ inputs.target }} health
+      if: steps.deploy.outputs.status == 'deployed'
+      shell: bash
+      run: |
+        node scripts/ci/health-probe.mjs \
+          "${{ steps.deploy.outputs.url }}${{ inputs.health-path }}" \
+          --attempts "${{ inputs.probe-attempts }}" --delay-ms 5000
+
+    - name: Summarise
+      shell: bash
+      run: |
+        if [[ "${{ steps.deploy.outputs.status }}" == "deployed" ]]; then
+          {
+            echo "### ${{ inputs.environment }} / ${{ inputs.target }}"
+            echo ""
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+            echo "- Health: \`${{ inputs.health-path }}\` responded \`ok: true\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+        else
+          {
+            echo "### ${{ inputs.environment }} / ${{ inputs.target }} — not configured"
+            echo ""
+            echo "No hosting provider is set, so nothing was deployed. **This is expected, not a"
+            echo "failure.** The board has held all provisioning — no vendor account, no card on"
+            echo "file, no paid tier, no trial, on any provider — so there is nothing to deploy to."
+            echo "**Activating a provider needs a board decision lifting the hold first**, not just"
+            echo "a repo variable. Context: ADR-0003 §13. The pipeline is in place and needs no"
+            echo "code change once the hold lifts."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

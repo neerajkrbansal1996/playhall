@@ -1,8 +1,8 @@
 /**
- * `@atrium/game-sdk` — the only package a game may import.
+ * `@playhall/game-sdk` — the only package a game may import.
  *
  * A game imports from here and from third-party libraries. Never from
- * `@atrium/platform-core`, never from `apps/*`, never from another game. CI
+ * `@playhall/platform-core`, never from `apps/*`, never from another game. CI
  * fails the build on a violation.
  *
  * See `README.md` for the contract walkthrough and the purity rules.
@@ -34,11 +34,7 @@ export type { Rng } from './rng.js'
 export { createContextRng, createMatchSeed, createRng, deriveSeed } from './rng.js'
 
 export type { GameContext, GameContextInit, RealtimeContext } from './context.js'
-export {
-  FORBIDDEN_GLOBALS_IN_GAMES,
-  createGameContext,
-  createRealtimeContext,
-} from './context.js'
+export { FORBIDDEN_GLOBALS_IN_GAMES, createGameContext, createRealtimeContext } from './context.js'
 
 export type {
   ActionError,
@@ -69,7 +65,15 @@ export {
 export type { Seat, SeatOccupant, SeatRoster, TeamMode } from './seats.js'
 export { findSeat, seatIds, teamSeats } from './seats.js'
 
-export type { TimerCommand, TimerKind, TimerSpec } from './timers.js'
+export type {
+  ClearTimerCommand,
+  PauseTimerCommand,
+  ResumeTimerCommand,
+  SetTimerCommand,
+  TimerCommand,
+  TimerKind,
+  TimerSpec,
+} from './timers.js'
 export { clearTimer, pauseTimer, resumeTimer, setTimer } from './timers.js'
 
 export type { Viewer } from './viewer.js'
@@ -110,6 +114,31 @@ export {
   validateManifest,
 } from './manifest.js'
 
+export type {
+  FieldVisibility,
+  GameSettingsShape,
+  NumberField,
+  SelectField,
+  SelectOption,
+  SettingsContract,
+  SettingsField,
+  SettingsFieldKind,
+  SettingsFormDescriptor,
+  SettingsFormIssue,
+  SettingsFormIssueCode,
+  SettingsValue,
+  ToggleField,
+} from './settings.js'
+export {
+  SETTINGS_FORM_VERSION,
+  canonicalSettingsKey,
+  checkSettingsForm,
+  isFieldVisible,
+  settingsFieldSchema,
+  settingsFormDescriptorSchema,
+  visibleFields,
+} from './settings.js'
+
 export type { Semver, VersionPin, VersionPinFailure } from './versioning.js'
 export {
   SDK_CONTRACT_VERSION,
@@ -141,6 +170,7 @@ export type {
 export type {
   AnyRealtimeClientModule,
   AnyTurnBasedClientModule,
+  ErasedLazyComponent,
   GameComponent,
   GameSceneProps,
   GameViewProps,

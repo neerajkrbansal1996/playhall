@@ -1,5 +1,5 @@
 {
-  "name": "@atrium/chess",
+  "name": "@playhall/chess",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc --noEmit -p tsconfig.test.json",
     "build": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,6 +17,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
+    "@playhall/game-sdk": "workspace:*",
     "chess.js": "^1.4.0",
     "zod": "^3.24.1"
   },

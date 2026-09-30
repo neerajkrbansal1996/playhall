@@ -112,7 +112,13 @@ export interface RealtimeGameServer<
   readonly disconnectPolicy: DisconnectPolicy
 }
 
-export type AnyRealtimeGameServer = RealtimeGameServer<unknown, unknown, unknown, unknown, GameEvent>
+export type AnyRealtimeGameServer = RealtimeGameServer<
+  unknown,
+  unknown,
+  unknown,
+  unknown,
+  GameEvent
+>
 
 export interface RealtimeGameDefinition<
   TWorld,

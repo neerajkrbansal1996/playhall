@@ -1,0 +1,8 @@
+# expect: no-game-to-platform
+# why: a game reaching past @scope/game-sdk into platform internals
+=== file: games/fx-a/src/index.ts ===
+// A game may only import @scope/game-sdk. platform-core is an internal whose shape is free
+// to change under the game, which is exactly what the SDK contract exists to prevent.
+import { brandKey } from '@scope/platform-core'
+
+export const id = brandKey

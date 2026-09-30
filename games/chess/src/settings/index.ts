@@ -48,7 +48,7 @@ export type {
   SettingsField,
   SettingsFormDescriptor,
   ToggleField,
-} from '../sdk/settings-contract.js'
+} from '../sdk/contract.js'
 
 export {
   CHESS_SETTINGS_PRESETS,

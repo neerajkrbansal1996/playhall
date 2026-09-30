@@ -1,0 +1,157 @@
+name: Uptime monitor
+
+# The uptime monitor PER-6 asks for, built on GitHub Actions' scheduler.
+#
+# Why not a vendor: every hosted monitor (Better Stack, Pingdom, UptimeRobot,
+# Checkly) needs an account, and a paid-service signup is board-gated. Actions
+# cron costs nothing extra and is available today. It is a genuinely weaker
+# monitor and the trade is stated rather than hidden:
+#
+#   * resolution is ~5 min at best and GitHub delays cron under load — so this
+#     detects an outage in minutes, not seconds;
+#   * it probes from GitHub's network only, so it cannot tell "our service is
+#     down" from "our service is unreachable from one region";
+#   * it cannot page anyone. It opens/updates a GitHub issue.
+#
+# For launch (M5) that is not good enough; docs/ci-cd.md records what a real
+# monitor needs so the board can price it. Until then, this is a real monitor
+# rather than a TODO.
+
+on:
+  schedule:
+    # Every 10 minutes. Actions cron is best-effort; treat it as "about 10".
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    name: probe production health
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Nothing is deployed yet, so with the URLs unset this exits early rather
+      # than opening a false alarm every 10 minutes.
+      - name: Resolve targets
+        id: targets
+        env:
+          WEB_URL: ${{ vars.PRODUCTION_WEB_URL }}
+          REALTIME_URL: ${{ vars.PRODUCTION_REALTIME_URL }}
+        run: |
+          if [[ -z "$WEB_URL" && -z "$REALTIME_URL" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Uptime monitor idle::Neither PRODUCTION_WEB_URL nor PRODUCTION_REALTIME_URL is set, so there is nothing to probe. These are set by the production deploy once a hosting provider is approved (PER-2)."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe web
+        id: web
+        if: steps.targets.outputs.configured == 'true' && vars.PRODUCTION_WEB_URL != ''
+        continue-on-error: true
+        run: |
+          node scripts/ci/health-probe.mjs \
+            "${{ vars.PRODUCTION_WEB_URL }}/api/health" \
+            --attempts 3 --delay-ms 10000 --timeout-ms 10000
+
+      - name: Probe realtime
+        id: realtime
+        if: steps.targets.outputs.configured == 'true' && vars.PRODUCTION_REALTIME_URL != ''
+        continue-on-error: true
+        run: |
+          node scripts/ci/health-probe.mjs \
+            "${{ vars.PRODUCTION_REALTIME_URL }}/health" \
+            --attempts 3 --delay-ms 10000 --timeout-ms 10000
+
+      # One issue per outage, reopened and re-commented rather than duplicated,
+      # and closed automatically when health returns. An alert channel that
+      # spams is an alert channel people mute.
+      - name: Report
+        if: steps.targets.outputs.configured == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WEB_OUTCOME: ${{ steps.web.outcome }}
+          REALTIME_OUTCOME: ${{ steps.realtime.outcome }}
+        with:
+          script: |
+            const LABEL = 'uptime'
+            const TITLE = 'Production health check failing'
+            const down = []
+            if (process.env.WEB_OUTCOME === 'failure') down.push('web')
+            if (process.env.REALTIME_OUTCOME === 'failure') down.push('realtime')
+
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`
+
+            // `issues.listForRepo`, not the search API. GitHub is deprecating
+            // `search.issuesAndPullRequests` calls that do not pass
+            // `advanced_search`, so this would have started failing on its own
+            // schedule — and the search index lags writes by seconds to minutes,
+            // which is exactly wrong for "have I already opened this outage
+            // issue?". Listing by label is exact and immediate.
+            const found = await github.rest.issues.listForRepo({
+              ...context.repo,
+              labels: LABEL,
+              state: 'open',
+              per_page: 100,
+            })
+            const open = found.data.find((i) => !i.pull_request && i.title === TITLE)
+
+            if (down.length === 0) {
+              if (open) {
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: open.number,
+                  body: `Recovered — all probed endpoints healthy as of ${runUrl}.`,
+                })
+                await github.rest.issues.update({
+                  ...context.repo,
+                  issue_number: open.number,
+                  state: 'closed',
+                })
+              }
+              core.info('All probed endpoints healthy.')
+              return
+            }
+
+            const body = [
+              `Health probe failed for: **${down.join(', ')}**.`,
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'A probe fails when the endpoint is unreachable, returns a non-2xx status, or',
+              'returns 2xx without `ok: true` in the body. The third case matters: a CDN edge',
+              'will serve a cached 200 while the service behind it is down.',
+            ].join('\n')
+
+            if (open) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: open.number,
+                body,
+              })
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: TITLE,
+                labels: [LABEL],
+                body,
+              })
+            }
+            core.setFailed(`Down: ${down.join(', ')}`)

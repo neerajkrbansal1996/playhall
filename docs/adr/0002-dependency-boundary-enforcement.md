@@ -2,6 +2,13 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
+- **Amended:** 2026-09-30 (rev 2) — **§2 gains one rule**, `no-platform-framework-in-games`.
+  [ADR-0001](./0001-v1-stack.md) §4 was decided the other way by the board (approval
+  [15587c20](/PER/approvals/15587c20-53fb-499e-9b53-4718df50a5df), rejected 2026-09-30): Colyseus
+  is the server framework. ADR-0001 §4.2 condition 2 forbids a game from depending on it, and
+  rev 1's rule set could not express that — it denylists `@playhall/*` internals only, so
+  `pnpm add colyseus` in a game package failed nothing. The rule closes that gap. Nothing else in
+  this ADR changes.
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -27,25 +34,25 @@ the gate.
 
 ### 1. Why dependency-cruiser and not ESLint boundaries
 
-| Requirement                                                                     | dependency-cruiser | `eslint-plugin-boundaries` |
-| ------------------------------------------------------------------------------- | ------------------ | -------------------------- |
-| Rules in one declarative file a reviewer can read end to end                    | Yes                | Spread across ESLint config |
-| Error names the violated rule, so the failure is self-explaining                | Yes (`name` + `comment`) | Rule id only          |
-| Sees **dynamic** `import()` edges                                               | Yes                | Partially                  |
-| Sees type-only imports                                                          | Yes                | Yes                        |
-| Can express "only *this one* module may reach games"                            | Path-precise       | Awkward                    |
-| Can validate declared `package.json` dependencies, not just source imports      | Yes                | No                         |
-| Covers files ESLint does not lint                                               | Yes                | No                         |
+| Requirement                                                                | dependency-cruiser       | `eslint-plugin-boundaries`  |
+| -------------------------------------------------------------------------- | ------------------------ | --------------------------- |
+| Rules in one declarative file a reviewer can read end to end               | Yes                      | Spread across ESLint config |
+| Error names the violated rule, so the failure is self-explaining           | Yes (`name` + `comment`) | Rule id only                |
+| Sees **dynamic** `import()` edges                                          | Yes                      | Partially                   |
+| Sees type-only imports                                                     | Yes                      | Yes                         |
+| Can express "only _this one_ module may reach games"                       | Path-precise             | Awkward                     |
+| Can validate declared `package.json` dependencies, not just source imports | Yes                      | No                          |
+| Covers files ESLint does not lint                                          | Yes                      | No                          |
 
 The deciding factor is the dynamic-import row combined with the allowlist row. Our registry
 must load games via dynamic `import()` (ADR-0001 §3, so a game adds zero bytes to other
-bundles) while every *other* platform→game edge stays forbidden. That is one narrow
+bundles) while every _other_ platform→game edge stays forbidden. That is one narrow
 path-based exception, which dependency-cruiser expresses directly and ESLint does not.
 
 **Alternatives considered.**
 
 - **`eslint-plugin-boundaries` / `eslint-plugin-import` alone** — lost on the table above.
-  Kept as a *second* layer for editor feedback, because a violation caught while typing is
+  Kept as a _second_ layer for editor feedback, because a violation caught while typing is
   worth more than one caught in CI. Defence in depth, not the gate.
 - **TypeScript project references alone** — an illegal import would become a typecheck error,
   which is appealing because it needs no extra tool. It lost because it cannot express
@@ -53,7 +60,7 @@ path-based exception, which dependency-cruiser expresses directly and ESLint doe
   in the graph for one reason, every import from it is legal. It also cannot forbid
   `Date.now()` or a `node:fs` import.
 - **pnpm workspace `dependencies` discipline alone** — catches an undeclared dependency, does
-  not catch a declared-but-illegal one. Someone adding `@atrium/platform-core` to
+  not catch a declared-but-illegal one. Someone adding `@playhall/platform-core` to
   `games/chess/package.json` would sail through. Necessary, not sufficient — which is why
   rule 8 below checks `package.json` too.
 - **Review-only, no tooling** — rejected. The required reviewer is the last line of defence,
@@ -62,25 +69,46 @@ path-based exception, which dependency-cruiser expresses directly and ESLint doe
 
 ### 2. The rule set (this is the actual contract)
 
-All rules are `severity: error`. Every rule carries a `comment` that states *why*, because the
+All rules are `severity: error`. Every rule carries a `comment` that states _why_, because the
 CI output is where an engineer meets this rule for the first time.
 
-| Rule name                   | From                    | To (forbidden)                                           | Why |
-| --------------------------- | ----------------------- | -------------------------------------------------------- | --- |
-| `no-game-to-platform`       | `^games/`               | `^packages/(platform-core\|netcode\|game-testkit\|ui)`    | A game talks to the platform **only** through `game-sdk`. |
-| `no-game-to-app`            | `^games/`               | `^apps/`                                                 | A game may not reach into the web shell or the server. |
-| `no-game-to-game`           | `^games/([^/]+)/`       | `^games/` **except** `^games/$1/` (see note)              | Games are independent plugins. Chess is not a special case. |
-| `no-game-to-shared-internals`| `^games/`              | `^packages/shared/src/(?!index)`                         | Deep imports bypass the published surface. |
-| `no-platform-to-game`       | `^(packages\|apps)/`    | `^games/`                                                | The platform never imports a game. Exception in §3. |
-| `no-sdk-to-platform`        | `^packages/game-sdk/`   | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/` | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable. |
-| `no-game-node-builtins`     | `^games/`               | `core` (`node:*`, `fs`, `net`, `crypto`, …)               | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible. |
-| `no-illegal-declared-dep`   | `games/*/package.json`  | any `@atrium/*` except `@atrium/game-sdk`                | A declared dependency is as much a violation as an import. |
-| `no-circular`               | any                     | itself (cycle)                                           | Cycles make version pinning and incremental build unreliable. |
+| Rule name                        | From                                 | To (forbidden)                                                | Why                                                                                                               |
+| -------------------------------- | ------------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `no-game-to-platform`            | `^games/`                            | `^packages/(platform-core\|netcode\|game-testkit\|ui)`        | A game talks to the platform **only** through `game-sdk`.                                                         |
+| `no-game-to-app`                 | `^games/`                            | `^apps/`                                                      | A game may not reach into the web shell or the server.                                                            |
+| `no-game-to-game`                | `^games/([^/]+)/`                    | `^games/` **except** `^games/$1/` (see note)                  | Games are independent plugins. Chess is not a special case.                                                       |
+| `no-game-to-shared-internals`    | `^games/`                            | `^packages/shared/src/(?!index)`                              | Deep imports bypass the published surface.                                                                        |
+| `no-platform-to-game`            | `^(packages\|apps)/`                 | `^games/`                                                     | The platform never imports a game. Exception in §3.                                                               |
+| `no-sdk-to-platform`             | `^packages/game-sdk/`                | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/` | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable. |
+| `no-game-node-builtins`          | `^games/`                            | `core` (`node:*`, `fs`, `net`, `crypto`, …)                   | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                     |
+| `no-illegal-declared-dep`        | `games/*/package.json`               | any `@playhall/*` except `@playhall/game-sdk`                 | A declared dependency is as much a violation as an import.                                                        |
+| `no-platform-framework-in-games` | `^games/` and `games/*/package.json` | `colyseus`, `@colyseus/schema`                                | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2.  |
+| `no-circular`                    | any                                  | itself (cycle)                                                | Cycles make version pinning and incremental build unreliable.                                                     |
 
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
 is not a boundary violation and failing the build on it trains people to ignore the tool.
 
-**Note on `no-game-to-game`:** dependency-cruiser supports *group matching* — a capture group
+**Note on `no-platform-framework-in-games` (rev 2).** This is the only rule here that names a
+third-party package, and that asymmetry is deliberate rather than an oversight to be tidied up
+later. `no-illegal-declared-dep` denylists `@playhall/*`, so it catches a game reaching for
+_our_ internals and misses a game reaching for the framework _underneath_ them. Once ADR-0001 §4
+put Colyseus in the tree as the server framework, `pnpm add colyseus` inside `games/chess` became
+a change that fails nothing — an import boundary a reviewer has to remember, which is exactly
+what this ADR exists to eliminate. Two properties keep it honest:
+
+- **It denylists, it does not allowlist.** Games may use any third-party library they like; the
+  list names only packages whose presence in a game would mean the game had become coupled to a
+  platform decision. Adding to the list is an ADR amendment, not a config tweak.
+- **It covers the declaration and the import.** A game can couple itself either way, so both
+  `from.path` and the `package.json` check are needed. This mirrors the split that already exists
+  between `no-game-to-platform` and `no-illegal-declared-dep`.
+
+The behavioural half of the same condition lives in the testkit: a game module must pass
+`packages/game-testkit` conformance with Colyseus **absent from the dependency tree**
+([PER-17](/PER/issues/PER-17)). The boundary rule catches a declaration; the testkit catches a
+reach the rule's patterns did not anticipate.
+
+**Note on `no-game-to-game`:** dependency-cruiser supports _group matching_ — a capture group
 in `from.path` is referenced as `$1` in `to.path` / `to.pathNot` (dependency-cruiser's own
 syntax, not a regex backreference). So the rule reads "from any game, to any game that is not
 this one":
@@ -102,7 +130,7 @@ game is added — the same failure mode as the convention we are replacing.
 
 `no-platform-to-game` has exactly **one** exception, and it is narrow by construction:
 
-- **Allowed:** a *generated* registry module, matched by path
+- **Allowed:** a _generated_ registry module, matched by path
   `^apps/[^/]+/src/games\.generated\.ts$`, may `import()` game entry points **dynamically**.
 - **Forbidden:** everything else, including any static import, and including any hand-written
   file.
@@ -110,7 +138,7 @@ game is added — the same failure mode as the convention we are replacing.
 Three properties make this safe rather than a loophole:
 
 1. **It is generated, not written.** A script enumerates `games/*/` and emits the file. No
-   engineer hand-writes a platform→game import, so the exception cannot be *used* by someone
+   engineer hand-writes a platform→game import, so the exception cannot be _used_ by someone
    trying to get around the rule — they would have to edit a generated file, which review
    catches.
 2. **`packages/platform-core` gets no exception at all.** The platform core never references a
@@ -125,8 +153,8 @@ build — not be relaxed. Platform Engineer: flag it to me rather than widening 
 
 ### 4. Determinism is enforced here too
 
-The boundary rules keep a game from reaching *outward*. Determinism keeps it from reaching
-*upward* into ambient state, and it is enforced by ESLint (already committed in
+The boundary rules keep a game from reaching _outward_. Determinism keeps it from reaching
+_upward_ into ambient state, and it is enforced by ESLint (already committed in
 `eslint.config.mjs`), not by dependency-cruiser:
 
 - `Date.now` → banned in `packages/**/src` and `games/**/src`. Use `ctx.now`.
@@ -159,11 +187,16 @@ breaks the build is not acceptable. The committed form is:
 - A test copies each fixture into a scratch package under the workspace, runs
   dependency-cruiser against it, and asserts **both** that the exit code is non-zero **and
   that the expected rule name appears in the output**. Asserting the rule name is the point:
-  it proves the *right* rule fired, not merely that something failed.
+  it proves the _right_ rule fired, not merely that something failed.
 - One fixture per rule in §2. A rule with no fixture is a rule we have not proven works.
 
+**Rev 2 adds two fixtures, not one.** `no-platform-framework-in-games` can be violated by an
+import or by a `package.json` entry, and those are two different code paths in
+dependency-cruiser. A fixture for only the import half would leave the half that is easier to
+write by accident — `pnpm add colyseus` — unproven.
+
 This is also how we demonstrate epic acceptance criterion 3 to the board: the test output
-*is* the evidence, and it is repeatable rather than a one-off broken build.
+_is_ the evidence, and it is repeatable rather than a one-off broken build.
 
 ## Evidence
 
@@ -173,7 +206,7 @@ This is also how we demonstrate epic acceptance criterion 3 to the board: the te
 > packages, not dropping the gate.
 
 The structural argument does not need a measurement: the table in §1 is about
-*expressiveness*, and the dynamic-import and single-allowlist requirements are either
+_expressiveness_, and the dynamic-import and single-allowlist requirements are either
 supported or not.
 
 ## Consequences
@@ -211,3 +244,8 @@ supported or not.
   a signal the registry abstraction is wrong. Escalate to me for an SDK ADR.
 - A game needs a `node:*` builtin → the game is doing I/O it should not. The capability belongs
   behind an SDK-provided `ctx` facility, decided by ADR, or it belongs nowhere.
+- **A game has a genuine need for something in `no-platform-framework-in-games`** → the answer is
+  not to allowlist it. Either the capability is general, in which case it belongs in
+  `game-sdk` behind our own type (**generality test**), or it is specific, in which case the game
+  finds another way. ADR-0001 §4.2 condition 2 is the constraint being enforced; relaxing the
+  rule without amending that condition would make the condition decorative.
