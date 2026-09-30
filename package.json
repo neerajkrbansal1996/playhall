@@ -16,6 +16,7 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "check:toolchain": "node scripts/check-toolchain-pins.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm -r test",
