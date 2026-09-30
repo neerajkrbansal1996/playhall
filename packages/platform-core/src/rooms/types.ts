@@ -149,3 +149,24 @@ export function seatIndexOf(room: Room, playerId: string): number | null {
 export function isRoomMember(room: Room, playerId: string): boolean {
   return seatIndexOf(room, playerId) !== null || room.spectatorPlayerIds.includes(playerId)
 }
+
+/**
+ * Whether this room has reached the end of its life and may no longer be
+ * revised.
+ *
+ * `closed` is the one terminal status, and the sweeper is the only thing that
+ * reaches it. Every other status is a legal starting point for a write:
+ * `finished` in particular is *not* terminal, because the rematch window exists
+ * precisely so a finished room can be re-crewed.
+ *
+ * The distinction is load-bearing rather than tidy. A write accepted against a
+ * closed room resurrects it — `status` goes back to a live value while
+ * `closedAt` and `closeReason` stay set, so the record is self-contradictory,
+ * `roomDeadlines` leaves the tombstone branch and stops arming the removal that
+ * frees the room's code, and a player can join a room the platform has already
+ * told everyone is over. Callers check this before building a successor; see
+ * `mutate` in `rooms/service.ts`.
+ */
+export function isRoomTerminal(room: Room): boolean {
+  return room.status === 'closed'
+}

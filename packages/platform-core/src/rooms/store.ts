@@ -22,12 +22,27 @@
  *
  * Every key this port implies has a TTL derived from `roomKeyTtlMs`. A room
  * that leaks is a scaling bug.
+ *
+ * A store therefore has to *know* the lifecycle policy rather than be handed it
+ * per call: in Redis the sorted-set score and the key TTL are both written at
+ * write time, long before any sweep asks a question. That is why `lifecycle` is
+ * part of the port. A store scoring rooms under one policy while the service
+ * judges them under another is a silent no-op — candidates never come due, or
+ * come due and are always kept — so `createRoomService` refuses the mismatch at
+ * construction instead of letting it bake in.
  */
 
-import { nextRoomDeadline } from './lifecycle.js'
+import { DEFAULT_ROOM_LIFECYCLE, type RoomLifecyclePolicy, nextRoomDeadline } from './lifecycle.js'
 import type { Room } from './types.js'
 
 export interface RoomStore {
+  /**
+   * The policy this store computes deadlines and TTLs under. Read by
+   * `createRoomService`, which will not run against a store that disagrees with
+   * its own configured policy.
+   */
+  readonly lifecycle: RoomLifecyclePolicy
+
   /** Atomically claims `code` for `roomId`. False if already taken. */
   reserveCode(code: string, roomId: string): Promise<boolean>
   releaseCode(code: string): Promise<void>
@@ -58,11 +73,14 @@ export interface RoomStore {
   readonly size: number
 }
 
-export function createInMemoryRoomStore(): RoomStore {
+export function createInMemoryRoomStore(
+  lifecycle: RoomLifecyclePolicy = DEFAULT_ROOM_LIFECYCLE,
+): RoomStore {
   const rooms = new Map<string, Room>()
   const codes = new Map<string, string>()
 
   return {
+    lifecycle,
     async reserveCode(code, roomId) {
       if (codes.has(code)) return false
       codes.set(code, roomId)
@@ -107,7 +125,11 @@ export function createInMemoryRoomStore(): RoomStore {
     async dueForSweep(now, limit) {
       return [...rooms.values()]
         .filter((room) => {
-          const deadline = nextRoomDeadline(room)
+          // Scored under this store's own policy. Defaulting the argument here
+          // would make a configured policy a no-op: the sweeper would select
+          // candidates on 30 minutes while the service judged them on 30
+          // seconds, and no room would ever come due.
+          const deadline = nextRoomDeadline(room, lifecycle)
           return deadline !== null && deadline <= now
         })
         .slice(0, limit)

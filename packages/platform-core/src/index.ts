@@ -62,6 +62,7 @@ export type {
 export {
   freeSeatIndex,
   isRoomMember,
+  isRoomTerminal,
   reviseRoom,
   seatIndexOf,
   seatedPlayerIds,
@@ -74,6 +75,7 @@ export {
   nextRoomDeadline,
   roomDeadlines,
   roomKeyTtlMs,
+  sameRoomLifecyclePolicy,
 } from './rooms/lifecycle.js'
 
 export type { JoinOutcome, JoinRejectionCode, ResolveJoinInput } from './rooms/join.js'

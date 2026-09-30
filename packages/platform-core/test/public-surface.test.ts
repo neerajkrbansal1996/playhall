@@ -47,6 +47,11 @@ describe('the package surface', () => {
       // successor helper its compare-and-set depends on has to be exported.
       'reviseRoom',
       'chargesFailedJoinBudget',
+      // Same reason: an out-of-package store has to be able to ask whether a
+      // room may still be revised, and to prove its policy matches the
+      // service's before either half scores a deadline.
+      'isRoomTerminal',
+      'sameRoomLifecyclePolicy',
     ]) {
       expect(platform).toHaveProperty(name)
     }

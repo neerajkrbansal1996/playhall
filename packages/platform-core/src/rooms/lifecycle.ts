@@ -53,6 +53,24 @@ export const DEFAULT_ROOM_LIFECYCLE: RoomLifecyclePolicy = Object.freeze({
   ttlGraceMs: 60_000,
 })
 
+/**
+ * Whether two policies are the same set of deadlines.
+ *
+ * Exists so a wiring mismatch can be *detected* rather than discovered in
+ * production as "the lifecycle timers are configured and nothing ever expires".
+ * Compared field by field, not by reference: the store and the service are
+ * usually constructed in different places and a shared frozen default is only
+ * one of the ways they can legitimately agree.
+ */
+export function sameRoomLifecyclePolicy(a: RoomLifecyclePolicy, b: RoomLifecyclePolicy): boolean {
+  return (
+    a.noOpponentMs === b.noOpponentMs &&
+    a.emptyMs === b.emptyMs &&
+    a.finishedMs === b.finishedMs &&
+    a.ttlGraceMs === b.ttlGraceMs
+  )
+}
+
 export type RoomLifecycleAction =
   /** Nothing due. `deadlineAt` is when something next could be. */
   | { readonly action: 'keep'; readonly deadlineAt: number | null; readonly reason: null }

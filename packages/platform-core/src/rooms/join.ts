@@ -47,6 +47,14 @@ export const JOIN_REJECTION_CODES = [
   'game_unavailable',
   'rate_limited',
   'too_many_failed_joins',
+  /**
+   * The compare-and-set retry budget ran out while other players were joining
+   * the same room. Not `rate_limited`: nothing the player did earned it, no
+   * token of theirs was spent, and the remedy is an immediate retry rather than
+   * a wait. Conflating the two hides real store contention behind a message
+   * that blames the player.
+   */
+  'contended',
 ] as const
 export type JoinRejectionCode = (typeof JOIN_REJECTION_CODES)[number]
 

@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createFeatureFlags, type FeatureFlagOverrides } from '../src/flags.js'
 import { createGameRegistry } from '../src/registry/registry.js'
 import { DEFAULT_RATE_LIMITS } from '../src/rate-limit/policies.js'
-import { DEFAULT_ROOM_LIFECYCLE } from '../src/rooms/lifecycle.js'
+import {
+  DEFAULT_ROOM_LIFECYCLE,
+  type RoomLifecyclePolicy,
+  nextRoomDeadline,
+} from '../src/rooms/lifecycle.js'
+import { chargesFailedJoinBudget, isTerminalRejection } from '../src/rooms/join.js'
 import {
   createRoomService,
   createRoomRequestSchema,
@@ -554,8 +559,13 @@ describe('lost-update protection', () => {
       playerId: 'guest',
       ip: IP,
     })
-    expect(joined).toMatchObject({ ok: false, code: 'rate_limited' })
+    // `contended`, not `rate_limited`. The player spent one join token and got
+    // no further than the store's own contention; blaming them for it would
+    // both mislead the UI ("slow down") and hide a hot room from operators.
+    expect(joined).toMatchObject({ ok: false, code: 'contended', terminal: false })
     expect(!joined.ok && joined.retryAfterMs).toBeGreaterThan(0)
+    expect(chargesFailedJoinBudget('contended')).toBe(false)
+    expect(isTerminalRejection('contended')).toBe(false)
 
     // Contention is reported as contention, never as a missing room. The two
     // are opposite instructions: retry, versus give up and treat the room as
@@ -583,6 +593,139 @@ describe('lost-update protection', () => {
     await expect(c.service.leave('nope', 'p')).resolves.toEqual({
       ok: false,
       error: { code: 'room_not_found' },
+    })
+  })
+})
+
+describe('a closed room is terminal', () => {
+  /** Creates a room, then closes it through the sweeper's own 30-minute path. */
+  async function closedRoom(): Promise<string> {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
+    expect(await h.service.sweep()).toMatchObject({ expired: 1 })
+    return created.room.id
+  }
+
+  it('refuses to finish a match in a room the sweeper has already closed', async () => {
+    const roomId = await closedRoom()
+
+    await expect(h.service.finishMatch(roomId, 'match-1')).resolves.toEqual({
+      ok: false,
+      error: { code: 'room_closed', closeReason: 'no_opponent' },
+    })
+
+    // The record is untouched: still closed, still carrying why and when.
+    const after = await h.store.get(roomId)
+    expect(after).toMatchObject({ status: 'closed', closeReason: 'no_opponent' })
+    expect(after?.closedAt).not.toBeNull()
+  })
+
+  it('refuses a leave against a closed room rather than writing to a tombstone', async () => {
+    const roomId = await closedRoom()
+    const before = await h.store.get(roomId)
+
+    await expect(h.service.leave(roomId, 'host')).resolves.toEqual({
+      ok: false,
+      error: { code: 'room_closed', closeReason: 'no_opponent' },
+    })
+    // Not even a version bump: a refused mutation is not a write.
+    expect(await h.store.get(roomId)).toEqual(before)
+  })
+
+  it('room_closed is not room_not_found, because the room is still readable', async () => {
+    const roomId = await closedRoom()
+    expect(await h.store.get(roomId)).not.toBeNull()
+    await expect(h.service.finishMatch('no-such-room', 'm')).resolves.toEqual({
+      ok: false,
+      error: { code: 'room_not_found' },
+    })
+  })
+
+  it('keeps the removal deadline armed, so the tombstone cannot be stranded', async () => {
+    const roomId = await closedRoom()
+    await h.service.finishMatch(roomId, 'match-1')
+
+    // The resurrection bug this guards: `status: 'finished'` over a tombstone
+    // moves the room off `roomDeadlines`' closed branch, the `remove` candidate
+    // disappears, and the room drops out of `dueForSweep` forever — a leaked
+    // key holding a reserved code.
+    const room = await h.store.get(roomId)
+    if (room === null) throw new Error('tombstone vanished')
+    expect(nextRoomDeadline(room)).toBe(room.closedAt! + DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.ttlGraceMs)
+    expect(await h.service.sweep()).toMatchObject({ removed: 1 })
+    expect(h.store.size).toBe(0)
+  })
+
+  it('keeps a stranger out of a room the platform has told everyone is over', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    const { code, id } = created.room
+
+    h.clock.advance(DEFAULT_ROOM_LIFECYCLE.noOpponentMs)
+    await h.service.sweep()
+    await h.service.finishMatch(id, 'match-1')
+
+    await expect(
+      h.service.joinByCode({ rawCode: code, playerId: 'stranger', ip: IP }),
+    ).resolves.toMatchObject({ ok: false, code: 'room_expired', terminal: true })
+  })
+
+  it('still lets a finished room be re-crewed — finished is not terminal', async () => {
+    const created = await h.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    await h.service.joinByCode({ rawCode: created.room.code, playerId: 'guest', ip: IP })
+
+    const finished = await h.service.finishMatch(created.room.id, 'match-1')
+    expect(finished.ok).toBe(true)
+    // A second call is legal too: the rematch window is a live room's window.
+    await expect(h.service.finishMatch(created.room.id, 'match-2')).resolves.toMatchObject({
+      ok: true,
+    })
+    await expect(h.service.leave(created.room.id, 'guest')).resolves.toMatchObject({ ok: true })
+  })
+
+  it('catches a room that closes between compare-and-set attempts', async () => {
+    // The guard sits inside the retry loop because the sweeper runs
+    // concurrently with every mutation. A store that loses the first write and
+    // closes the room underneath must produce `room_closed`, not a write.
+    const clock = fixedClock(T0)
+    const inner = createInMemoryRoomStore()
+    let attempts = 0
+    const store: RoomStore = {
+      ...inner,
+      async get(roomId) {
+        const room = await inner.get(roomId)
+        attempts += 1
+        if (attempts === 1 || room === null) return room
+        return { ...room, status: 'closed', closedAt: clock.now(), closeReason: 'empty' }
+      },
+      async save(previous, next) {
+        // Lose the first race so the loop takes a second look.
+        return attempts <= 1 ? false : inner.save(previous, next)
+      },
+    }
+    const flags = createFeatureFlags()
+    const registry = await createGameRegistry({
+      registrations: [registrationFor(makeGame({ slug: 'duo', id: 'game-duo' }))],
+      flags,
+    })
+    const service = createRoomService({
+      store,
+      registry,
+      flags,
+      clock,
+      random: webCryptoRandomSource(),
+      ids: countingIdSource('room'),
+    })
+    const created = await service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+
+    await expect(service.finishMatch(created.room.id, 'm')).resolves.toEqual({
+      ok: false,
+      error: { code: 'room_closed', closeReason: 'empty' },
     })
   })
 })
@@ -746,5 +889,113 @@ describe('sweep', () => {
       removed: 0,
       prunedLimiterKeys: 0,
     })
+  })
+})
+
+describe('a configured lifecycle policy is the one that runs', () => {
+  // `RoomLifecyclePolicy` is public API and every other test in this file runs
+  // the default, which is how the store's `dueForSweep` came to score candidates
+  // under `DEFAULT_ROOM_LIFECYCLE` regardless of configuration. Under a short
+  // policy the defaulted store selected nothing, so no room was ever swept and
+  // the default-policy control case stayed green throughout.
+  const FAST: RoomLifecyclePolicy = Object.freeze({
+    noOpponentMs: 30_000,
+    emptyMs: 5_000,
+    finishedMs: 15_000,
+    ttlGraceMs: 1_000,
+  })
+
+  async function fastHarness(): Promise<Harness> {
+    const clock = fixedClock(T0)
+    const store = createInMemoryRoomStore(FAST)
+    const flags = createFeatureFlags()
+    const registry = await createGameRegistry({
+      registrations: [registrationFor(makeGame({ slug: 'duo', id: 'game-duo' }))],
+      flags,
+    })
+    return {
+      clock,
+      store,
+      service: createRoomService({
+        store,
+        registry,
+        flags,
+        clock,
+        random: webCryptoRandomSource(),
+        ids: countingIdSource('room'),
+        lifecycle: FAST,
+      }),
+    }
+  }
+
+  it('sweeps on the configured deadlines, not on the defaults', async () => {
+    const f = await fastHarness()
+    const created = await f.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+
+    f.clock.advance(FAST.noOpponentMs - 1)
+    expect(await f.service.sweep()).toMatchObject({ expired: 0 })
+
+    f.clock.advance(1)
+    // Was 0 before the fix: the store still scored this room 30 minutes out, so
+    // it never entered the candidate set the verdict would have expired.
+    expect(await f.service.sweep()).toMatchObject({ expired: 1 })
+
+    f.clock.advance(FAST.ttlGraceMs)
+    expect(await f.service.sweep()).toMatchObject({ removed: 1 })
+    expect(f.store.size).toBe(0)
+  })
+
+  it('runs the configured finished and empty windows too', async () => {
+    const f = await fastHarness()
+    const created = await f.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    await f.service.joinByCode({ rawCode: created.room.code, playerId: 'guest', ip: IP })
+    await f.service.finishMatch(created.room.id, 'match-1')
+
+    f.clock.advance(FAST.finishedMs)
+    expect(await f.service.sweep()).toMatchObject({ closed: 1 })
+  })
+
+  it('scores the store and judges the service under one policy', async () => {
+    const f = await fastHarness()
+    expect(f.store.lifecycle).toEqual(FAST)
+
+    const created = await f.service.create('host', { slug: 'duo', visibility: 'private' })
+    if (!created.ok) throw new Error('setup failed')
+    // The property the two halves have to agree on: the deadline the store
+    // scores a room by is the deadline the verdict is taken against.
+    expect(nextRoomDeadline(created.room, f.store.lifecycle)).toBe(T0 + FAST.noOpponentMs)
+    expect(nextRoomDeadline(created.room)).not.toBe(T0 + FAST.noOpponentMs)
+  })
+
+  it('refuses to start when the service and the store disagree', async () => {
+    const flags = createFeatureFlags()
+    const registry = await createGameRegistry({
+      registrations: [registrationFor(makeGame({ slug: 'duo', id: 'game-duo' }))],
+      flags,
+    })
+    const wire = (
+      lifecycle: RoomLifecyclePolicy | undefined,
+      store = createInMemoryRoomStore(FAST),
+    ) =>
+      createRoomService({
+        store,
+        registry,
+        flags,
+        clock: fixedClock(T0),
+        random: webCryptoRandomSource(),
+        ids: countingIdSource('room'),
+        lifecycle,
+      })
+
+    // The mismatch that used to be silent, and presents as "the lifecycle
+    // timers are configured and nothing ever expires".
+    expect(() => wire(DEFAULT_ROOM_LIFECYCLE)).toThrow(/disagrees with store\.lifecycle/)
+    // Agreement by value, not by reference.
+    expect(() => wire({ ...FAST })).not.toThrow()
+    // Omitting it takes the store's policy, so there is nothing to disagree with.
+    expect(() => wire(undefined)).not.toThrow()
+    expect(() => wire(undefined, createInMemoryRoomStore())).not.toThrow()
   })
 })

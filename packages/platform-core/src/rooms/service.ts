@@ -28,9 +28,9 @@ import { type RateLimiter, createTokenBucketLimiter } from '../rate-limit/token-
 import type { Clock, IdSource, RandomSource } from '../runtime.js'
 import { RoomCodeExhaustionError, allocateRoomCode } from './code.js'
 import {
-  DEFAULT_ROOM_LIFECYCLE,
   type RoomLifecyclePolicy,
   evaluateRoomLifecycle,
+  sameRoomLifecyclePolicy,
 } from './lifecycle.js'
 import {
   type JoinOutcome,
@@ -50,7 +50,13 @@ import {
   realtimeJoinTarget,
 } from './realtime-binding.js'
 import type { RoomStore } from './store.js'
-import { type Room, type RoomCloseReason, type RoomRevision, reviseRoom } from './types.js'
+import {
+  type Room,
+  type RoomCloseReason,
+  type RoomRevision,
+  isRoomTerminal,
+  reviseRoom,
+} from './types.js'
 
 /** Server-side validation of the create-room request body. */
 export const createRoomRequestSchema = z.object({
@@ -111,6 +117,14 @@ export interface SweepReport {
 export type RoomMutationFailure =
   | { readonly code: 'room_not_found' }
   /**
+   * The room exists but has closed, so it can no longer be revised. Separate
+   * from `room_not_found` because the room is still readable for the length of
+   * its tombstone window and the caller's correct response differs: tear the
+   * session down and tell the players the room is over, rather than retrying or
+   * reporting a bad link. See `isRoomTerminal`.
+   */
+  | { readonly code: 'room_closed'; readonly closeReason: RoomCloseReason | null }
+  /**
    * The room is alive and the change is legal, but the compare-and-set retry
    * budget ran out. Distinct from `room_not_found` because the caller's
    * correct response is the opposite one: retry, do not conclude the room is
@@ -132,6 +146,11 @@ export interface RoomServiceOptions {
   readonly clock: Clock
   readonly random: RandomSource
   readonly ids: IdSource
+  /**
+   * Defaults to the store's own policy, which is the single source of truth.
+   * Pass it only to assert agreement: a value that differs from
+   * `store.lifecycle` throws at construction rather than half-applying.
+   */
   readonly lifecycle?: RoomLifecyclePolicy
   readonly limits?: RateLimitPolicies
 }
@@ -173,7 +192,20 @@ const CAS_BACKOFF_MS = 50
 
 export function createRoomService(options: RoomServiceOptions): RoomService {
   const { store, registry, flags, clock, random, ids } = options
-  const lifecycle = options.lifecycle ?? DEFAULT_ROOM_LIFECYCLE
+  // One policy, taken from the store, because the store is the half that cannot
+  // be handed one per call — it scores and expires keys at write time. A caller
+  // that passes a different policy is wired wrong in a way that would otherwise
+  // present as "lifecycle timers configured but nothing ever sweeps", so it
+  // fails here, loudly, at startup.
+  const lifecycle = options.lifecycle ?? store.lifecycle
+  if (!sameRoomLifecyclePolicy(lifecycle, store.lifecycle)) {
+    throw new TypeError(
+      'createRoomService: options.lifecycle disagrees with store.lifecycle. ' +
+        'The store scores sweep candidates and key TTLs under its own policy, so a ' +
+        'mismatch silently disables the lifecycle timers. Construct the store with ' +
+        'the same policy, or omit options.lifecycle and let the store supply it.',
+    )
+  }
   const limits = options.limits ?? DEFAULT_RATE_LIMITS
 
   const createLimiter: RateLimiter = createTokenBucketLimiter(limits.roomCreate, clock)
@@ -320,7 +352,9 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
       // overwriting the winner.
     }
 
-    return { ok: false, code: 'rate_limited', terminal: false, retryAfterMs: CAS_BACKOFF_MS }
+    // Contention, not rate limiting. The player's join token was spent once,
+    // above, and every retry since was the store's fault rather than theirs.
+    return { ok: false, code: 'contended', terminal: false, retryAfterMs: CAS_BACKOFF_MS }
   }
 
   function fail(ip: string, outcome: Extract<JoinOutcome, { kind: 'rejected' }>): JoinResult {
@@ -334,9 +368,14 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
   /**
    * Read-modify-write with bounded compare-and-set retries.
    *
-   * Reports exhausting the retry budget as `contended`, never as
-   * `room_not_found`. The two are opposite instructions to the caller and
-   * collapsing them is how a live room ends up treated as a dead one.
+   * Two refusals that every mutation gets for free by going through here:
+   *
+   * - A **closed** room is never revised. The guard is inside the retry loop,
+   *   not before it, because a room can close between attempts — the sweeper
+   *   runs concurrently with every one of these calls.
+   * - Exhausting the retry budget is `contended`, never `room_not_found`. The
+   *   two are opposite instructions to the caller and collapsing them is how a
+   *   live room ends up treated as a dead one.
    */
   async function mutate(
     roomId: string,
@@ -345,6 +384,9 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const room = await store.get(roomId)
       if (room === null) return { ok: false, error: { code: 'room_not_found' } }
+      if (isRoomTerminal(room)) {
+        return { ok: false, error: { code: 'room_closed', closeReason: room.closeReason } }
+      }
       const now = clock.now()
       const next = reviseRoom(room, change(room, now), now)
       if (await store.save(room, next)) return { ok: true, room: next }
