@@ -1,13 +1,20 @@
 # ADR-0003: Cost the hosting candidates per 1,000 concurrent players and escalate the choice
 
-- **Status:** **Board-gated** for the provider choice and for the three priced proposals in §11.
-  **Accepted** for the workload model (§2), the cost models (§3, §4), the constraint findings
-  (§5) and the $0 topology (§8).
+- **Status:** **Accepted.** The board answered on [PER-2](/PER/issues/PER-2) on 2026-09-30:
+  **Fly.io for M0–M5**, budget **phased $120/month now → $250/month at M5** under a standing
+  **$400/month ceiling**, regions **deferred to M5** with interim environments to sit as close to
+  India as the provider allows (§5.5b). **M6 remains board-gated and is explicitly not settled by
+  this ADR** (§7c).
 - **Date:** 2026-09-30
 - **Amended:** 2026-09-30 (**rev 2**) — the board set the infrastructure budget to **$0**, and
   [ADR-0001](./0001-v1-stack.md) rev 2 withdrew the `noeviction` disqualifier. **§5.1, §7, §8
   and §10 changed materially and §0 and §11 are new.** See
   [What changed in rev 2](#what-changed-in-rev-2).
+- **Amended:** 2026-09-30 (**rev 3**) — the board reversed $0 and approved **Fly.io at $120/month
+  phased to $250 at M5**. Verifying the board's Mumbai instruction turned up a fact that voids its
+  premise: **Fly has no India region — `bom` was removed from the product on 2026-09-25.** New
+  **§5.5b** and **§12**; §0, §3.6, §4, §7a, §7c, §10 and §11.3 changed materially. See
+  [What changed in rev 3](#what-changed-in-rev-3).
 - **Author:** CTO
 - **Milestone:** M0 (M6 sizing is projection only)
 - **Issue:** [PER-38](/PER/issues/PER-38) (epic [PER-3](/PER/issues/PER-3))
@@ -57,52 +64,92 @@ produce the same fleet shape — a long-lived Node process per room shard, addre
 so §4's sizing and §5.4's routing constraint hold either way. The only line either answer moves
 is memory per room (I9), and §9's sensitivity table already carries it.
 
+### What changed in rev 3 {#what-changed-in-rev-3}
+
+The board answered on 2026-09-30. Rev 3 records the answer, and corrects one thing the answer
+assumed.
+
+| Input                                                                                      | Effect on this ADR                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Board reversed $0 and approved Fly.io for M0–M5**                                        | §7 stops being hypothetical and §8 stops being operative. Status moves to **Accepted**. §10 is rewritten as a record of the decision rather than a request.                         |
+| **Budget phased: $120/month now, $250/month at M5, $400 ceiling**                          | Rev 2's $6–7/month ask is superseded. New **§12** answers the board's floor question with line items: the real floor is **≈ $60/month**, so **≈ $60 of the $120 goes unspent**.     |
+| **Board instructed: deploy interim environments in Mumbai (`bom`)**                        | **Cannot be complied with. Fly removed the `bom` region on 2026-09-25** (§5.5b). New §5.5b gives the substitute (`sin`) and the latency consequence.                                |
+| **Chief of Staff asked me to confirm or correct the ~$153 / ~$9,733 Mumbai re-derivation** | **Arithmetic confirmed exactly. Premise corrected** — Fly prices egress **by destination, not by the Machine's region** (§5.5b), so those are audience numbers, not region numbers. |
+
+**The one finding that voids part of the instruction, stated up front because it changes what
+Platform Engineer may provision:** the board's Decision 3 said "deploy the interim environments
+in Mumbai (`bom`)" and reasoned that region choice is a lever on cost. On Fly **neither half
+holds**. There is no India region to deploy into, and region choice does not move the egress
+bill at all, because the rate is set by where the _player_ is. §5.5b has the detail and §12 has
+the provisioning instruction that replaces it.
+
+Rev 1's and rev 2's §2, §6 and §9 are unchanged.
+
 ---
 
 ## 0. Summary for the board {#summary-for-the-board}
 
-The three things Chief of Staff asked for, in one screen. Everything below is the derivation.
+**Rev 3: the board has decided.** Fly.io for M0–M5, $120/month now stepping to $250/month at M5
+under a $400 ceiling, regions deferred to M5. This section now records the decision and the two
+things the board asked back. Everything below is the derivation.
 
-**1. Cost per 1,000 concurrent players per month ($/concurrent player-month in brackets):**
+**The three answers the board asked for, first:**
 
-| Provider                | Turn-based (M1–M5, real) |          Real-time (M6, projection) |
-| ----------------------- | -----------------------: | ----------------------------------: |
-| Hetzner bare VM (floor) |          **$41** (0.041) |             **$52–128** (0.05–0.13) |
-| Hetzner + managed data  |              $62 (0.062) |                                   — |
-| **Fly.io**              |         **$100** (0.100) |                   $1,853 **(1.85)** |
-| Railway                 |             $149 (0.149) |                   $4,267 **(4.27)** |
-| AWS ECS/Fargate         |   $208–336 (0.208–0.336) |                   $6,617 **(6.62)** |
-| Render                  |             $225 (0.225) | **$12,022 (12.02) — disqualifying** |
+| Board's question                                         | Answer                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| _"Confirm or correct my ~$153 / ~$9,733 Mumbai figures"_ | **Arithmetic confirmed to the dollar. Premise corrected.** Fly prices egress by **destination**, so these are the costs of serving an Indian _audience_ from _any_ Fly region — not a Mumbai-region premium we can escape by hosting elsewhere (§5.5b).                  |
+| _"Can prod + staging + previews be bought for $120?"_    | **Yes, comfortably. The floor is ≈ $60/month** (§12), of which previews are ~$9 and staging ~$3. **≈ $60 of the $120 authority goes unspent.** The cheaper shape the board asked about is real, and I am withdrawing my own "~90% fixed" framing that implied otherwise. |
+| _"Deploy the interim environments in Mumbai (`bom`)"_    | **Cannot comply — Fly deleted the `bom` region on 2026-09-25** (§5.5b). Substituting **Singapore (`sin`)**, the nearest Fly region to India, at a cost of ~60–90 ms RTT to Mumbai players **[unverified]**. Egress cost is unaffected, for the reason in row 1.          |
+
+**1. Cost per 1,000 concurrent players per month ($/concurrent player-month in brackets).** The
+India column is new in rev 3 and is the **live case**, not a contingency: the brief targets an
+Indian audience, and on every provider here the rate is set by the player's location.
+
+| Provider                | Turn-based, NA/EU audience |  Turn-based, **India audience** |          Real-time (M6, projection) |       Real-time, **India audience** |
+| ----------------------- | -------------------------: | ------------------------------: | ----------------------------------: | ----------------------------------: |
+| Hetzner bare VM (floor) |            **$41** (0.041) |     $41 (0.041) — flat transfer |             **$52–128** (0.05–0.13) | $52–128 — flat, but no India region |
+| Hetzner + managed data  |                $62 (0.062) |                     $62 (0.062) |                                   — |                                   — |
+| **Fly.io** (chosen)     |           **$100** (0.100) |               **~$153** (0.153) |                   $1,853 **(1.85)** |        **~$9,733 (9.73)** — see §7c |
+| Railway                 |               $149 (0.149) |                    ~$149 (flat) |                   $4,267 **(4.27)** |                             ~$4,267 |
+| AWS ECS/Fargate         |     $208–336 (0.208–0.336) | ~$261–389 (`ap-south-1` egress) |                   $6,617 **(6.62)** |                             ~$8,646 |
+| Render                  |               $225 (0.225) |                    ~$225 (flat) | **$12,022 (12.02) — disqualifying** |                            ~$12,022 |
 
 Turn-based cost at our scale is **~90% a fixed floor** (§2.1): 1,000 concurrent players is a
 quarter of one instance. Real-time cost is **dominated by egress** (§4) — 85% of the Fly bill,
 96% of the AWS one and 98% of Render's: 30 KB/s × 1,000 clients is **78.8 TB/month**, and the
 per-GB rate differs **153×** across the candidate set.
 
-**2. What $0 buys, and where it stops.** §8 gives a free-tier topology — Cloudflare Pages +
-Render free + Upstash free + Neon free — that carries M0 through roughly M2. **The ceiling
-that bites first is not a quota, it is a correctness failure:** Render's free tier spins a
-service down after 15 minutes without traffic, and a spun-down room server drops its sockets
-and loses live room state (§8.2). The first _quota_ to bite is Upstash's 500K commands/month,
-which at our 10 s heartbeat is **about 20 concurrent players for two hours a day** (§8.2).
+Turn-based cost at our scale is **~90% a fixed floor _at the 1,000-player instance size_**
+(§2.1) — 1,000 concurrent players is a quarter of one instance. **Rev 3 correction: that is not
+the same as a fixed floor at zero players**, which is what the board was really asking about.
+At zero players you buy a smaller instance, and §12 shows the floor is ≈ $60/month, not $100.
+Real-time cost is **dominated by egress** (§4) — 85% of the Fly bill, 96% of the AWS one and
+98% of Render's: 30 KB/s × 1,000 clients is **78.8 TB/month**, and the per-GB rate differs
+**153×** across the candidate set.
 
-**3. The three things $0 cannot buy, priced as discrete asks** (§11). They are deliberately
-separate so the board can approve one and refuse the others:
+**2. What the $120 buys today** (§12), in the board's stated priority order:
 
-| #     | Ask                                                      | Shape                | Number                                    |
-| ----- | -------------------------------------------------------- | -------------------- | ----------------------------------------- |
-| §11.1 | An always-on process for `apps/realtime`, prod + staging | **standing monthly** | **$6–7/month**                            |
-| §11.2 | The M5 load test at 2,000 rooms                          | **one-off window**   | **$8** (capacity) / **$100 cap** (p95)    |
-| §11.3 | A Mumbai-region fleet for M6                             | **standing monthly** | **$75/month** pilot; $488/mo at 1,000 CCU |
+| Priority | Line                                                |    $/month |
+| -------- | --------------------------------------------------- | ---------: |
+| **1**    | Per-PR preview environments (~20 PRs/mo)            |  **$8.78** |
+| **2**    | Staging, always-on WebSocket, autostop when idle    |  **$2.81** |
+| **3**    | Minimum production (Managed Postgres, HA + backups) | **$48.38** |
+|          | **Total**                                           | **$59.97** |
+|          | **Unspent against the $120 authority**              | **$60.03** |
 
-**The single most useful number in this document is $6–7/month.** That is the entire distance
-between "$0, and the staging WebSocket server drops connections when a game goes quiet" and a
-correct always-on production and staging pair. It is 0.03% of one engineer-day per month.
+Priorities 1 and 2 — the two the board said must not be crowded out — are together **$11.59**,
+under 10% of the authority. There was never a real contest between them and production sizing.
 
-**One decision the board is making without being asked:** which regions v1 serves (§5.5,
-§11.3). If the answer is India, **Fly's India egress is $0.12/GB — 6× its NA/EU rate** — which
-adds $53/month to the turn-based number above and $7,900/month to the real-time one, and moves
-the recommendation. Raised as Decision 3 in §10.
+**3. What is still not settled, and it is the expensive one.** §7c: **this ADR does not carry an
+M6 recommendation.** Serving an Indian real-time audience on Fly is **~$9.73 per concurrent
+player-month**, adjacent to the $12.02 that disqualified Render on arithmetic. The M6 provider
+decision is owned by the M4 spike ([PER-30](/PER/issues/PER-30)) and must be priced at India
+destination rates. **No M6 spend is approved or requested.**
+
+**The two remaining priced items $120 does not cover**, unchanged from rev 2 and still not
+requested: the M5 load test (**$8** capacity / **$100 cap** for the p95 run, §11.2) and an
+India-region M6 fleet pilot (**$75/month**, §11.3 — now the _only_ way to put a server in India,
+since §5.5b removes Fly as an option there).
 
 ---
 
@@ -350,15 +397,32 @@ named here so it cannot surprise us later.
 
 ### 3.6 Turn-based summary
 
-| Provider                | $/month per U₂₄ | $ per concurrent player-month | vs. bare-VM floor |
-| ----------------------- | --------------: | ----------------------------: | ----------------: |
-| **Hetzner H2** (floor)  |              41 |                         0.041 |             1.00× |
-| Hetzner H1              |              62 |                         0.062 |             1.52× |
-| **Fly.io**              |             100 |                         0.100 |             2.45× |
-| Railway                 |             149 |                         0.149 |             3.65× |
-| AWS (optimistic)        |             208 |                         0.208 |             5.07× |
-| Render                  |             225 |                         0.225 |             5.49× |
-| AWS (production-shaped) |             336 |                         0.336 |             8.20× |
+| Provider                | $/month per U₂₄ | $ per concurrent player-month | vs. bare-VM floor | **India audience** (rev 3) |
+| ----------------------- | --------------: | ----------------------------: | ----------------: | -------------------------: |
+| **Hetzner H2** (floor)  |              41 |                         0.041 |             1.00× |         41 — flat transfer |
+| Hetzner H1              |              62 |                         0.062 |             1.52× |                         62 |
+| **Fly.io**              |             100 |                         0.100 |             2.45× |            **153** (0.153) |
+| Railway                 |             149 |                         0.149 |             3.65× |                 149 — flat |
+| AWS (optimistic)        |             208 |                         0.208 |             5.07× |      ~261 **[unverified]** |
+| Render                  |             225 |                         0.225 |             5.49× |                 225 — flat |
+| AWS (production-shaped) |             336 |                         0.336 |             8.20× |      ~389 **[unverified]** |
+
+**The India column, derived (rev 3).** Confirming the Chief of Staff's arithmetic exactly:
+
+```
+turn-based egress per U₂₄ (from §2.1)                      =    526 GB/month
+  at Fly NA/EU  526 GB × $0.02                             = $   10.52
+  at Fly India  526 GB × $0.12                             = $   63.12
+  delta                                                    = $   52.60
+Fly turn-based total  $100.00 − $10.52 + $63.12            = $  152.60  ≈ $153  ✓ confirmed
+```
+
+**Only Fly and AWS move.** Hetzner, Railway and Render bundle transfer or price it flat
+worldwide, so their numbers are unchanged — which narrows Fly's turn-based advantage over
+Railway from 1.5× to **1.03×** for an Indian audience. At $153 vs $149 the two are
+indistinguishable on price, and Fly's case for M0–M5 now rests entirely on Constraint 4
+(§5.4) rather than on cost. That is a thinner margin than rev 2 implied and is recorded as a
+revisit trigger.
 
 The whole managed-vs-bare spread is **$41 → $225**. At our scale this is not the decision. It is
 worth less than one engineer-day per month. §4 is the decision.
@@ -371,13 +435,30 @@ Footprint: **8 dedicated vCPU / 16 GB** (per §2.2) and **78.8 TB egress** at th
 ceiling. This section sizes a milestone the board has not opened. It is here because the
 _turn-based_ provider choice must not foreclose it.
 
-| Provider |       Compute $/mo | Egress $/mo @ 30 KB/s |  **Total** | $/player-mo | Egress @ 10 KB/s |
-| -------- | -----------------: | --------------------: | ---------: | ----------: | ---------------: |
-| Hetzner  |         52 (CCX33) |          0 EU – 76 US | **52–128** |   0.05–0.13 |           0 – 23 |
-| Fly.io   |                277 |                 1,577 |  **1,853** |    **1.85** |              526 |
-| Railway  |                325 |                 3,942 |  **4,267** |    **4.27** |            1,314 |
-| AWS      |                288 |                 6,329 |  **6,617** |    **6.62** |            2,276 |
-| Render   | 200 [extrapolated] |                11,822 | **12,022** |   **12.02** |            3,938 |
+| Provider |       Compute $/mo | Egress $/mo @ 30 KB/s |  **Total** | $/player-mo | Egress @ 10 KB/s |      **India audience** (rev 3) |
+| -------- | -----------------: | --------------------: | ---------: | ----------: | ---------------: | ------------------------------: |
+| Hetzner  |         52 (CCX33) |          0 EU – 76 US | **52–128** |   0.05–0.13 |           0 – 23 | 52–128, **but no India region** |
+| Fly.io   |                277 |                 1,577 |  **1,853** |    **1.85** |              526 |                **9,733 (9.73)** |
+| Railway  |                325 |                 3,942 |  **4,267** |    **4.27** |            1,314 |                    4,267 — flat |
+| AWS      |                288 |                 6,329 |  **6,617** |    **6.62** |            2,276 |         ~8,646 **[unverified]** |
+| Render   | 200 [extrapolated] |                11,822 | **12,022** |   **12.02** |            3,938 |                   12,022 — flat |
+
+**The India column, derived (rev 3).** Confirming the Chief of Staff's second figure exactly:
+
+```
+real-time egress per U₂₄ (from §2.2)   30 KB/s × 1,000 × 2,628,000 s  =  78,840 GB/month
+  at Fly NA/EU  78,840 GB × $0.02                                     = $ 1,576.80
+  at Fly India  78,840 GB × $0.12                                     = $ 9,460.80
+Fly real-time total  $1,853 − $1,577 + $9,461                         = $ 9,737    ≈ $9,733  ✓ confirmed
+```
+
+**This is the number that reopens the M6 provider question** (§7c). At **$9.73 per concurrent
+player-month** for a free-to-play browser game with no v1 revenue, Fly is within 25% of the
+$12.02 that disqualified Render on arithmetic in finding 2 below. Applying the same standard
+to both: **Fly is not a viable M6 provider for an Indian audience either.** It remains the
+right M0–M5 choice, because turn-based is 150× cheaper per player and the transport-adapter
+seam ([ADR-0001](./0001-v1-stack.md) §4.1) means the fleet does not have to live where the
+lobby lives.
 
 Egress derivations:
 
@@ -578,13 +659,16 @@ build a routing tier in front of Render's. That is the **real-time readiness** l
 
 ### 5.5 In-region round trip must be able to hit < 150 ms p95
 
-| Provider |                                                             Regions | Verdict |
-| -------- | ------------------------------------------------------------------: | ------- |
-| AWS      |                                                                ~30+ | Pass    |
-| Fly.io   |                                                                 35+ | Pass    |
-| Hetzner  | 6 (Nuremberg, Falkenstein, Helsinki, Ashburn, Hillsboro, Singapore) | Pass    |
-| Render   |                    5 (Oregon, Ohio, Virginia, Frankfurt, Singapore) | Pass    |
-| Railway  |                              4 (US-West, US-East, EU-West, SE-Asia) | Pass    |
+| Provider |                                                             Regions | India region?                   | Verdict |
+| -------- | ------------------------------------------------------------------: | ------------------------------- | ------- |
+| AWS      |                                                                ~30+ | ✅ `ap-south-1` Mumbai          | Pass    |
+| Fly.io   |                                    30+, **no India** (rev 3, §5.5b) | ❌ `bom` **deleted 2026-09-25** | Pass\*  |
+| Hetzner  | 6 (Nuremberg, Falkenstein, Helsinki, Ashburn, Hillsboro, Singapore) | ❌ nearest Singapore            | Pass\*  |
+| Render   |                    5 (Oregon, Ohio, Virginia, Frankfurt, Singapore) | ❌ nearest Singapore            | Pass\*  |
+| Railway  |                              4 (US-West, US-East, EU-West, SE-Asia) | ❌ nearest Singapore            | Pass\*  |
+
+\* Passes the constraint as written — _in-region_ round trip — but cannot put a server in India.
+See §5.5b, which is new in rev 3 and is the section that matters.
 
 **Nobody is disqualified, and the constraint is nearly vacuous as written** — because _in-region_
 is doing all the work in it. A player in Mumbai on a Frankfurt region will not see < 150 ms on any
@@ -600,6 +684,63 @@ Staff on [PER-2](/PER/issues/PER-2) as a question the board may not know it is a
 > **Measurement owed.** Actual p95 round-trip from a real staging deploy. Owner: Platform
 > Engineer, [PER-7](/PER/issues/PER-7). Until then, "can hit < 150 ms" is a structural claim about
 > network distance, not a measurement.
+
+### 5.5b Two facts about Fly and India that void part of the board's instruction (rev 3)
+
+The board's Decision 3 reads: _"Deploy the interim environments in Mumbai (`bom`) … That is the
+conservative assumption — if the board later scopes v1 to cheaper-egress regions, costs fall
+rather than rise."_ I verified both halves before provisioning against them. **Neither holds on
+Fly.** Recording this here rather than discovering it in `fly.toml`.
+
+**Fact 1 — Fly has no India region. `bom` was deleted, not deprecated, on 2026-09-25.**
+
+Fly's regions reference now lists **`nrt` Tokyo, `sin` Singapore and `syd` Sydney** for
+Asia-Pacific, with no Mumbai entry. The removal landed in
+[superfly/docs#2508](https://github.com/superfly/docs/pull/2508), merged 2026-09-25, whose author
+notes: _"Customers running there have already been told, so these are deletions rather than
+deprecation notices."_ A companion PR removed `bom` from the pricing region picker. Fly's own
+guidance points existing `bom` workloads at `sin`.
+
+**This means `fly deploy --region bom` will fail.** It is not a pricing preference we can
+override; the region does not exist to deploy into.
+
+**Fact 2 — Fly prices egress by _destination_, not by the Machine's region.** From Fly's pricing
+page: bandwidth is _"priced by destination rather than by the Machine's region."_ The rate card
+is $0.02/GB to North America and Europe, $0.04/GB to Asia-Pacific and Oceania, and **$0.12/GB to
+Africa and India**.
+
+The consequence is the opposite of the board's reasoning, and it matters more than Fact 1:
+
+- **Hosting outside India does not avoid the $0.12/GB rate.** If our players are in India, we pay
+  India rates from Singapore, Frankfurt or Virginia alike. The ~$153 turn-based and ~$9,733
+  real-time figures are therefore **audience numbers, not region numbers** — they are what Fly
+  costs to serve India from anywhere.
+- **Region choice on Fly is a latency lever only. It is not a cost lever.** So the board's
+  fallback — "if we later scope v1 to cheaper-egress regions, costs fall" — only works if the
+  **audience** changes, which is a product decision about who we are building for, not an
+  infrastructure decision. The brief already fixes the audience as India.
+
+**What we deploy instead, and what it costs in latency.** Singapore (`sin`) is Fly's nearest
+region to India. Mumbai↔Singapore is roughly **60–90 ms RTT [unverified]** — the same figure
+§11.3 already records against Hetzner Singapore. Against a 150 ms p95 budget that is 40–60%
+consumed before our code runs.
+
+| Consequence        | Assessment                                                                                                                                                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Turn-based (M1–M5) | **Survivable.** 60–90 ms network + our processing leaves real but thin margin inside 150 ms p95. This is the number [PER-7](/PER/issues/PER-7) must measure first, not last.        |
+| Real-time (M6)     | **Not viable.** A 30 Hz room at 60–90 ms RTT before jitter is a different game. Reinforces §7c independently of the $9.73/player-month figure.                                      |
+| Reversibility      | **Cheap through M4.** At ~zero players there is no data gravity and no egress bill, so moving region or provider before M5 costs a redeploy. This is why Decision 1 is still right. |
+
+**Recommendation to the board, replacing the `bom` instruction:** deploy interim environments to
+**`sin`**, treat the ~60–90 ms as a measured input owed by [PER-7](/PER/issues/PER-7) before M5
+opens, and note that **if v1 commits to India, no Fly region can host the M6 fleet** — §11.3's
+Akamai/Linode Mumbai or DigitalOcean Bangalore become the only candidates that put a server in
+the country.
+
+> **Verification owed before provisioning.** Whether **Fly Managed Postgres is offered in `sin`**
+> is **[unverified]** and is a precondition of §7a's co-location condition (§5.1b). If it is not,
+> production Postgres is a self-run Machine and §12's line item changes. Owner: Platform
+> Engineer, [PER-7](/PER/issues/PER-7), as the first check before any resource is created.
 
 ### 5.6 Not a candidate: Vercel
 
@@ -618,9 +759,10 @@ see §8 — but it cannot be the platform.
 | 2. WebSocket survival                             | ⚠ ~30 s idle, beaten by our 10 s heartbeat |       ✅        |                ✅                |                          ✅                           | ⚠ must raise ALB default from 60 s |
 | 3. Per-PR previews                                |                     ✅                     |   ✅ **best**   |           ✅ paid only           |             ❌ **as bought**, ⚠ as built              |             ⚠ as built             |
 | 4. M6 fleet + room-level routing                  |           ✅ **only native one**           |     ⚠ built     | ⚠ weakest — random WS assignment |                       ✅ built                        |              ✅ built              |
-| 5. < 150 ms p95 in-region                         |               ✅ 35+ regions               |      ✅ 4       |               ✅ 5               |                         ✅ 6                          |               ✅ 30+               |
-| Turn-based $/U₂₄                                  |                  **100**                   |       149       |               225                |                       **41–62**                       |              208–336               |
-| Real-time $/U₂₄ (M6)                              |                   1,853                    |      4,267      |    **12,022 — disqualifying**    |                      **52–128**                       |               6,617                |
+| 5. < 150 ms p95 in-region                         |   ✅ 30+ regions, ⚠ **no India** (rev 3)   |      ✅ 4       |               ✅ 5               |                         ✅ 6                          |        ✅ 30+, incl. Mumbai        |
+| Turn-based $/U₂₄ (NA/EU audience)                 |                  **100**                   |       149       |               225                |                       **41–62**                       |              208–336               |
+| Turn-based $/U₂₄ (**India audience**, rev 3)      |                  **153**                   |       149       |               225                |                       **41–62**                       |              ~261–389              |
+| Real-time $/U₂₄ (M6, India audience)              |     **9,733 — disqualifying** (rev 3)      |      4,267      |    **12,022 — disqualifying**    |              **52–128**, no India region              |               ~8,646               |
 
 No candidate is disqualified outright for M0–M5. **Render is disqualified for M6 on egress
 (§4).** **Hetzner fails Constraint 3 as bought** and passes only at the cost of building a
@@ -679,13 +821,15 @@ to be evaluated alongside Hetzner and Colyseus in [PER-21](/PER/issues/PER-21) �
 
 ---
 
-## 7. Recommendation (board decides, §10)
+## 7. Recommendation — **approved by the board 2026-09-30** (§10)
 
-> **Rev 2: this section is conditional on a budget existing.** The board has set the budget to
-> **$0**, so **§8 is the operative section today** and §7 is what to buy on the day the answer
-> changes — including for any of the three asks in §11, each of which lands on the provider
-> chosen here. §7 is kept rather than deleted because "which provider, when there is money"
-> is the question the board will ask next, and the analysis that answers it is already done.
+> **Rev 3: this section is now operative and the board has approved it.** Fly.io for **M0–M5
+> only**, with the two conditions in §7a carried in full. **§8 is no longer the operative
+> section** — it is retained as the record of what $0 would have bought and as the fallback if
+> spend authority is withdrawn. The buy-list and the money are in **§12**.
+>
+> ~~Rev 2: this section is conditional on a budget existing. The board has set the budget to
+> $0, so §8 is the operative section today.~~ **Superseded 2026-09-30.**
 
 **Split the decision by workload and by time.**
 
@@ -698,32 +842,50 @@ Ranked reasons:
    the M6 fleet primitive, available now, at no extra cost, on the provider we would already be
    using. Every other candidate requires us to build a routing tier in M6 — work that is invisible
    today and unbudgeted.
-2. **$0.02/GB egress**, second only to Hetzner's effectively-free, and the cheapest of any
-   provider with per-PR previews.
-3. **35+ regions** — the only lever on Constraint 5, and the only defence against the regional
-   question in §5.5.
-4. **≈ $100/month per 1,000 concurrent turn-based players**, second-cheapest managed option and
-   2.45× the bare-VM floor.
+2. ~~**$0.02/GB egress**, second only to Hetzner's effectively-free~~ — **weakened in rev 3.**
+   $0.02/GB is the NA/EU rate. For an Indian audience the rate is **$0.12/GB regardless of where
+   we host** (§5.5b), which takes the turn-based figure to $153 and puts Fly level with Railway's
+   $149. Cheap egress is no longer a reason; it is merely not a disqualifier at turn-based
+   volumes.
+3. ~~**35+ regions** — the only defence against the regional question in §5.5~~ — **also
+   weakened in rev 3.** Fly has 30+ regions and **none of them are in India** (§5.5b). The
+   nearest is Singapore at ~60–90 ms from Mumbai. Region count is still a genuine advantage for
+   any other market; it is not one for the market the brief names.
+4. **≈ $100/month per 1,000 concurrent turn-based players** for an NA/EU audience, **≈ $153 for
+   an Indian one** — and, per §12, **≈ $60/month for the environments we actually need through
+   M4**, which is the number that matters right now.
 
 5. **Postgres is co-located** (§5.1b) — Fly Managed Postgres runs in the same region as the
    app, which is what makes the ≤ 10 ms p95 log append reachable. Rev 2 promotes this from an
    unstated convenience to a named reason.
 
-**Conditions attaching to this recommendation** (rev 2 reduces three to two):
+**Conditions attaching to this recommendation — all three approved by the board in rev 3, and
+binding on [PER-7](/PER/issues/PER-7):**
 
 - **The presence heartbeat is ≤ 10 s and is sent by the server as well as the client** (§5.2).
   Not optional — it is what defeats Fly's ~30 s idle timeout.
 - **Postgres is Fly Managed Postgres in the same region as the app**, not an external managed
   tier (§5.1b). Not optional — an off-Fly Postgres reintroduces the cross-provider hop.
-- ~~Redis must be a self-run Machine, not Upstash~~ — **withdrawn in rev 2.** Self-run is still
-  what §3.1 prices, because it is $1.31/month cheaper and we already own the `redis.conf`, but
-  an Upstash fixed plan is now an acceptable substitute and the choice is reversible in an hour.
+  **Availability in `sin` is [unverified] and must be checked first** (§5.5b).
+- **Redis is a self-run Fly Machine under our own `redis.conf`, not Upstash.** Rev 2 withdrew
+  this condition as an eviction-policy matter; **the board reinstated it in rev 3** as a
+  configuration-control matter. Recorded so the round trip is legible: the `noeviction`
+  _disqualification_ stays withdrawn (§5.1), and Upstash remains eligible on correctness — but
+  we are choosing a store whose configuration we can pin and assert in a test. Self-run is also
+  $1.31/month cheaper.
 
-**This recommendation is conditional on Decision 3 (regions).** If v1 serves India, Fly's
-**$0.12/GB** egress there is 6× its NA/EU rate; the turn-based U₂₄ egress line goes from $10.52
-to $63, and reason 2 above — cheap egress — stops being true where it matters most. In that
-case the shortlist should reopen with **Akamai/Linode Mumbai** and **AWS ap-south-1** in it
-(§11.3). I am not pre-deciding that here because the region question is the board's.
+**What Decision 1 does and does not settle (rev 3).** The board approved Fly for **M0–M5
+only**, and §5.5b makes that boundary sharper than either of us expected when the card went up:
+
+- **M0–M5 stands.** At ~zero players through M4 the cost is §12's ~$60/month, the egress
+  premium is ~$0, and the whole environment is a redeploy to move. The **reversibility** lens
+  carries this decision, not the cost model.
+- **The India-egress premium is now confirmed rather than contingent.** Decision 3 asked "which
+  regions do we serve"; §5.5b shows that on Fly the answer does not change the bill — only the
+  audience does, and the brief already fixed it. So the $153 figure is the planning number from
+  M5 onward, not a scenario.
+- **The M6 shortlist is already reopened**, and §5.5b adds a second, independent reason beyond
+  cost: **no Fly region can put a server in India at all.** See §7c and §11.3.
 
 ### 7b. Runner-up: Render
 
@@ -741,17 +903,45 @@ cost (1.5× Fly), on having no dedicated-vCPU product for a 30 Hz tick at all, a
 is the most capable and the most expensive in both money and our attention, and nothing in M0–M5
 needs it.
 
-### 7c. M6 — real-time fleet: **do not decide now**
+### 7c. M6 — real-time fleet: **this ADR carries no M6 recommendation**
 
-Provisional direction, for sizing only: **Hetzner dedicated vCPU**, at ~$0.11–0.13 per concurrent
-player-month against Fly's $1.85, Railway's $4.27, AWS's $6.62 and Render's $12.02. Decide at the
-M6 gate, with measured bytes/s and CPU ms/tick from the M4 spike
-([PER-30](/PER/issues/PER-30)), in the real-time ADR ([PER-21](/PER/issues/PER-21)), alongside
-Cloudflare Durable Objects (§6). **No M6 spend is being requested here.**
+**Stated plainly at the Chief of Staff's request, and rev 3 strengthens it from "do not decide
+now" to "this document cannot decide it."** Approving Decision 1 settled M0–M5. It settled
+nothing about M6, and anyone reading §7a as an M6 direction is misreading it.
+
+Two independent reasons, either of which alone is sufficient:
+
+1. **Cost.** Serving an Indian real-time audience on Fly is **~$9.73 per concurrent
+   player-month** (§4), within 25% of the $12.02 that disqualified Render on arithmetic. The
+   same standard applied consistently disqualifies Fly for M6.
+2. **Geography.** **Fly has no India region** (§5.5b). Even at an acceptable price, Fly cannot
+   put a 30 Hz room server in the country the brief names. The nearest is Singapore at ~60–90 ms
+   RTT **[unverified]**, which is not a real-time budget.
+
+Note that reason 1 also undercuts the original _primary_ justification for Decision 1. §7a
+reason 1 was that Fly is the only candidate with a native fleet primitive (`fly-replay` +
+Machines API). That remains true and remains valuable — but **an option we cannot afford to
+exercise in our target market is not an option**, so it should be weighted as a convenience for
+M0–M5, not as an M6 hedge. I am flagging this against my own earlier reasoning because the
+board endorsed Decision 1 partly on that hedge.
+
+**Provisional direction, for sizing only:** **Akamai/Linode Mumbai** or **DigitalOcean
+Bangalore** (§11.3) — the only candidates that combine an India region with bundled transfer.
+Hetzner is the cheapest per byte but has no India region either.
+
+**Owner: the M4 real-time spike ([PER-30](/PER/issues/PER-30))**, which is where measured
+bytes/s and CPU ms/tick land anyway, feeding the real-time ADR
+([PER-21](/PER/issues/PER-21)) alongside Cloudflare Durable Objects (§6). It **must be priced at
+India destination rates**. **No M6 spend is approved or requested.**
 
 ---
 
-## 8. The $0 topology — what free tiers buy, and where each one stops
+## 8. The $0 topology — **superseded 2026-09-30, retained as the fallback**
+
+> **Rev 3: this section is no longer operative.** The board reversed $0 and approved
+> $120/month; **§12 is the buy-list.** §8 is kept for two reasons: it is the record of what the
+> board was choosing between, and it is the fallback shape if spend authority is ever withdrawn.
+> Nothing in §8 should be provisioned.
 
 **This is the operative section**, since the board has set the budget to $0. No paid tier has
 been signed up for, no payment method has been given to any vendor, and none is proposed
@@ -1009,12 +1199,16 @@ managed Redis tier for Hetzner H1, and Render's compute pricing above the Standa
 
 > **Measurement owed.**
 >
-> | #        | What                                                            | Owner             | Issue                                                       | Needed by |
-> | -------- | --------------------------------------------------------------- | ----------------- | ----------------------------------------------------------- | --------- |
-> | I7       | Bytes per delivered turn-based message on the wire              | Platform Engineer | [PER-15](/PER/issues/PER-15)                                | M1        |
-> | I9       | Memory per live turn-based room, hence rooms per instance       | Platform Engineer | [PER-14](/PER/issues/PER-14) / [PER-15](/PER/issues/PER-15) | M1        |
-> | —        | Action round-trip p95 from a real staging deploy                | Platform Engineer | [PER-7](/PER/issues/PER-7)                                  | M0        |
-> | I10, I11 | Real-time bytes/s per client and CPU ms/tick per 12-player room | CTO / QA          | [PER-30](/PER/issues/PER-30)                                | M4        |
+> | #        | What                                                                 | Owner             | Issue                                                       | Needed by                    |
+> | -------- | -------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------- | ---------------------------- |
+> | I7       | Bytes per delivered turn-based message on the wire                   | Platform Engineer | [PER-15](/PER/issues/PER-15)                                | M1                           |
+> | I9       | Memory per live turn-based room, hence rooms per instance            | Platform Engineer | [PER-14](/PER/issues/PER-14) / [PER-15](/PER/issues/PER-15) | M1                           |
+> | —        | Action round-trip p95 from a real staging deploy                     | Platform Engineer | [PER-7](/PER/issues/PER-7)                                  | M0                           |
+> | I10, I11 | Real-time bytes/s per client and CPU ms/tick per 12-player room      | CTO / QA          | [PER-30](/PER/issues/PER-30)                                | M4                           |
+> | rev 3    | **Mumbai↔Singapore p95 RTT** — now load-bearing, not routine (§5.5b) | Platform Engineer | [PER-7](/PER/issues/PER-7)                                  | **M0, first deploy**         |
+> | rev 3    | **Is Fly Managed Postgres offered in `sin`?** Precondition of §7a    | Platform Engineer | [PER-7](/PER/issues/PER-7)                                  | **before provisioning**      |
+> | rev 3    | **Does Fly autostop drop an open WebSocket?** §12.2 depends on no    | Platform Engineer | [PER-7](/PER/issues/PER-7)                                  | **M0, first staging deploy** |
+> | rev 3    | **Actual Fly spend vs §12's ~$60/month estimate**                    | CTO               | [PER-38](/PER/issues/PER-38)                                | before the M5 step-up        |
 >
 > Until I7 and I9 land, §3 rests on the capacity model in
 > [ADR-0001](./0001-v1-stack.md) §6. Until I10 and I11 land, **§4 is a projection against a budget
@@ -1035,18 +1229,64 @@ The board's two actionable levers are therefore: **for turn-based, nothing — i
 **for real-time, bytes on the wire ($1,051/month) and where those bytes leave from
 ($1,725/month)**, per 1,000 concurrent players.
 
+> **Rev 3 amends that last sentence.** "Where those bytes leave from" turns out **not** to be a
+> lever on Fly, because egress is destination-priced (§5.5b) — it is a lever only by changing
+> provider, not by changing region. And **"for turn-based, nothing" was answering the wrong
+> question**: it is true at a fixed instance size, and the board was asking about instance size.
+> §12.1 corrects it. The honest summary is: **the levers are bytes on the wire, and which
+> provider — not which region.**
+
 ---
 
-## 10. What the board must decide — **board-gated**
+## 10. What the board decided — **answered 2026-09-30**
 
-Escalated to Chief of Staff on [PER-2](/PER/issues/PER-2). Not decided here.
+> **Rev 3: this section is now a record, not a request.** The board answered on the decision
+> card on [PER-2](/PER/issues/PER-2). The approval object
+> [63d288d2](/PER/approvals/63d288d2-8c4f-4694-b2d3-8921db8ac967) remains `pending` because the
+> board answered the card rather than the record; per Chief of Staff, the card is the authority.
+> The four decisions as originally posed are preserved below with the answer against each, so
+> the reasoning that produced them stays auditable.
 
-> **Rev 1's ask is withdrawn.** Rev 1 requested **$250/month with a $400 ceiling**, written
-> before the board answered. **The board has answered: $0.** That request is withdrawn in full
-> and replaced by the four decisions below, of which only Decision 2 involves money and it
-> involves **$6–7/month**, not $250. The $250 model remains valid and is preserved in §3.1 and
-> §7 as the answer to "what would it cost to run this properly", which is a different question
-> from "what should we spend now".
+### 10.0 The decisions, and the answers
+
+| #              | Question                                 | **Board's answer**                                                                                                                     |
+| -------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Decision 1** | Provider                                 | **Fly.io, for M0–M5 only.** All three §7a conditions carry, including self-run Redis (reinstated). M6 explicitly not settled — §7c.    |
+| **Decision 2** | The priced asks                          | **Superseded by a phased budget.** $120/month now → **$250/month at M5**, **$400/month ceiling** throughout. §11.2 and §11.3 unfunded. |
+| **Decision 3** | Regions                                  | **Deferred to M5**, interim environments in Mumbai. **Partly void — see §5.5b**; substituting `sin`, and on Fly region ≠ cost anyway.  |
+| **Decision 4** | Durability: ≤ 10 ms p95 log append at $0 | **Resolved to option (a)** automatically — co-located Fly Managed Postgres is bought, so group commit is not needed. Closed.           |
+
+### 10.1 What the board asked back, and the answers
+
+1. **"Confirm or correct my ~$153 / ~$9,733 Mumbai re-derivation."** **Confirmed to the
+   dollar** — derivations in §3.6 and §4. **Premise corrected:** these are what Fly costs to
+   serve an Indian _audience_ from _any_ region, not a Mumbai-region surcharge (§5.5b). The
+   practical difference is that they cannot be avoided by hosting elsewhere, so $153 is the M5
+   planning number rather than a scenario.
+2. **"Can minimum production + staging + previews be bought for $120/month?"** **Yes —
+   ≈ $60/month, half the authority** (§12). The cheaper shape Chief of Staff put to the board is
+   real and should not be withdrawn. **I am correcting my own "~90% fixed" finding**, which was
+   true of cost _within_ a 1,000-player instance and not of the instance size itself.
+3. **"Deploy interim environments in Mumbai (`bom`)."** **Cannot comply** — §5.5b. Deploying to
+   `sin` instead and recording the latency consequence as a measurement owed.
+
+### 10.2 What is still open
+
+| Item                                                     | Owner                                            | Gate                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **M6 provider**, priced at India destination rates       | M4 spike [PER-30](/PER/issues/PER-30) → ADR-0006 | M6 board gate. **§7c: not carried by this ADR.**                                 |
+| **M5 load-test window** — $8 capacity / $100 cap for p95 | CTO                                              | Re-raise at M5. Not funded by the $120 (§11.2).                                  |
+| **Re-price production from measured numbers before M5**  | CTO + Platform Engineer                          | Blocks the $120 → $250 step. §12.3 shows the M5 shape lands at ~$212, not $238.  |
+| **Is Fly Managed Postgres available in `sin`?**          | Platform Engineer [PER-7](/PER/issues/PER-7)     | **Before any resource is created.** Precondition of §7a's co-location condition. |
+
+**Superseded text from rev 2, kept for the record:** rev 1 requested $250/month with a $400
+ceiling; rev 2 withdrew that in full and asked for $6–7/month against a $0 budget. **Rev 3
+supersedes both** — the board set $120/month now and $250/month at M5, and §12 spends ~$60 of it.
+
+### 10.3 The four decisions as originally posed (archive)
+
+> Kept verbatim so the board's answer in §10.0 can be read against the question it answered.
+> **Every item below is now decided — do not action this subsection.**
 
 **Decision 1 — provider, for the day a budget exists.** Recommendation: **Fly.io**, with the
 conditions in §7a (server-side heartbeat; co-located Fly Managed Postgres). Alternatives:
@@ -1082,16 +1322,23 @@ Three options, and this is a durability decision rather than a tuning knob, so i
 **Not requested here:** any M6 spend, any vendor signup, any domain purchase, any payment card on
 file beyond what Decision 2 explicitly authorises. M6 hosting stays gated with M6 itself.
 
-**Until the board answers**, [PER-6](/PER/issues/PER-6) (CI + preview deploys) and
-[PER-7](/PER/issues/PER-7) (environments) proceed as far as the $0 topology in §8 allows, and M0
-AC1 is marked **partially met**, not met.
+~~**Until the board answers**, [PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) proceed
+as far as the $0 topology in §8 allows.~~ **Superseded — see §12.2 for what they may now
+provision.** M0 AC1 stays **partially met** until per-PR previews are actually running, which
+is the board's accepted position and unchanged by rev 3.
 
 ---
 
 ## 11. What $0 cannot buy — three priced proposals
 
 Chief of Staff asked for these as **discrete proposals**, each one approvable on its own. They
-are ordered by urgency, not by size. Only §11.1 is being asked for now.
+are ordered by urgency, not by size. ~~Only §11.1 is being asked for now.~~
+
+> **Rev 3 status of each ask.** **§11.1 is granted and superseded** — the board's $120/month
+> covers it many times over, and §12 is the version to build against. **§11.2 (M5 load test,
+> $8 / $100 cap) is unfunded** and must be re-raised at M5. **§11.3 (India fleet, $75/month) is
+> unfunded and deferred to the M6 gate** — and §5.5b makes it more important than it was, since
+> it is now the _only_ route to a server in India.
 
 ### 11.1 An always-on process for `apps/realtime` — **$6–7/month, standing**
 
@@ -1196,7 +1443,7 @@ an order of magnitude, because the bill is egress.**
 | ------------------------------------- | ------------------------------------------ | ------------------------------------------------------ | ----------: |
 | **Akamai/Linode Mumbai, Dedicated**   | ~$36–72 **[unverified]**, bundled transfer | overage $0.005/GiB; **$0 at the 10 KB/s design point** |  **$36–72** |
 | DigitalOcean Bangalore, CPU-Optimised | ~$84 **[unverified]**                      | overage $0.01/GiB; $0 at the design point              |        ~$84 |
-| Fly.io `bom`                          | ~$28 (0.5 core equivalent)                 | 7.88 TB @ $0.12/GB = **$946** at the ceiling           |   **~$974** |
+| ~~Fly.io `bom`~~ — **region deleted** | ~~$28~~ **not purchasable** (§5.5b)        | n/a — nearest region is `sin`, ~60–90 ms from Mumbai   |    **void** |
 | AWS `ap-south-1`                      | ~$29                                       | 7.88 TB @ ~$0.109/GB **[unverified]** = $862           |       ~$891 |
 
 **Ask, if and when M6 opens: $75/month.** Note the shape of that table — the PaaS options are
@@ -1210,7 +1457,10 @@ Linode Mumbai   2 × Dedicated 4 vCPU $144  +  68.8 TB overage × $0.005/GiB  �
   ... at the 10 KB/s design point and the I3 duty cycle, inside bundled transfer ≈  $144/mo  ($0.14)
 DigitalOcean    $168 compute  +  ~69 TB × $0.01/GiB                          ≈  $858/mo  ($0.86)
 AWS ap-south-1  $29 compute   +  78.8 TB × ~$0.109/GB                        ≈ $8,646/mo  ($8.65)
-Fly.io bom      $277 compute  +  78.8 TB × $0.12/GB                          ≈ $9,738/mo  ($9.74)
+Fly.io (sin)    $277 compute  +  78.8 TB × $0.12/GB to India                 ≈ $9,738/mo  ($9.74)
+                  ^ not a Mumbai deployment — Fly has no India region (§5.5b).
+                    The $0.12/GB applies because the players are in India, not the servers,
+                    and the ~60–90 ms Singapore RTT makes it the wrong shape regardless.
 ```
 
 **The finding the board should take from this:** serving India real-time on a PaaS costs
@@ -1220,6 +1470,144 @@ This does not change the M0–M5 recommendation (§7a), because the transport-ad
 [ADR-0001](./0001-v1-stack.md) §4.1 is exactly what lets the fleet live somewhere other than the
 lobby. **It does mean that if v1's market is India, the turn-based recommendation should be
 re-run with Fly's $0.12/GB India rate applied** — Decision 3.
+
+---
+
+## 12. The $120 buy-list — what we actually provision (rev 3)
+
+The board asked one question that had to be answered before anything is bought: **can minimum
+production + staging + per-PR previews be had for $120/month on Fly, or is the floor really
+~$100 for production alone?** Chief of Staff explicitly asked me to state the real floor with
+line items rather than spend into the authority, and to withdraw the cheaper-shape option if it
+did not exist.
+
+**It exists. The floor is ≈ $60/month, and ≈ $60 of the $120 goes unspent.**
+
+### 12.1 Why my earlier "~90% fixed" finding did not mean what it looked like
+
+Rev 1 said turn-based cost is ~90% a fixed floor, and Chief of Staff reasonably read that as
+"minimum production will still cost ~$100." **That inference does not follow, and the fault is
+in my phrasing.** The finding was that within an instance sized for 2,000 rooms, adding players
+up to 1,000 barely moves the bill — cost is flat _in players_. It says nothing about cost being
+flat _in instance size_. At ~zero players through M4 we buy the smallest machine that holds the
+process, not a quarter of a machine sized for launch. **Correcting it here because the board was
+offered a saving on the strength of it.**
+
+### 12.2 Line items — verified list prices, Fly, `sin`, 2026-09-30
+
+Unit prices: `shared-cpu-1x` 256 MB **$1.97/mo** (730 h × $0.0027/h), 512 MB **$3.46**, 1 GB
+**$6.93**; extra RAM ~$5.64/GB/30 d; volumes **$0.15/GB/mo**; **stopped Machines bill rootfs
+only at $0.15/GB/30 d**; Managed Postgres **Basic $38/mo** (shared-2x/1 GB, HA + backups +
+pooling) plus **$0.28/GB** storage; dedicated IPv4 $2/mo, shared IPv4 and IPv6 free.
+**No mandatory platform or support fee** — Fly's $29/mo Standard support tier is optional, and
+the aggregator sites claiming a required plan fee contradict `fly.io/plans`, which is the
+primary source and the one used here.
+
+**Production** — minimum size, always-on, `sin`:
+
+| Line                                     | Spec                              |      $/mo |
+| ---------------------------------------- | --------------------------------- | --------: |
+| `apps/realtime` (lobby + WS)             | `shared-cpu-1x` 512 MB, always-on |      3.46 |
+| Redis — self-run Machine (§7a condition) | `shared-cpu-1x` 256 MB            |      1.97 |
+| Redis volume                             | 1 GB × $0.15                      |      0.15 |
+| Postgres — **Fly Managed, Basic**        | shared-2x/1 GB, HA + backups      |     38.00 |
+| Postgres storage                         | 10 GB × $0.28                     |      2.80 |
+| Dedicated IPv4                           | 1 × $2.00                         |      2.00 |
+| Egress                                   | ~0 players through M4             |      0.00 |
+| **Subtotal**                             |                                   | **48.38** |
+
+**Staging** — always-on WebSocket, `autostop`/`autostart`, ~2 h/day awake (60 h/mo):
+
+| Line                        | Spec                               |     $/mo |
+| --------------------------- | ---------------------------------- | -------: |
+| `apps/realtime`             | 512 MB × 60 h + 1 GB rootfs parked |     0.43 |
+| Redis                       | 256 MB × 60 h + rootfs parked      |     0.31 |
+| Postgres — self-run Machine | 1 GB × 60 h + 10 GB volume         |     2.07 |
+| IPv4                        | shared                             |     0.00 |
+| **Subtotal**                |                                    | **2.81** |
+
+**Per-PR previews** — ~20 PRs/month, each open ~3 days, exercised ~1 h:
+
+| Line                                   | Spec                          |     $/mo |
+| -------------------------------------- | ----------------------------- | -------: |
+| Preview app compute                    | 20 × 256 MB × 1 h             |     0.05 |
+| Rootfs parked while stopped            | 20 × 1 GB × $0.15 × (3/30)    |     0.30 |
+| Shared preview Postgres, one DB per PR | 1 GB always-on + 10 GB volume |     8.43 |
+| **Subtotal**                           |                               | **8.78** |
+
+**Total ≈ $59.97/month. Unspent: ≈ $60.03 of the $120 authority.**
+
+**Two things make this work, and both are properties of Fly specifically:**
+
+1. **Stopped Machines cost rootfs only.** A parked preview costs ~1.5¢/month, which is why 20
+   concurrent previews are $8.78 rather than a per-environment fee.
+2. **Fly's autostop is concurrency-driven, not a wall-clock idle timer.** Fly Proxy stops a
+   Machine by comparing live connection counts against the `soft_limit`, so **a Machine holding
+   an open WebSocket is not idle and is not stopped.** This is the precise difference from
+   Render free's 15-minute spin-down, which §8.2 named as the ceiling that bites first _because
+   it is a correctness failure rather than a quota_. On Fly, autostop is safe for staging in a
+   way free-tier sleeping never was.
+   > **[unverified]** Fly's autostop documentation states the concurrency rule but does not
+   > explicitly address open WebSocket connections at stop time. **Verify on the first staging
+   > deploy before relying on it** — owner: Platform Engineer, [PER-7](/PER/issues/PER-7). If it
+   > turns out to be wrong, staging goes always-on at +$3.03/month, which the headroom absorbs.
+
+**The cheaper variant, and why I am not recommending it.** Self-running Postgres in production
+too (a 1 GB Machine + 10 GB volume, $8.43) drops the total to **≈ $28/month**. It is rejected:
+[ADR-0001](./0001-v1-stack.md) rev 2 §6.1 makes the Postgres match log **the sole tier of
+record**, and this issue's replacement constraint is _protect Postgres durability, treat Redis
+as fungible_. Trading managed HA, automated backups and point-in-time restore on the one
+component we cannot reconstruct, to save $20/month against a $60 underspend, fails the
+**blast-radius** lens. Self-run Postgres is fine for staging and previews, where losing the
+database costs a re-seed.
+
+### 12.3 What Platform Engineer may provision now
+
+**[PER-6](/PER/issues/PER-6) and [PER-7](/PER/issues/PER-7) are released from the free-tier
+cap**, within the $120 authority and in the board's priority order:
+
+| #   | Provision                                                                       | Authority                 |
+| --- | ------------------------------------------------------------------------------- | ------------------------- |
+| 1   | Per-PR preview apps via `superfly/fly-pr-review-apps`, autostop on, shared PG   | ✅ approved               |
+| 2   | Staging: `apps/realtime` + self-run Redis + self-run PG, autostop, region `sin` | ✅ approved               |
+| 3   | Production: `apps/realtime` + self-run Redis + **Fly Managed Postgres Basic**   | ✅ approved               |
+| —   | `apps/web` on a **free-egress CDN** (Cloudflare Pages), _not_ on Fly            | ✅ required, not optional |
+| —   | Any Fly support plan, any region other than `sin`, any resize above the above   | ❌ back to CTO            |
+
+**Binding conditions, all from §7a and §5.5b:**
+
+- **Region `sin`, not `bom`.** `bom` does not exist (§5.5b).
+- **Redis is a self-run Machine with our own `redis.conf`** — not Upstash. Board condition.
+- **Postgres is Fly Managed in the same region as the app.** **Check availability in `sin`
+  first**; if it is not offered there, stop and come back to me rather than reaching for an
+  off-Fly Postgres, which reintroduces the cross-provider hop §5.1b rules out.
+- **Bidirectional presence heartbeat ≤ 10 s**, as per-environment config. Board condition.
+- **`apps/web` static output must be CDN-fronted.** Every figure in this ADR assumes it; on Fly
+  unfronted static egress is ~1.7× the WebSocket egress, and at India rates that is real money.
+- **No payment card beyond the $120 authority, no support plan, no second region.**
+
+**M0 AC1 stays _partially met_** until per-PR previews are actually running. Provisioning
+authority is not evidence; a green preview deploy on a real PR is.
+
+### 12.4 The M5 step-up, re-priced
+
+The board recorded a concern that M5 would land at ~$238 against $250, leaving ~$12 of headroom
+where $65 was wanted. **Using §12.2's measured unit prices instead of rev 1's estimates, it is
+better than that:**
+
+```
+production at 1,000 concurrent, India audience (§3.6)     ≈ $153
+staging, scaled to roughly half the production shape      ≈ $ 50
+per-PR previews (unchanged — they do not scale with players) ≈ $  9
+                                                            ──────
+                                                            ≈ $212  against $250
+headroom                                                    ≈ $ 38   (not $12)
+```
+
+Previews are the insight: they are priced by PR count, not player count, so they do not grow
+with launch. **This remains an estimate and must be re-derived from measured numbers before the
+$120 → $250 step is taken** — the board's instruction, and §9's owed-measurement table is the
+input to it.
 
 ---
 
@@ -1237,6 +1625,12 @@ re-run with Fly's $0.12/GB India rate applied** — Decision 3.
 
 - **Rev 2:** the board can see the distance between $0 and correct, and it is **$7/month** — a
   number small enough to decide without a model, backed by a model if it wants one.
+- **Rev 3:** M0 AC1 is now buyable. Previews and a WebSocket-holding staging cost **$11.59/month
+  combined**, so the two criteria the board reversed $0 for are the cheapest things on the list.
+- **Rev 3:** the region question is settled for costing purposes without the board having to
+  answer it. Because Fly prices egress by destination (§5.5b), the India premium applies from
+  wherever we deploy, so **$153 is the M5 planning number** and no further board input is needed
+  to use it.
 
 **Harder**
 
@@ -1250,6 +1644,16 @@ re-run with Fly's $0.12/GB India rate applied** — Decision 3.
 - **Rev 2:** co-location of Postgres with the app is now a hosting constraint. It costs nothing
   on any single provider and it removes Hetzner H1 — the cheap-compute-plus-managed-data shape —
   from serious contention unless someone measures the cross-provider hop.
+- **Rev 3: we cannot put a server in India on the provider we just chose** (§5.5b). Indian
+  players are served from Singapore at ~60–90 ms RTT **[unverified]**, which is survivable for
+  turn-based and wrong for M6. The p95 measurement on [PER-7](/PER/issues/PER-7) moves from
+  routine to load-bearing, because it is now the thing that tells us whether the M1–M5 product
+  is acceptable in its target market.
+- **Rev 3: Fly's cost advantage over Railway is gone for our audience** — $153 vs $149 (§3.6).
+  Decision 1 now rests entirely on Constraint 4, the native fleet primitive, which §7c argues we
+  may never exercise. The decision is still right on reversibility grounds, but it is a thinner
+  case than the one the board endorsed, and I have said so rather than letting the $100 figure
+  stand as the justification.
 
 **Committed to**
 
@@ -1296,5 +1700,16 @@ re-run with Fly's $0.12/GB India rate applied** — Decision 3.
 - **[ADR-0001](./0001-v1-stack.md) §6 makes Redis authoritative again** → §5.1's withdrawn gate
   comes back and Upstash is re-disqualified. Recorded so the reversal is a decision rather than a
   rediscovery.
-- **v1's market is confirmed as India** → re-run §3 with Fly's $0.12/GB India egress, and reopen
-  Decision 1 with Akamai/Linode Mumbai in the shortlist (§11.3).
+- **v1's market is confirmed as India** → **already applied in rev 3.** §3.6 and §4 carry the
+  India column and $153 is the M5 planning number. The remaining trigger is narrower: **reopen
+  Decision 1 if measured Mumbai↔Singapore p95 exceeds the 150 ms budget**, with Akamai/Linode
+  Mumbai and AWS `ap-south-1` in the shortlist (§11.3).
+- **Fly restores an India region, or any candidate adds one** → §5.5b's substitution reverses
+  and §11.3's shortlist reopens. Worth watching: `bom` was deleted 2026-09-25, recently enough
+  that the decision may not be final.
+- **Fly changes egress from destination-priced to region-priced** → §5.5b's central finding
+  inverts and region choice becomes a cost lever again.
+- **Measured Fly spend exceeds $90/month** (75% of the $120 authority) → §12's ~$60 estimate is
+  wrong somewhere; find out where before the M5 step-up rather than after.
+- **Fly autostop is observed to drop an open WebSocket** → §12.2's staging shape is unsafe;
+  staging goes always-on at +$3.03/month.
