@@ -247,10 +247,12 @@ Conditions that live only in a decision record are not conditions.
 > engine, because a lobby that is not tied to one kind of game needs them either way. Nobody
 > should plan M1 on the assumption that §4 deleted those issues.
 
-**[PER-15](/PER/issues/PER-15) is unblocked by this decision** and builds its transport layer
-Colyseus-hosted, with the four conditions in §4.2 as acceptance criteria. Everything else in M1 —
-the SDK contract, guest identity, rooms/codes/registry, seats, the timer service — was identical
-under all three options and was never waiting on it.
+**[PER-15](/PER/issues/PER-15) no longer waits on this gate** and builds its transport layer
+Colyseus-hosted, with the four conditions in §4.2 as acceptance criteria. It is still blocked on
+[PER-12](/PER/issues/PER-12) and [PER-14](/PER/issues/PER-14) for reasons that have nothing to do
+with §4 — closing this gate removed a constraint on its design, not its dependencies. Everything
+else in M1 — the SDK contract, guest identity, rooms/codes/registry, seats, the timer service —
+was identical under all three options and was never waiting on it.
 
 ### 5. Postgres access layer: Drizzle
 
@@ -702,13 +704,13 @@ layer — is now unblocked and builds Colyseus-hosted against §4.2.
 
 **What the decision costs downstream**, so it is not discovered one issue at a time:
 
-| Issue                        | Effect of the decision                                                                                                            |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's `no-platform-framework-in-games` rule. **New work**, and it is not optional — condition 2 is unenforced without it |
-| [PER-15](/PER/issues/PER-15) | Unblocked. Transport layer is Colyseus-hosted; the four §4.2 conditions are acceptance criteria                                   |
-| [PER-17](/PER/issues/PER-17) | Add a conformance case: the testkit runs with Colyseus absent from the dependency tree                                            |
-| [PER-21](/PER/issues/PER-21) | The M6 engine question is pre-answered. ADR-0005 shifts from _select an engine_ to _validate this one against the tick budget_    |
-| [PER-30](/PER/issues/PER-30) | The M4 spike measures **Colyseus** against < 5 ms p99 for a 12-player room. That measurement is now a revisit trigger (§4.5)      |
+| Issue                        | Effect of the decision                                                                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [PER-5](/PER/issues/PER-5)   | Add ADR-0002's `no-platform-framework-in-games` rule. **New work**, and it is not optional — condition 2 is unenforced without it                                                                                  |
+| [PER-15](/PER/issues/PER-15) | Design constraint lifted. Transport layer is Colyseus-hosted; the four §4.2 conditions are acceptance criteria. Still blocked on [PER-12](/PER/issues/PER-12) / [PER-14](/PER/issues/PER-14) for unrelated reasons |
+| [PER-17](/PER/issues/PER-17) | Add a conformance case: the testkit runs with Colyseus absent from the dependency tree                                                                                                                             |
+| [PER-21](/PER/issues/PER-21) | The M6 engine question is pre-answered. ADR-0005 shifts from _select an engine_ to _validate this one against the tick budget_                                                                                     |
+| [PER-30](/PER/issues/PER-30) | The M4 spike measures **Colyseus** against < 5 ms p99 for a 12-player room. That measurement is now a revisit trigger (§4.5)                                                                                       |
 
 [PER-21](/PER/issues/PER-21) stays design-only and no real-time implementation work starts before
 the board opens M6. That is unchanged.
