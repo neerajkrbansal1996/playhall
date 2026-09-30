@@ -18,6 +18,8 @@ import type { TimerSpec } from './timers.js'
 import { isSemver } from './versioning.js'
 import { type Result, err, ok } from './errors.js'
 import type { JsonValue } from './json.js'
+import { canonicalSettingsKey, type SettingsFormDescriptor } from './settings-form.js'
+import { checkSettingsForm, settingsFormDescriptorSchema } from './settings.js'
 
 export const GAME_CATEGORIES = ['board', 'card', 'dice', 'word', 'party', 'action'] as const
 export type GameCategory = (typeof GAME_CATEGORIES)[number]
@@ -75,8 +77,19 @@ export interface SettingsPreset<TSettings> {
   readonly label: string
   readonly description?: string
   readonly settings: TSettings
-  /** At most one preset may be the default the lobby opens on. */
+  /**
+   * At most one preset may be the default the lobby opens on. Its `settings`
+   * must equal `defaultSettings`, or the form would open with a preset selected
+   * while showing different values.
+   */
   readonly isDefault?: boolean
+  /**
+   * Show on the quick-start row rather than behind "More". This is the
+   * "<= 2 taps to a playable lobby" affordance: a featured preset creates a
+   * lobby without the form being opened at all. Distinct from `isDefault` —
+   * several presets may be featured, only one may be the default.
+   */
+  readonly featured?: boolean
 }
 
 export interface GameManifest<TSettings = unknown> {
@@ -107,6 +120,13 @@ export interface GameManifest<TSettings = unknown> {
   readonly settingsSchema: z.ZodType<TSettings>
   readonly defaultSettings: TSettings
   readonly presets: readonly SettingsPreset<TSettings>[]
+  /**
+   * How the create-lobby form renders (ADR-0007). Presentation only: it is
+   * carried in `GameCatalogEntry` as plain JSON so the shell can render a
+   * complete, correct form having loaded no game code, and it grants no
+   * validation power — `settingsSchema` remains the only authority.
+   */
+  readonly settingsForm: SettingsFormDescriptor
 
   /** Every timer id the game may reference from `applyAction` or `onTimer`. */
   readonly timers: readonly TimerSpec[]
@@ -165,8 +185,10 @@ export const gameManifestSchema = z.object({
       description: z.string().optional(),
       settings: z.unknown(),
       isDefault: z.boolean().optional(),
+      featured: z.boolean().optional(),
     }),
   ),
+  settingsForm: settingsFormDescriptorSchema,
 
   timers: z.array(timerSpecSchema),
 
@@ -240,6 +262,15 @@ export function validateManifest<TSettings>(
       path: 'defaultSettings',
       message: `does not satisfy settingsSchema: ${defaults.error.issues.map((i) => i.message).join('; ')}`,
     })
+  } else if (
+    canonicalSettingsKey(defaults.data) !== canonicalSettingsKey(manifest.defaultSettings)
+  ) {
+    // Parsing changed it, so the manifest declares one thing and the platform
+    // would persist another. Usually a missing key relying on a zod `.default()`.
+    problems.push({
+      path: 'defaultSettings',
+      message: 'is incomplete: settingsSchema.parse returns different settings than are declared',
+    })
   }
 
   const presetIds = new Set<string>()
@@ -257,10 +288,34 @@ export function validateManifest<TSettings>(
         path: `presets.${index}.settings`,
         message: `does not satisfy settingsSchema: ${parsed.error.issues.map((i) => i.message).join('; ')}`,
       })
+      return
+    }
+    if (canonicalSettingsKey(parsed.data) !== canonicalSettingsKey(preset.settings)) {
+      problems.push({
+        path: `presets.${index}.settings`,
+        message:
+          'is incomplete: parsing changes the settings, so the lobby would not match the preset label',
+      })
+    }
+    if (
+      preset.isDefault === true &&
+      canonicalSettingsKey(preset.settings) !== canonicalSettingsKey(manifest.defaultSettings)
+    ) {
+      problems.push({
+        path: `presets.${index}.settings`,
+        message: 'isDefault preset must have the same settings as defaultSettings',
+      })
     }
   })
   if (defaultPresets > 1) {
     problems.push({ path: 'presets', message: 'at most one preset may set isDefault' })
+  }
+
+  // The descriptor against the schema it claims to render: a field bound to a
+  // key that does not exist, an option the schema rejects, a conditional field
+  // that can never appear. See `settings.ts` / ADR-0007.
+  for (const issue of checkSettingsForm(manifest)) {
+    problems.push({ path: issue.path, message: `[${issue.code}] ${issue.message}` })
   }
 
   return problems.length === 0 ? ok(manifest) : err(problems)
@@ -297,7 +352,13 @@ export interface GameCatalogEntry {
     readonly description: string | null
     readonly settings: JsonValue
     readonly isDefault: boolean
+    readonly featured: boolean
   }[]
+  /**
+   * Already JSON — this is why the descriptor is data and not a component. The
+   * create-lobby page renders the whole form from this entry alone.
+   */
+  readonly settingsForm: SettingsFormDescriptor
   readonly timers: readonly TimerSpec[]
   readonly status: GameStatus
   readonly version: string
@@ -329,7 +390,9 @@ export function toCatalogEntry<TSettings>(manifest: GameManifest<TSettings>): Ga
       description: preset.description ?? null,
       settings: preset.settings as JsonValue,
       isDefault: preset.isDefault ?? false,
+      featured: preset.featured ?? false,
     })),
+    settingsForm: manifest.settingsForm,
     timers: manifest.timers,
     status: manifest.status,
     version: manifest.version,

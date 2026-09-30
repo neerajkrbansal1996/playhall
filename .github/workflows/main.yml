@@ -26,6 +26,15 @@ jobs:
   # branch protection nothing forces a rebase before merge.
   gates:
     name: gates
+    # A called workflow cannot exceed the caller's grant, and `ci-gate` requests
+    # `pull-requests: write` to post its gate table. Without this the whole run
+    # fails at startup with zero jobs — not a failed job, no annotation on any
+    # step, just a red `main` and "a workflow file issue". So the grant has to be
+    # here even though the step that uses it is `if: pull_request` and can never
+    # fire on a push to `main`.
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/ci.yml
 
   # ADR-0004 §Decision 2. Cannot prevent a direct push; makes one loud.

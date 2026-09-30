@@ -1,0 +1,18 @@
+# expect: no-game-to-platform
+# why: the same violation with the dependency left undeclared, where the specifier resolves to nothing and a path-only rule silently passed
+# unlink: platform-core
+=== file: games/fx-a/src/index.ts ===
+// The sibling fixture declares nothing either, but the mini repo links every workspace package,
+// so there the import resolves to `packages/platform-core/src/index.ts` and a path-only rule
+// catches it. Real pnpm links a workspace package only when the importer DECLARES it — and a
+// game may never declare a platform package, because `no-illegal-declared-dep` forbids exactly
+// that. So in the real repo this import resolves to nothing, dependency-cruiser keeps the bare
+// specifier as the module path, and a rule matching only `^packages/platform-core/` sees no edge
+// at all: it was reported as a `not-to-unresolvable` warning and CI went green.
+//
+// `# unlink: platform-core` drops the symlink to reproduce that exactly. This is the likeliest
+// real form of the violation — an engineer adds the import and nothing else — so it is the one
+// that most needs to be red.
+import { brandKey } from '@scope/platform-core'
+
+export const id = brandKey

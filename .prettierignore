@@ -1,7 +1,12 @@
 node_modules
+# Sibling git worktrees — `pnpm format` must not rewrite another branch's files.
+.worktrees
 dist
 .next
 coverage
 pnpm-lock.yaml
 *.tsbuildinfo
 CHANGELOG.md
+
+# Boundary fixtures are deliberate violations kept out of every normal tool pass.
+*.fixture

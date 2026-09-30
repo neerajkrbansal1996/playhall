@@ -1,5 +1,5 @@
 {
-  "//": "Type-checks the test sources without emitting. Not part of the composite build graph.",
+  "//": "Type-checks platform-core sources and tests without emitting. Not part of the composite build graph.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,

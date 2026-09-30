@@ -31,7 +31,16 @@ function baseManifest(overrides: Partial<GameManifest<Settings>> = {}): GameMani
     supportsBots: false,
     settingsSchema,
     defaultSettings: { rounds: 3 },
-    presets: [{ id: 'quick', label: 'Quick', settings: { rounds: 1 }, isDefault: true }],
+    // `isDefault` marks the preset the lobby opens on, so its settings have to
+    // be `defaultSettings`. 'quick' is a genuine alternative and is not default.
+    presets: [
+      { id: 'standard', label: 'Standard', settings: { rounds: 3 }, isDefault: true },
+      { id: 'quick', label: 'Quick', settings: { rounds: 1 }, featured: true },
+    ],
+    settingsForm: {
+      version: 1,
+      fields: [{ kind: 'number', key: 'rounds', label: 'Rounds', min: 1, max: 10, step: 1 }],
+    },
     timers: [{ id: 'turn', kind: 'turn', description: 'Turn clock.', pausesOnDisconnect: true }],
     status: 'live',
     version: '1.0.0',

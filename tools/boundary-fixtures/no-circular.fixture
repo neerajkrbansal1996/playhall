@@ -1,0 +1,10 @@
+# expect: no-circular
+# why: two modules importing each other
+=== file: packages/platform-core/src/seats.ts ===
+import { assignHost } from './rooms'
+
+export const seat = assignHost
+=== file: packages/platform-core/src/rooms.ts ===
+import { seat } from './seats'
+
+export const assignHost = seat

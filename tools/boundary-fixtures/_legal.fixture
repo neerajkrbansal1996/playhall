@@ -1,0 +1,19 @@
+# expect: none
+# why: positive control — the legal shapes must stay legal, or the suite would pass on a rule set that simply rejects everything
+=== file: games/fx-a/src/index.ts ===
+// Everything a game is allowed to do: the SDK, third-party libraries, its own files.
+import type { GameId } from '@scope/game-sdk'
+import { z } from 'zod'
+
+import { SETTINGS } from './settings'
+
+export const schema = z
+export const id = 'fx-a' as GameId
+export const settings = SETTINGS
+=== file: games/fx-a/src/settings.ts ===
+export const SETTINGS = { seats: 2 }
+=== file: apps/web/src/games.generated.ts ===
+// The allowlisted edge, used the only way it is allowed: generated, and dynamic.
+export const games = {
+  'fx-b': () => import('@scope/fx-b'),
+}

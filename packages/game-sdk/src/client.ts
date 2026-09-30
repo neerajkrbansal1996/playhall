@@ -113,6 +113,16 @@ export interface HUDProps<TSnapshot> {
   readonly isSpectator: boolean
 }
 
+/**
+ * Props for the **optional** custom settings form.
+ *
+ * ADR-0007: `manifest.settingsForm` is the floor and it is mandatory — the shell
+ * must be able to configure any lobby from the descriptor alone, with no game
+ * code loaded, because the create-lobby path is the LCP path. A game may
+ * additionally ship a `SettingsForm` component as progressive enhancement; the
+ * shell lazy-loads it only after the descriptor-driven form is already
+ * interactive, and a game may never require it.
+ */
 export interface SettingsFormProps<TSettings> {
   readonly value: TSettings
   readonly onChange: (next: TSettings) => void

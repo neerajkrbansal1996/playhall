@@ -3,11 +3,11 @@
  * Runs one CI gate by name.
  *
  * Why this exists: PER-6 must stand up the *shape* of the pipeline (lint,
- * typecheck, boundaries, unit, testkit, integration, e2e) before every gate's
- * implementation exists — `pnpm boundaries` lands with PER-5, the conformance
- * testkit with PER-17, integration and E2E with M1/M3. A workflow that calls a
- * missing pnpm script fails with `ERR_PNPM_NO_SCRIPT`, which is
- * indistinguishable from a real regression.
+ * format, typecheck, boundaries, unit, coverage, testkit, integration, e2e)
+ * before every gate's implementation exists — the conformance testkit lands with
+ * PER-17, integration and E2E with M1/M3. A workflow that calls a missing pnpm
+ * script fails with `ERR_PNPM_NO_SCRIPT`, which is indistinguishable from a real
+ * regression.
  *
  * So each gate is declared here once, with the issue that owns it. A gate whose
  * script is not defined yet is reported as PENDING and passes; the day the
@@ -15,8 +15,24 @@
  * workflow edit. The job names never change, which is what lets required status
  * checks be switched on (see `docs/ci-cd.md`) without rework.
  *
- * `CI_STRICT_GATES=1` turns PENDING into a failure. Set it once M1 closes so a
- * gate can never silently regress back to "not implemented".
+ * That has now happened once for real: PER-5 added the root `boundaries` script
+ * and the gate went live on the next run with no edit to this file.
+ *
+ * `CI_STRICT_GATES=1` turns PENDING into a failure, so a gate cannot sit
+ * unimplemented behind a green `ci-gate` indefinitely. It is not set yet.
+ *
+ * Owner and trigger: PER-98, at M1 close (PER-9) — the same commitment
+ * `docs/ci-cd.md` records, rather than an unowned "someday" in a comment. The
+ * reason it cannot go on today is measurable, not a preference: `coverage`,
+ * `testkit`, `integration` and `e2e` still have no root script, so the switch
+ * would fail four jobs on its first run and take every PR red. The unblock is
+ * exact — when those four root scripts exist, add `CI_STRICT_GATES: '1'` to the
+ * gate jobs' `env` in `.github/workflows/ci.yml`. If one of them is still
+ * missing at M1 close, the move is not to delay again: give that gate a real
+ * `pendingOwner` issue, which is what the field is for.
+ *
+ * Both branches below are covered by `tools/ci-gate` — the strict failure is
+ * proven before the switch is flipped, not by the first red pipeline.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
@@ -31,12 +47,22 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
  */
 const GATES = {
   lint: { script: 'lint', pendingOwner: null },
+  // Live from the day it lands, not PENDING: `format:check` has existed in the
+  // root package.json since PER-6, it just was never called by anything. See
+  // ADR-0001 §9. `pnpm format` is the fix command for a failure here.
+  format: { script: 'format:check', pendingOwner: null },
   typecheck: { script: 'typecheck', pendingOwner: null },
   unit: { script: 'test', pendingOwner: null },
-  boundaries: {
-    script: 'boundaries',
-    pendingOwner: 'PER-5 — dependency-cruiser rule set (see docs/adr/0002)',
+  // The >= 80% rule currently lives in each package's own vitest thresholds, so
+  // a package that configures none is exempt by accident — which is exactly how
+  // game-sdk sat at 0% and games/chess at 41% behind a green `unit`.
+  coverage: {
+    script: 'test:coverage',
+    pendingOwner: 'PER-89 — aggregate >= 80% check across the required packages',
   },
+  // Went live with no edit here the moment PER-5 added the root `boundaries`
+  // script — the PENDING branch keys on the script existing, not on this field.
+  boundaries: { script: 'boundaries', pendingOwner: null },
   testkit: {
     script: 'test:testkit',
     pendingOwner: 'PER-17 — game conformance testkit (first consumer: tic-tac-toe)',
@@ -52,7 +78,11 @@ const GATES = {
 }
 
 const gateName = process.argv[2]
-const gate = GATES[gateName]
+// Own keys only. A plain lookup resolves `constructor`, `toString` and friends
+// up the prototype chain, and the truthy result then reads `gate.script` as
+// undefined — which lands in the PENDING branch below and exits 0. A typo'd
+// gate name would report "pending, owner: unassigned" and pass forever.
+const gate = Object.hasOwn(GATES, gateName) ? GATES[gateName] : undefined
 
 if (!gate) {
   console.error(`Unknown CI gate "${gateName}". Known gates: ${Object.keys(GATES).join(', ')}`)
@@ -65,6 +95,20 @@ const isDefined = Boolean(pkg.scripts?.[gate.script])
 if (!isDefined) {
   const strict = process.env.CI_STRICT_GATES === '1'
   const detail = `gate "${gateName}" has no root script "${gate.script}" yet — owner: ${gate.pendingOwner ?? 'unassigned'}`
+
+  // A gate declared live (`pendingOwner: null`) whose script has gone missing is
+  // a demotion, not an unwritten implementation. Rename the root `lint` script
+  // and this would otherwise report PENDING with owner `unassigned` and exit 0,
+  // leaving `ci-gate` green while lint no longer ran. `CI_STRICT_GATES` does not
+  // get a say in that one: the gate's own registry entry says it is live.
+  if (gate.pendingOwner === null) {
+    console.error(
+      `::error title=CI gate demoted::${detail}. This gate is declared live, so a missing ` +
+        'script means it was renamed or deleted rather than not written yet. Restore the ' +
+        'script, or move the gate back to PENDING with an owning issue in scripts/ci/gate.mjs.',
+    )
+    process.exit(1)
+  }
 
   if (strict) {
     console.error(`::error title=CI gate missing::${detail} (CI_STRICT_GATES=1)`)

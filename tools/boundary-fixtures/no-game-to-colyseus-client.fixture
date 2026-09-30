@@ -1,0 +1,11 @@
+# expect: no-game-to-colyseus
+# why: the browser client is published as `colyseus.js`, a name that neither `^colyseus$` nor `@colyseus/*` matches — the likeliest violation in a game's client-side code, and the one a pattern written from the server package names lets through
+=== file: games/fx-a/src/index.ts ===
+// Installed and resolving, so this is not the "written before pnpm install" case — the rule
+// has to match the package by name. `colyseus.js` is the official browser client: not a
+// subpath of `colyseus`, not under the `@colyseus` scope, a third npm name. A game reaching
+// for it is a game talking to the platform's transport directly, which is the coupling
+// ADR-0002 forbids — the SDK carries every message a game is allowed to send.
+import { Client } from 'colyseus.js'
+
+export const room = new Client('ws://localhost:3001')
