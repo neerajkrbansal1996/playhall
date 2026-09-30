@@ -44,9 +44,6 @@ const DEPCRUISE_BIN = join(
 )
 const DECLARED_DEPS_SCRIPT = join(repoRoot, 'tools', 'boundaries', 'check-declared-deps.mjs')
 
-/** The rule that is enforced by `check-declared-deps.mjs` rather than by dependency-cruiser. */
-const SCRIPT_ENFORCED_RULES = ['no-illegal-declared-dep']
-
 interface Rule {
   name: string
   severity: string
@@ -66,6 +63,18 @@ const fixtures = loadFixtures(fixtureDir)
 
 /** Fixtures write `@scope/...`; the real scope is read from the SDK manifest (see mini-repo). */
 const scope = workspaceScope(repoRoot)
+
+/**
+ * Rules `check-declared-deps.mjs` enforces, mapped to the explanation it prints for each.
+ * `no-illegal-declared-dep` lives there only; `no-game-to-colyseus` is enforced in both places —
+ * dependency-cruiser catches the import, the script catches the manifest declaration — so it
+ * appears here *and* in the dependency-cruiser rule set, with a fixture for each half.
+ */
+const SCRIPT_ENFORCED_EXPLANATIONS: Record<string, string> = {
+  'no-illegal-declared-dep': `A game package may declare exactly one ${scope} dependency`,
+  'no-game-to-colyseus': 'The server framework is a platform choice, never a game',
+}
+const SCRIPT_ENFORCED_RULES = Object.keys(SCRIPT_ENFORCED_EXPLANATIONS)
 
 interface RunResult {
   readonly status: number
@@ -183,7 +192,7 @@ describe.each(fixtures.filter((fixture) => fixture.expectRule !== null))(
       const comment = rulesByName.get(expectedRule)?.comment
       const expectedExplanation =
         fixture.tool === 'declared-deps'
-          ? `A game package may declare exactly one ${scope} dependency`
+          ? (SCRIPT_ENFORCED_EXPLANATIONS[expectedRule] ?? '')
           : collapse(comment ?? '').slice(0, 60)
 
       expect(expectedExplanation.length, `rule ${expectedRule} has no comment`).toBeGreaterThan(20)
