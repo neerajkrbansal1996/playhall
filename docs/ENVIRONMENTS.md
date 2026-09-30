@@ -203,13 +203,53 @@ qualifies) in both staging and production. The concrete wiring depends on which 
 board picks, so it lands with the pipeline on [PER-6](/PER/issues/PER-6); it is recorded
 here so it is not rediscovered from an invoice.
 
-## 10. Still open on this issue
+## 10. The source-map pipeline, and how it was evidenced
 
-| Item                                                                     | Owner                                         | Unblock action                                                                                                                                                                                   |
-| ------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Sentry projects `playhall-web` / `playhall-realtime` and their DSNs      | user, [PER-40](/PER/issues/PER-40)            | Add `project:write` to the token scopes, or create the two projects by hand under the `playhall` team. The org has _Let members create projects_ disabled, so the agent connection gets HTTP 403 |
-| `SENTRY_AUTH_TOKEN` for release + source-map upload                      | user, [PER-40](/PER/issues/PER-40)            | Save as Paperclip secret `sentry_auth_token`                                                                                                                                                     |
-| Vendor `ErrorReporter` adapters in both apps                             | Platform Engineer                             | Needs a DSN first                                                                                                                                                                                |
-| Deployed staging/production environments, CDN wiring                     | Platform Engineer, [PER-6](/PER/issues/PER-6) | Needs the ADR-0003 hosting decision                                                                                                                                                              |
-| Measured staging action round-trip p95 (< 150 ms target)                 | Platform Engineer, ADR-0003 §9                | Needs a staging deploy                                                                                                                                                                           |
-| Measured Sentry browser bundle cost (ADR-0001 §8 estimates ~25–30 KB gz) | Platform Engineer                             | Needs the browser SDK actually installed                                                                                                                                                         |
+The acceptance criterion is that a deliberately thrown error resolves to real source
+lines. Per the CTO's ruling on PER-7 that is a property of the **release identity and the
+source-map pipeline**, not of where the process runs, so it was evidenced on a build
+carrying the staging release identity rather than waiting on
+[PER-6](/PER/issues/PER-6).
+
+The pipeline, and the step that breaks each link if you get it wrong:
+
+1. **Build with a source map, from inside the repo.** Output must live in the tree
+   (`apps/realtime/dist`), because a bundler computes `sources` relative to the outfile —
+   build to a directory outside the repo and every source path in Sentry becomes the build
+   machine's absolute layout. Verified: an in-tree build yields
+   `../../../packages/shared/src/telemetry/correlation.ts`.
+2. **Create the release as `<service>@<sha>`** — `POST /organizations/{org}/releases/`
+   with `projects: ["playhall-realtime"]`.
+3. **Upload both files under `~/<path>` names** — `index.js` _and_ `index.js.map`. The
+   minified file matters: Sentry follows its `//# sourceMappingURL` comment to find the
+   map.
+4. **Emit frames as `app:///<path>`** so they match the `~/<path>` artifact names.
+   `toArtifactPath()` in `apps/realtime/src/sentry.ts` does this and is unit-tested. This
+   is the link that fails silently: get it wrong and events still arrive, just minified.
+
+Measured on `playhall-realtime@3dacaff2a44190aeb83ff6ea60cf4fa63b77a02e`:
+
+| Step                                            | Result                                                                  |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| Create release                                  | `HTTP 201`                                                              |
+| Upload `~/dist/index.js`, `~/dist/index.js.map` | `HTTP 201` each; confirmed by listing the release's files               |
+| Ingest the event                                | `HTTP 200`, Sentry returned event id `b4c67daee3b5d14bed0206f929963310` |
+| Frame emitted by the adapter                    | `app:///dist/index.js 7:2423`, `in_app: true`                           |
+| That frame through the uploaded map             | `apps/realtime/src/index.ts 81:19` — the `new Error(...)` line          |
+
+**Not verified, stated rather than implied:** Sentry's own rendering of the symbolicated
+trace was not read back. The `sentry_auth_token` carries `project:releases` and not
+`project:read` (§4), so this agent cannot query an issue through the API, and the Sentry
+MCP session expired mid-run. What is proved is that Sentry holds the artifacts, accepted
+the event, and that the frame the event carries resolves against those exact artifacts.
+The remaining step is one look at the Sentry UI.
+
+## 11. Still open on this issue
+
+| Item                                                                     | Owner                                         | Unblock action                                                                                            |
+| ------------------------------------------------------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Sentry adapter for `apps/web`                                            | Platform Engineer                             | Use `@sentry/nextjs` there — browser specifics earn the bytes; pass `scrubEventForVendor` as `beforeSend` |
+| Release + source-map upload as a CI step                                 | Platform Engineer, [PER-6](/PER/issues/PER-6) | The four steps in §10, gated on `SENTRY_AUTH_TOKEN`                                                       |
+| Deployed staging/production environments, CDN wiring                     | Platform Engineer, [PER-6](/PER/issues/PER-6) | Needs the ADR-0003 hosting decision                                                                       |
+| Measured staging action round-trip p95 (< 150 ms target)                 | Platform Engineer, ADR-0003 §9                | Needs a staging deploy                                                                                    |
+| Measured Sentry browser bundle cost (ADR-0001 §8 estimates ~25–30 KB gz) | Platform Engineer                             | Needs the browser SDK actually installed                                                                  |

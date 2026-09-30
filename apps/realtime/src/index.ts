@@ -34,15 +34,6 @@ function correlationFor(req: IncomingMessage): { correlationId: CorrelationId; m
   return resolveCorrelationId(req.headers[CORRELATION_ID_HEADER])
 }
 
-/** Path without the query string. `undefined` and malformed urls become `/`. */
-export function pathOf(url: string | undefined): string {
-  if (!url) return '/'
-  const queryAt = url.indexOf('?')
-  const hashAt = url.indexOf('#')
-  const end = Math.min(queryAt === -1 ? url.length : queryAt, hashAt === -1 ? url.length : hashAt)
-  return url.slice(0, end) || '/'
-}
-
 /**
  * M0 skeleton: HTTP only, so `pnpm dev` has something that actually boots and
  * the deploy pipeline has something to probe. The wire protocol (`room:*`,
