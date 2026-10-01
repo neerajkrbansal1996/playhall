@@ -44,6 +44,11 @@ describe('a 7th canonical character in the join-code field', () => {
     expect(alert).toHaveTextContent(OVERFLOW)
     // The message is wired to the field, not merely rendered near it.
     expect(input).toHaveAttribute('aria-describedby', alert.id)
+    // Deliberate: the six characters are well-formed, but they are not what the
+    // player supplied, which is what `aria-invalid` tells them to look at.
+    // Without this the attribute is covered for `error` and `tooShort` only, and
+    // narrowing it to those two triggers passes the whole suite.
+    expect(input).toHaveAttribute('aria-invalid', 'true')
   })
 
   it('announces the drop on the typed path too, not only on paste', async () => {
