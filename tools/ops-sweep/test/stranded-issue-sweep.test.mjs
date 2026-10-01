@@ -2,19 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import {
   SWEEP_FLIP_MARKER,
+  SWEEP_SELF_CLOSE_MARKER,
   applyRemedy,
+  classifyBlockedWithoutEdges,
+  classifyReviewWait,
+  closeDeadOwnFires,
   confirmWrite,
   countRecentFlips,
   decideRemedy,
   parseArgs,
+  partitionReviewPaths,
   planRemedy,
   evaluateDeepWakePaths,
   hasLiveMonitor,
   hasLiveRun,
+  isObservationCandidate,
   isOwnExecutionIssue,
   isShallowCandidate,
   openChildIds,
   prioritiseFindings,
+  selectDeadOwnFires,
 } from '../../../scripts/ops/stranded-issue-sweep.mjs'
 
 /**
@@ -681,5 +688,301 @@ describe('argument parsing', () => {
     expect(() => parseArgs(['--json=true'])).toThrow('does not take a value')
     expect(() => parseArgs(['--wake'])).toThrow('unknown argument')
     expect(() => parseArgs(['--status', ''])).toThrow('at least one status')
+  })
+
+  it('observes in_review and blocked by default, and never both acts and observes', () => {
+    expect(parseArgs([]).observeStatuses).toEqual(['in_review', 'blocked'])
+    expect(parseArgs(['--no-observe']).observeStatuses).toEqual([])
+    // Widening the ACTING scope must remove the status from the observed set,
+    // or an operator reading the report cannot tell which half touched it.
+    expect(parseArgs(['--status=in_progress,in_review']).observeStatuses).toEqual(['blocked'])
+  })
+})
+
+/**
+ * PER-199. At the 14h mid-trial read the remedy was proven — 26 findings, 10
+ * remedies, 0 false positives, 0 repeat offenders — but the carrier was not: 2
+ * of 9 fires completed and seven sat permanently stranded `in_progress`. The
+ * sweep was the board's single largest producer of the condition it detects,
+ * because `--self-routine-id` stopped it flipping its own fires without ever
+ * closing them.
+ */
+describe('self-close of dead prior fires (PER-199)', () => {
+  const ROUTINE = '346b6b5e-dedd-4adb-a3e0-66045f93bbb4'
+  const NOW = new Date('2026-10-01T08:18:00.000Z')
+  // The seven real fires, with the statuses and ids they actually carried.
+  const FIRES = [
+    ['PER-186', '7629014f-d3e4-4606-8b54-cabc5345d640', '2026-10-01T07:06:25.379Z'],
+    ['PER-187', 'b921a4df-7cc7-4a80-a709-5d4c15b34428', '2026-09-30T20:00:25.757Z'],
+    ['PER-192', 'fc4cb3eb-a57a-4349-b378-97287f462e45', '2026-10-01T06:05:25.496Z'],
+  ].map(([identifier, id, lastActivityAt]) =>
+    issue({ id, identifier, assigneeAgentId: CTO, originId: ROUTINE, lastActivityAt }),
+  )
+
+  const screen = { selfRoutineIds: [ROUTINE], now: NOW.getTime(), excludeIds: [] }
+
+  it('selects the dead fires of its own routine', () => {
+    expect(selectDeadOwnFires(FIRES, screen).map((f) => f.identifier)).toEqual([
+      'PER-186',
+      'PER-187',
+      'PER-192',
+    ])
+  })
+
+  it('never closes the fire it is running under', () => {
+    const selected = selectDeadOwnFires(FIRES, { ...screen, excludeIds: [FIRES[0].id] })
+    expect(selected.map((f) => f.identifier)).toEqual(['PER-187', 'PER-192'])
+  })
+
+  // `skip_if_active` should make this impossible, but a fire that has started
+  // and not yet registered a run would otherwise look dead to its successor.
+  it('leaves a sibling fire inside the grace window alone', () => {
+    const justStarted = issue({
+      id: 'fresh',
+      identifier: 'PER-193',
+      assigneeAgentId: CTO,
+      originId: ROUTINE,
+      lastActivityAt: '2026-10-01T08:15:00.000Z',
+    })
+    expect(selectDeadOwnFires([justStarted], screen)).toEqual([])
+  })
+
+  it('leaves a fire with a live run alone', () => {
+    const running = { ...FIRES[1], activeRun: { status: 'running' } }
+    expect(selectDeadOwnFires([running], screen)).toEqual([])
+  })
+
+  it('never touches a fire of a different routine, or an already-closed one', () => {
+    const other = issue({
+      id: 'x',
+      identifier: 'PER-200',
+      assigneeAgentId: CTO,
+      originId: 'some-other-routine',
+      lastActivityAt: '2026-09-30T01:00:00.000Z',
+    })
+    const closed = { ...FIRES[2], status: 'done' }
+    expect(selectDeadOwnFires([other, closed], screen)).toEqual([])
+  })
+
+  it('does nothing at all without --self-routine-id', () => {
+    expect(selectDeadOwnFires(FIRES, { ...screen, selfRoutineIds: [] })).toEqual([])
+  })
+
+  it('closes each fire with one atomic patch and reports from the read-back', async () => {
+    const sent = []
+    const transport = {
+      patch: async (id, body) => {
+        sent.push({ id, body })
+        return { id, status: body.status }
+      },
+    }
+    const results = await closeDeadOwnFires(FIRES, NOW.getTime(), transport)
+    expect(results.every((r) => r.ok)).toBe(true)
+    expect(sent).toHaveLength(3)
+    expect(sent[0].body.status).toBe('done')
+    expect(sent[0].body.comment).toContain(SWEEP_SELF_CLOSE_MARKER)
+  })
+
+  // The sweep reports a remedy only from the echoed status. PER-199 was asked to
+  // reproduce an HTTP 500 on this exact PATCH; it did not reproduce from a bound
+  // run, but a silently non-persisting write must still read as FAILED.
+  it('reports a patch that does not persist as failed, not closed', async () => {
+    const transport = { patch: async (id) => ({ id, status: 'in_progress' }) }
+    const [result] = await closeDeadOwnFires([FIRES[0]], NOW.getTime(), transport)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('read back status in_progress')
+  })
+
+  it('a failing close does not stop the remaining fires being closed', async () => {
+    const transport = {
+      patch: async (id, body) => {
+        if (id === FIRES[0].id) throw new Error('PATCH -> 500')
+        return { id, status: body.status }
+      },
+    }
+    const results = await closeDeadOwnFires(FIRES, NOW.getTime(), transport)
+    expect(results[0]).toMatchObject({ ok: false })
+    expect(results.slice(1).every((r) => r.ok)).toBe(true)
+  })
+})
+
+/**
+ * PER-199, amendment 3. `in_progress` is one of several ways to lose a wake
+ * path: 31 of 70 non-terminal issues had none, and the acting scope could see
+ * seven. These two classes are reported and never acted on.
+ */
+describe('report-only observation classes (PER-199)', () => {
+  const NOW = new Date('2026-10-01T08:18:00.000Z')
+  const THRESHOLD_MS = 2 * 3600_000
+  const screen = {
+    observeStatuses: ['in_review', 'blocked'],
+    cutoff: new Date(NOW.getTime() - THRESHOLD_MS),
+    now: NOW.getTime(),
+    thresholdMs: THRESHOLD_MS,
+  }
+
+  // PER-94, exactly as it read: in_review, agent assignee, no path of any kind,
+  // and the platform's own classifier already saying so to nobody.
+  const PER_94 = issue({
+    id: '94',
+    identifier: 'PER-94',
+    status: 'in_review',
+    priority: 'critical',
+    assigneeAgentId: PLATFORM,
+    lastActivityAt: '2026-09-30T18:46:01.775Z',
+    reviewAttention: { state: 'stalled', paths: [] },
+  })
+
+  // PER-157: blocked, zero edges, holding finished work — PR #85 merged as
+  // fd00f81 with 15/15 checks green. Invisible to every rollup, because
+  // `blocked` reads as a decision someone made.
+  const PER_157 = issue({
+    id: '157',
+    identifier: 'PER-157',
+    status: 'blocked',
+    priority: 'medium',
+    assigneeAgentId: CTO,
+    lastActivityAt: '2026-09-30T18:38:39.932Z',
+    blockerAttention: { state: 'needs_attention', unresolvedBlockerCount: 0 },
+  })
+
+  it('PER-157 is a finding: blocked, zero edges, no unblock owner', () => {
+    expect(isObservationCandidate(PER_157, [PER_157], screen)).toBe(true)
+    const verdict = classifyBlockedWithoutEdges(PER_157, { detail: { blockedBy: [] } })
+    expect(verdict).toMatchObject({
+      kind: 'blocked_no_blocker_edge',
+      edgeCount: 0,
+      openBlockerCount: 0,
+      unblockOwner: null,
+      stalled: true,
+    })
+  })
+
+  it('a blocked issue with a real open edge is not a finding', () => {
+    const detail = { blockedBy: [{ identifier: 'PER-13', status: 'in_progress' }] }
+    expect(classifyBlockedWithoutEdges(PER_157, { detail }).stalled).toBe(false)
+  })
+
+  // `done` already fired `issue_blockers_resolved`; `cancelled` never will.
+  it('a blocked issue whose only edges are terminal is still stranded', () => {
+    const detail = {
+      blockedBy: [
+        { identifier: 'PER-13', status: 'done' },
+        { identifier: 'PER-14', status: 'cancelled' },
+      ],
+    }
+    const verdict = classifyBlockedWithoutEdges(PER_157, { detail })
+    expect(verdict.stalled).toBe(true)
+    expect(verdict.edgeCount).toBe(2)
+    expect(verdict.closedEdgeStatuses).toEqual(['done', 'cancelled'])
+  })
+
+  // The cheap list-side screen: 11 unresolved edges means blocked on something
+  // real, and it never costs a deep fetch.
+  it('skips a blocked issue the list already says has unresolved edges', () => {
+    const per2 = {
+      ...PER_157,
+      identifier: 'PER-2',
+      blockerAttention: { state: 'needs_attention', unresolvedBlockerCount: 11 },
+    }
+    expect(isObservationCandidate(per2, [per2], screen)).toBe(false)
+  })
+
+  it('PER-94 is a finding, and the sweep agrees with the platform for once', () => {
+    expect(isObservationCandidate(PER_94, [PER_94], screen)).toBe(true)
+    const verdict = classifyReviewWait(PER_94, {
+      detail: PER_94,
+      interactions: [],
+      now: NOW.getTime(),
+      thresholdMs: THRESHOLD_MS,
+    })
+    expect(verdict).toMatchObject({ stalled: true, platformVerdict: 'stalled', reviewPaths: [] })
+  })
+
+  it('a pending interaction is a review path, however long it has waited', () => {
+    const verdict = classifyReviewWait(PER_94, {
+      detail: PER_94,
+      interactions: [{ status: 'pending' }],
+      now: NOW.getTime(),
+      thresholdMs: THRESHOLD_MS,
+    })
+    expect(verdict.stalled).toBe(false)
+  })
+
+  /**
+   * The divergence that nearly made this report lie. PER-121, PER-136 and
+   * PER-138 all read `covered` because a wake was enqueued for them — one of
+   * them 21 hours earlier, and still unclaimed. The platform counts a queued
+   * wake as covering the review the moment it is enqueued and never ages it
+   * out, which is the same mistake as reading a terminal `activeRun` as
+   * liveness. The sweep already refuses to make that mistake for monitors.
+   */
+  it('a queued wake unclaimed for 21h is not a review path', () => {
+    const per121 = {
+      ...PER_94,
+      identifier: 'PER-121',
+      reviewAttention: {
+        state: 'covered',
+        paths: [
+          {
+            kind: 'queued_wake',
+            responder: 'Frontend Engineer',
+            since: '2026-09-30T11:30:12.698Z',
+          },
+        ],
+      },
+    }
+    const verdict = classifyReviewWait(per121, {
+      detail: per121,
+      interactions: [],
+      now: NOW.getTime(),
+      thresholdMs: THRESHOLD_MS,
+    })
+    expect(verdict.stalled).toBe(true)
+    expect(verdict.platformVerdict).toBe('covered')
+    expect(verdict.stalePaths).toEqual([
+      { kind: 'queued_wake', responder: 'Frontend Engineer', since: '2026-09-30T11:30:12.698Z' },
+    ])
+  })
+
+  it('a queued wake from four minutes ago IS a review path', () => {
+    const fresh = [{ kind: 'queued_wake', since: '2026-10-01T08:14:00.000Z' }]
+    expect(partitionReviewPaths(fresh, NOW.getTime(), THRESHOLD_MS).live).toHaveLength(1)
+  })
+
+  // A person taking two days to answer a card is a slow reviewer, not a
+  // stranded issue. Ageing out a human-serviced path would destroy a real wait.
+  it('human-serviced paths are never aged out', () => {
+    const old = [
+      { kind: 'interaction', since: '2026-09-25T00:00:00.000Z' },
+      { kind: 'approval', since: '2026-09-25T00:00:00.000Z' },
+    ]
+    const { live, stale } = partitionReviewPaths(old, NOW.getTime(), THRESHOLD_MS)
+    expect(live).toHaveLength(2)
+    expect(stale).toEqual([])
+  })
+
+  it('an unparseable path timestamp is treated as live, never reported', () => {
+    const bad = [{ kind: 'queued_wake', since: 'whenever' }]
+    expect(partitionReviewPaths(bad, NOW.getTime(), THRESHOLD_MS).stale).toEqual([])
+  })
+
+  it('an issue handed to a human is not an observation finding', () => {
+    const handed = { ...PER_94, assigneeUserId: 'local-board' }
+    expect(isObservationCandidate(handed, [handed], screen)).toBe(false)
+  })
+
+  it('a live monitor or a live run keeps an in_review issue out of the report', () => {
+    const monitored = { ...PER_94, monitorNextCheckAt: '2026-10-01T09:00:00.000Z' }
+    const running = { ...PER_94, activeRun: { status: 'running' } }
+    expect(isObservationCandidate(monitored, [monitored], screen)).toBe(false)
+    expect(isObservationCandidate(running, [running], screen)).toBe(false)
+  })
+
+  // The acting scope and the observed scope must never overlap, or a finding
+  // could be flipped by one half and reported by the other.
+  it('an in_progress issue is never an observation candidate', () => {
+    const inProgress = { ...PER_94, status: 'in_progress' }
+    expect(isObservationCandidate(inProgress, [inProgress], screen)).toBe(false)
   })
 })
