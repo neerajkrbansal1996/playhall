@@ -55,7 +55,37 @@ export interface JoinByCodeFormProps {
  *
  * Capping with `.slice(0, ROOM_CODE_LENGTH)` after normalising keeps the value
  * bounded — the reason `maxLength` was there — while letting separators be
- * stripped first. A 7th canonical character is still dropped silently.
+ * stripped first.
+ *
+ * ## Why the cap announces itself
+ *
+ * The cap still has to drop a 7th *canonical* character, because the field is a
+ * fixed six-cell display and an unbounded value would let a pasted chat line
+ * stretch it. But dropping one silently was the same "silent wrong value" class
+ * as [PER-197](/PER/issues/PER-197) ([PER-214](/PER/issues/PER-214)): `ABC2345`
+ * became `ABC234`, and the player then joined **a different room than the one
+ * they were sent**, or landed on the friendly not-found page, with nothing
+ * connecting either outcome to the character we removed.
+ *
+ * So `overflowed` announces it, through the same `role="alert"` node and
+ * `aria-describedby` wiring the short-code and server messages already use —
+ * one message slot, so the two can never stack or contradict each other. Three
+ * properties of that choice are load-bearing:
+ *
+ * - It is keyed on the **canonical** length, not the raw one. Seven raw
+ *   characters that normalise to six (`ABC-234`) lost nothing, and shouting at
+ *   that player would re-break what PER-197 just fixed.
+ * - It fires **while typing**, unlike `tooShort`, which waits for a press. The
+ *   two are not comparable: a half-typed code is an expected intermediate
+ *   state, whereas a character we threw away is a completed loss, and saying so
+ *   late is saying so after the wrong room has already opened.
+ * - It does **not** veto the press. Six canonical characters is a well-formed
+ *   code and the server owns whether that room exists, so blocking submit would
+ *   only strand a player whose code really is those six. The message stays up
+ *   across the press as the account of what we dropped.
+ *
+ * A server `error` still outranks it: an actual join outcome is more actionable
+ * than our note about the input.
  *
  * The submit button is **never disabled for validation**. A disabled control
  * with no explanation is the worst of both worlds on a phone: nothing happens
@@ -64,6 +94,24 @@ export interface JoinByCodeFormProps {
  * `aria-describedby`. It *is* disabled while a join is in flight, where the
  * label itself ("Joining…") supplies the explanation.
  */
+const TOO_SHORT_MESSAGE = `A room code is ${ROOM_CODE_LENGTH} characters.`
+const OVERFLOW_MESSAGE = `${TOO_SHORT_MESSAGE} Extra characters were not used — check the code you were sent.`
+
+/**
+ * The single message the field shows, in authority order: a real join outcome,
+ * then a character we dropped, then a code too short to send.
+ */
+function fieldMessage(
+  error: string | undefined,
+  overflowed: boolean,
+  tooShort: boolean,
+): string | undefined {
+  if (error !== undefined) return error
+  if (overflowed) return OVERFLOW_MESSAGE
+  if (tooShort) return TOO_SHORT_MESSAGE
+  return undefined
+}
+
 export function JoinByCodeForm({ onJoin, error, pending = false, className }: JoinByCodeFormProps) {
   const inputId = useId()
   const messageId = `${inputId}-message`
@@ -72,8 +120,11 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
   // Only set once the player has actually pressed join, so the field does not
   // shout at someone who is still typing their second character.
   const [tooShort, setTooShort] = useState(false)
+  // Set as it happens, by contrast: a dropped character is already lost, and
+  // the field cannot show the player what it removed.
+  const [overflowed, setOverflowed] = useState(false)
 
-  const message = error ?? (tooShort ? `A room code is ${ROOM_CODE_LENGTH} characters.` : undefined)
+  const message = fieldMessage(error, overflowed, tooShort)
 
   return (
     <form
@@ -118,9 +169,13 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
             aria-describedby={message ? messageId : undefined}
             onChange={(event) => {
               // Normalise first, then cap. A 7th *canonical* character is still
-              // never part of a code, so it is still silently dropped — but a
-              // 7th *raw* character routinely is one, once a separator is gone.
-              setCode(normalizeRoomCode(event.target.value).slice(0, ROOM_CODE_LENGTH))
+              // never part of a code, so it is still dropped — but a 7th *raw*
+              // character routinely is one, once a separator is gone, which is
+              // why the overflow flag reads the canonical length and not
+              // `event.target.value.length`.
+              const canonical = normalizeRoomCode(event.target.value)
+              setCode(canonical.slice(0, ROOM_CODE_LENGTH))
+              setOverflowed(canonical.length > ROOM_CODE_LENGTH)
               setTooShort(false)
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
