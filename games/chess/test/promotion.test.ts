@@ -103,7 +103,9 @@ describe('promotion — the server always requires an explicit piece', () => {
       from: 'a6',
       to: 'a7',
     },
-    // A rook reaching the eighth rank: the exact input the gate caught.
+    // A rook reaching the eighth rank. The destination is a promotion square, so
+    // chess.js takes the letter and drops it — the piece, not the square, is the
+    // reason nothing promotes.
     {
       label: 'a rook lift to the eighth rank',
       fen: '4k3/R7/8/8/8/8/8/4K3 w - - 0 1',
