@@ -13,8 +13,10 @@
 
 import {
   type ApplyResult,
+  type DisconnectReason,
   type GameContext,
   type GameEvent,
+  type MatchLog,
   type MatchResult,
   type MatchSeed,
   type Rng,
@@ -22,6 +24,7 @@ import {
   type SeatId,
   type SeatRoster,
   type TimerCommand,
+  type TimerId,
   type ValidationResult,
   asGameId,
   asMatchId,
@@ -160,6 +163,25 @@ export interface DriverServer<TState, TAction, TSettings, TEvent extends GameEve
     action: TAction,
   ): ApplyResult<TState, TEvent>
   getLegalActions?(state: TState, seatId: SeatId): readonly TAction[]
+  /**
+   * The three non-action mutating entry points. Optional exactly as they are on
+   * `TurnBasedGameServer`, and present here because `replay()` has to be able
+   * to dispatch a `timer` / `disconnect` / `reconnect` match-log entry — a
+   * driver that only knew `applyAction` is the defect ADR-0013 fixes.
+   */
+  onTimer?(
+    ctx: GameContext,
+    state: TState,
+    timerId: TimerId,
+    seatId: SeatId | null,
+  ): ApplyResult<TState, TEvent>
+  onDisconnect?(
+    ctx: GameContext,
+    state: TState,
+    seatId: SeatId,
+    reason: DisconnectReason,
+  ): ApplyResult<TState, TEvent>
+  onReconnect?(ctx: GameContext, state: TState, seatId: SeatId): ApplyResult<TState, TEvent>
   getResult(state: TState): MatchResult | null
 }
 
@@ -420,17 +442,47 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
 }
 
 /**
- * Replays a recorded action log against the same contexts, without consulting
- * `getLegalActions`. This is what the platform does when it rebuilds a match
- * from the match log after a restart, and it is how the determinism check
- * proves that the log alone is enough.
+ * Builds the context for a match-log entry.
+ *
+ * `now` comes from the entry, not from `contextAt`'s sequence arithmetic. That
+ * is the whole point of recording `nowMs` (ADR-0013): a timer entry's `ctx.now`
+ * is the deadline the live match fired at, which has no relation to the
+ * sequence number it landed on.
+ */
+function contextForEntry(options: ContextOptions, sequence: number, nowMs: number): GameContext {
+  return createGameContext({
+    matchId: FAKE_MATCH_ID,
+    gameId: asGameId(options.gameId),
+    gameVersion: options.gameVersion,
+    sdkContractVersion: options.sdkContractVersion,
+    now: nowMs,
+    seed: options.seed,
+    sequence,
+  })
+}
+
+/**
+ * Replays a recorded match log, without consulting `getLegalActions`. This is
+ * what the platform does when it rebuilds a match from the match log after a
+ * restart, and it is how the determinism check proves that the log alone is
+ * enough.
+ *
+ * The log is `MatchLog<TAction>` (ADR-0013), not a list of actions: a timer
+ * firing and a logged `onDisconnect` / `onReconnect` are state mutations with no
+ * action and, for a match-wide timer, no seat. An action-only replay reproduces
+ * a match that never had a timer fire and silently diverges from one that did.
+ *
+ * Throws on an entry whose hook the game does not implement. The runner only
+ * ever writes an entry for a hook it actually called, so such an entry means
+ * the log and the module disagree — a version pin violation, which must be loud
+ * rather than replayed as a no-op.
  */
 export function replay<TState, TAction, TSettings, TEvent extends GameEvent>(
   server: DriverServer<TState, TAction, TSettings, TEvent>,
   settings: TSettings,
   roster: SeatRoster,
   context: ContextOptions,
-  log: readonly { readonly sequence: number; readonly seatId: SeatId; readonly action: TAction }[],
+  log: MatchLog<TAction>,
   trapAmbient: boolean,
   from?: { readonly state: TState; readonly fromSequence: number },
 ): { readonly states: readonly TState[]; readonly events: readonly (readonly TEvent[])[] } {
@@ -453,9 +505,41 @@ export function replay<TState, TAction, TSettings, TEvent extends GameEvent>(
 
   for (const entry of log) {
     if (from !== undefined && entry.sequence < from.fromSequence) continue
-    const ctx = contextAt(context, entry.sequence)
+    const ctx = contextForEntry(context, entry.sequence, entry.nowMs)
     const current = state
-    const applied = run(() => server.applyAction(ctx, current, entry.seatId, entry.action))
+    const applied = run((): ApplyResult<TState, TEvent> => {
+      switch (entry.kind) {
+        case 'action':
+          return server.applyAction(ctx, current, entry.seatId, entry.action)
+        case 'timer': {
+          const onTimer = server.onTimer
+          if (onTimer === undefined) {
+            throw new Error(
+              `the match log has a timer entry at sequence ${entry.sequence} but the game does not implement onTimer`,
+            )
+          }
+          return onTimer.call(server, ctx, current, entry.timerId, entry.seatId)
+        }
+        case 'disconnect': {
+          const onDisconnect = server.onDisconnect
+          if (onDisconnect === undefined) {
+            throw new Error(
+              `the match log has a disconnect entry at sequence ${entry.sequence} but the game does not implement onDisconnect`,
+            )
+          }
+          return onDisconnect.call(server, ctx, current, entry.seatId, entry.reason)
+        }
+        case 'reconnect': {
+          const onReconnect = server.onReconnect
+          if (onReconnect === undefined) {
+            throw new Error(
+              `the match log has a reconnect entry at sequence ${entry.sequence} but the game does not implement onReconnect`,
+            )
+          }
+          return onReconnect.call(server, ctx, current, entry.seatId)
+        }
+      }
+    })
     state = applied.state
     states.push(state)
     events.push(applied.events)

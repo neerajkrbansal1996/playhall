@@ -21,6 +21,8 @@ import {
   toSeats,
 } from '../src/events.js'
 import { asGameId, asSeatId, asTeamId, asTimerId } from '../src/ids.js'
+import { MATCH_LOG_ENTRY_KINDS } from '../src/match-log.js'
+import type { MatchLogEntry, MatchLogEntryKind } from '../src/match-log.js'
 import { findSeat, seatIds, teamSeats } from '../src/seats.js'
 import type { Seat } from '../src/seats.js'
 import { clearTimer, pauseTimer, resumeTimer, setTimer } from '../src/timers.js'
@@ -348,5 +350,26 @@ describe('id brands', () => {
   it('are strings at runtime', () => {
     expect(asGameId('chess')).toBe('chess')
     expect(asSeatId('s1')).toBe('s1')
+  })
+})
+
+describe('match log (ADR-0013)', () => {
+  it('lists one kind per mutating entry point', () => {
+    expect(MATCH_LOG_ENTRY_KINDS).toEqual(['action', 'timer', 'disconnect', 'reconnect'])
+  })
+
+  /**
+   * The list exists so a `zod` enum and a Postgres check constraint do not each
+   * keep their own copy. If it drifts from `MatchLogEntry`'s discriminant, the
+   * runner can persist a kind the replayer rejects — so pin both directions.
+   */
+  it('is exactly the set of MatchLogEntry discriminants', () => {
+    const fromUnion: MatchLogEntryKind[] = [
+      ({ kind: 'action' } as MatchLogEntry<never>).kind,
+      ({ kind: 'timer' } as MatchLogEntry<never>).kind,
+      ({ kind: 'disconnect' } as MatchLogEntry<never>).kind,
+      ({ kind: 'reconnect' } as MatchLogEntry<never>).kind,
+    ]
+    expect([...MATCH_LOG_ENTRY_KINDS].sort()).toEqual([...new Set(fromUnion)].sort())
   })
 })
