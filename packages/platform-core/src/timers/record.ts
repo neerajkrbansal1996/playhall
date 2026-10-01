@@ -328,14 +328,21 @@ export function expireRecord(record: TimerRecord): TimerRecord {
  * never learn the player flagged. `TimerService` drains due expiries before
  * every mutation, so in practice a flag-fall is delivered by `poll()` and this
  * branch is the belt to that braces.
+ *
+ * "Reached zero" means the *budget* was spent, which is why the guard reads
+ * `chargeableElapsedMs` rather than wall time. A `simple`-delay clock with a
+ * zero budget sitting inside its delay window is running, un-expired and has a
+ * real deadline in the future; ending its turn credits the increment, it does
+ * not flag the player.
  */
 export function endTurnRecord(record: TimerRecord, nowMs: number): TimerRecord {
   const config = record.clock
   if (config === null) return pauseRecord(record, nowMs)
 
+  const chargedMs = chargeableElapsedMs(record, nowMs)
   const paused = pauseRecord(record, nowMs)
   if (paused.expired) return paused
-  if (paused.remainingMs <= 0) return expireRecord(paused)
+  if (chargedMs > 0 && paused.remainingMs <= 0) return expireRecord(paused)
 
   const refundMs =
     config.delayMode === 'bronstein' ? Math.min(config.delayMs, paused.turnElapsedMs) : 0

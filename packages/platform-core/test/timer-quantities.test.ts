@@ -127,6 +127,56 @@ describe('apply() validates the whole batch before executing any of it', () => {
       /turn\.delayMs/,
     )
   })
+
+  it('rejects an undeclared timer id before executing anything either', () => {
+    const { service } = newService()
+    const ghost = asTimerId('ghost')
+
+    // The manifest check is the batch's other rejection, so it belongs in the
+    // same pre-pass. Thrown from inside the execute loop it would leave the
+    // commands in front of it applied — the half-batch this contract rules
+    // out, and the one `docs/timers.md` promises cannot reach the match log.
+    expect(() =>
+      service.apply([setTimer(TURN, 30_000), setTimer(ghost, 1_000)], 1_000_000),
+    ).toThrow(/not declared in the game manifest/)
+
+    expect(service.get(TURN)).toBeUndefined()
+    expect(service.get(ghost)).toBeUndefined()
+  })
+})
+
+describe('the constructor clock guard covers the shapes a boundary produces', () => {
+  // The room runner builds these from stored room state, which comes back
+  // through `JSON.parse` — so the shapes to guard against are `null` and a
+  // plain object, never `undefined`. A clock that only fails on the first
+  // deadline fails minutes later inside a timer callback, nowhere near the
+  // mistake, which is the whole reason this guard exists at all.
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['a plain object with no now()', {}],
+    ['an object whose now is not callable', { now: 0 }],
+  ])('refuses %s at construction', (_label, clock) => {
+    expect(
+      () =>
+        new TimerService({
+          matchId: MATCH,
+          clock: clock as never,
+          scheduler: createManualScheduler(),
+        }),
+    ).toThrow(TypeError)
+  })
+
+  it('accepts anything that can tell the time', () => {
+    expect(
+      () =>
+        new TimerService({
+          matchId: MATCH,
+          clock: { now: () => 1_000_000 },
+          scheduler: createManualScheduler(),
+        }),
+    ).not.toThrow()
+  })
 })
 
 describe('declarePlayerClock rejects an unbuildable clock configuration', () => {

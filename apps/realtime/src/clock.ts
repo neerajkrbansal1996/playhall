@@ -39,10 +39,25 @@
  * in `platform-core`, which rejects a snapshot stamped after the restoring
  * process's own clock.
  *
+ * ## The client half
+ *
  * The browser shell needs the same construction for the client half of
- * `timer:sync` (see `TimerSyncTrackerOptions.clock`). It cannot import this
- * one — apps do not import each other — so until there is a home a package can
- * expose, `apps/web` carries its own. Flagged to the CTO on PER-70.
+ * `timer:sync` (see `TimerSyncTrackerOptions.clock`). It cannot import this one
+ * — apps do not import each other — and a `packages/shared` port would need the
+ * ADR-0002 §4 exemption this placement exists to avoid. Ruled by the CTO on
+ * PER-70: **`apps/web` carries its own copy**, and this file is the contract it
+ * copies from. Two things the copy must say, or the next reader "fixes" the
+ * drift by sharing an anchor that was never shared:
+ *
+ *   - This file, named, is where the construction comes from.
+ *   - On the client the **wall epoch is arbitrary**. `TimerSyncTracker`
+ *     measures its own offset to the server and renders against that, so only
+ *     monotonicity is load-bearing there. The two copies drifting apart costs
+ *     a stale comment, not a wrong clock.
+ *
+ * Revisit at a *third* consumer: the answer then is a `packages/shared`
+ * monotonic-clock port plus an ADR-0002 revision narrowing §4 from "ambient
+ * time" to "ambient time in a decision path". That revision is the CTO's.
  */
 
 import type { Clock } from '@playhall/platform-core'

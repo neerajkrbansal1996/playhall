@@ -40,6 +40,7 @@ import {
   TIMER_HOLD_ORDER,
   type TimerHold,
   type TimerRecord,
+  chargeableElapsedMs,
   createTimerRecord,
   deadlineMsAt,
   delayRemainingMsAt,
@@ -48,7 +49,6 @@ import {
   isHeld,
   isRunning,
   pauseRecord,
-  rawElapsedMs,
   remainingMsAt,
   resetRecord,
   resumeRecord,
@@ -187,9 +187,14 @@ export class TimerService {
     // room state, and an `any` or a hand-rolled options object that drops the
     // clock would otherwise construct fine and throw on the first *deadline* —
     // minutes later, inside a timer callback, nowhere near the mistake.
-    if (options.clock === undefined) {
+    //
+    // `== null` and a shape check, not `=== undefined`: stored room state comes
+    // back through `JSON.parse`, which produces `null` and plain objects and
+    // never `undefined`, so the one shape that boundary cannot produce is the
+    // only one a strict-equality check would catch.
+    if (options.clock == null || typeof options.clock.now !== 'function') {
       throw new TypeError(
-        `TimerService for match ${options.matchId} was built without a clock; ` +
+        `TimerService for match ${options.matchId} was built without a usable clock; ` +
           'pass the process clock (apps/realtime) or a fixedClock in tests',
       )
     }
@@ -500,8 +505,14 @@ export class TimerService {
    */
   apply(commands: readonly TimerCommand[], issuedAtMs: number): void {
     assertEpochMs('issuedAtMs', issuedAtMs)
+    // Both of `set`'s rejections, hoisted. `clear`/`pause`/`resume` assert
+    // nothing, so `set` is the whole pre-pass surface — an undeclared timer id
+    // thrown from inside the execute loop would leave the commands before it
+    // applied, which is exactly the half-batch this contract rules out.
     for (const command of commands) {
-      if (command.op === 'set') assertDurationMs(`${command.timerId}.delayMs`, command.delayMs)
+      if (command.op !== 'set') continue
+      this.#assertDeclared(command.timerId)
+      assertDurationMs(`${command.timerId}.delayMs`, command.delayMs)
     }
     this.#drainDue(issuedAtMs)
     for (const command of commands) {
@@ -763,7 +774,7 @@ export class TimerService {
       if (shouldRun) {
         if (!isRunning(next)) next = startRecord(next, nowMs)
       } else if (isRunning(next)) {
-        const chargedMs = rawElapsedMs(next, nowMs)
+        const chargedMs = chargeableElapsedMs(next, nowMs)
         next = pauseRecord(next, nowMs)
         // A record whose budget *this freeze* consumed to zero flagged; it did
         // not merely stop. Leaving it un-expired makes it unrunnable, invisible
@@ -779,12 +790,20 @@ export class TimerService {
         // on 0:00 that nothing can ever fire.
         //
         // `chargedMs > 0` is the whole discriminator and it is load-bearing.
-        // Reaching zero *because time was spent* is a flag-fall. Being armed
+        // Reaching zero *because budget was spent* is a flag-fall. Being armed
         // at zero is not — `set(id, { delayMs: 0 })` during a host pause
         // creates a record that has never had the chance to run, and `set`
         // promises it starts (and then immediately fires) when the hold lifts.
         // Expiring it here instead would mean the game never hears about it at
         // all, which is the very bug this branch exists to prevent.
+        //
+        // It must be `chargeableElapsedMs`, not `rawElapsedMs`. Under
+        // `delayMode: 'simple'` the two differ by exactly the delay window, and
+        // a zero-budget clock inside its delay is the one state where
+        // `remainingMsAt(now) === 0` does *not* mean the deadline has passed —
+        // `deadlineMsAt` is `startedAtMs + delayRemainingMs`, still in the
+        // future. Raw elapsed opens the gate there and flags the player up to
+        // `delayMs` early, terminally, without ever telling the game.
         if (chargedMs > 0 && next.remainingMs <= 0) next = expireRecord(next)
       }
       if (next !== record) this.#records.set(id, next)
