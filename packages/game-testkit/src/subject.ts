@@ -24,6 +24,7 @@ import type {
   SeatId,
   SeatRoster,
   StandardActionErrorCode,
+  TimerId,
   TurnBasedGameServer,
 } from '@playhall/game-sdk'
 
@@ -118,10 +119,19 @@ export interface ActionCandidate<TAction> {
  * phantom result into a player's history). The suite cannot derive the abort
  * action for an arbitrary game, so the game names it here.
  *
+ * There are two ways to reach one, and `trigger` picks between them
+ * (ADR-0010):
+ *
+ *   - **`'action'`** (the default, so it may be omitted) — a seat sends
+ *     something. Supply `abortAction`, and `advanceMs` if the game gates it on
+ *     a deadline.
+ *   - **`'timer'`** — nobody acts; a deadline the game armed passes and the
+ *     platform calls `onTimer`. Supply `timerId`.
+ *
  * A game with no unrecorded ending declares none, and the check says so in its
  * notes rather than passing quietly.
  */
-export interface AbortScenario<TState, TAction> {
+export interface AbortScenarioBase {
   /** Shows up in failure messages, e.g. `"host aborts on move one"`. */
   readonly label: string
   /**
@@ -133,6 +143,18 @@ export interface AbortScenario<TState, TAction> {
    * from a position the scenario did not ask for is a different abort.
    */
   readonly afterSteps?: number
+}
+
+/**
+ * The action arm: a seat sends something and the match stops counting.
+ *
+ * `trigger` is optional here and nowhere else, which is what lets every
+ * declaration written before ADR-0010 compile untouched: an object with an
+ * `abortAction` and no `trigger` is still an `AbortScenario`.
+ */
+export interface ActionAbortScenario<TState, TAction> extends AbortScenarioBase {
+  /** Absent means `'action'`. */
+  readonly trigger?: 'action'
   /**
    * Extra milliseconds added to `ctx.now` **for the abort dispatch only**.
    * Default 0. The `afterSteps` playout plies are unaffected and still advance
@@ -157,6 +179,51 @@ export interface AbortScenario<TState, TAction> {
     roster: SeatRoster,
   ): { readonly seatId: SeatId; readonly action: TAction } | null
 }
+
+/**
+ * The timer arm (ADR-0010): no player acts at all, a deadline the game armed
+ * passes and the platform calls `onTimer`.
+ *
+ * The driver does **not** synthesise that call. It collects the game's own
+ * `TimerCommand`s from `createInitialState` and every `applyAction`, runs them
+ * through a queue that honours `set` / `clear` / `pause` / `resume`, and fires
+ * the earliest deadline. A game that declares this scenario for a timer it
+ * never actually arms fails, which is the point: the alternative certifies an
+ * ending production can never reach.
+ *
+ * There is no `advanceMs` here and there does not need to be. `ctx.now` for the
+ * fire is `max(deadline, now of the previous mutation)`, where the deadline is
+ * the game's own `delayMs` measured from the `ctx.now` of the call that emitted
+ * the `set` — so the clock is computed from the game rather than hand-tuned
+ * against it. The offset is carried forward for the rest of the scenario, so a
+ * second fire cannot rewind the clock.
+ */
+export interface TimerAbortScenario extends AbortScenarioBase {
+  readonly trigger: 'timer'
+  /**
+   * Which expiry this scenario means. Must be declared in `manifest.timers`.
+   *
+   * Required, not optional. "Let some timer fire" is the weak declaration this
+   * arm exists to replace: if a `grace` timer fires first and produces a
+   * *recorded* forfeit, an unnamed expectation yields a confusing failure,
+   * while a named one yields "the match ended on `grace` before the declared
+   * `first-move` fired".
+   */
+  readonly timerId: TimerId
+  /**
+   * Fires to allow before giving up. Default 1.
+   *
+   * The driver fires in deadline order, applying each expiry's own returned
+   * `timers` as the runner would, until the declared `timerId` fires,
+   * `getResult` goes non-null, or the budget is spent. Raise it for a game
+   * whose ending arrives at the end of a cascade.
+   */
+  readonly maxFires?: number
+}
+
+export type AbortScenario<TState, TAction> =
+  | ActionAbortScenario<TState, TAction>
+  | TimerAbortScenario
 
 export interface SettingsVariant<TSettings> {
   readonly label: string

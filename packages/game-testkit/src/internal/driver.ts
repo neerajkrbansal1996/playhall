@@ -22,6 +22,7 @@ import {
   type SeatId,
   type SeatRoster,
   type TimerCommand,
+  type TimerId,
   type ValidationResult,
   asGameId,
   asMatchId,
@@ -34,6 +35,7 @@ import {
   deriveSeed,
 } from '@playhall/game-sdk'
 import { withoutAmbientSources } from './ambient.js'
+import { TimerQueue } from './timer-queue.js'
 import type { ActionCandidate } from '../subject.js'
 
 export const FAKE_MATCH_ID = asMatchId('conformance-match')
@@ -165,6 +167,16 @@ export interface DriverServer<TState, TAction, TSettings, TEvent extends GameEve
     action: TAction,
   ): ApplyResult<TState, TEvent>
   getLegalActions?(state: TState, seatId: SeatId): readonly TAction[]
+  /**
+   * Optional, like the contract. The driver only ever calls it for a timer the
+   * game's own commands armed — see `timerAbortRun`.
+   */
+  onTimer?(
+    ctx: GameContext,
+    state: TState,
+    timerId: TimerId,
+    seatId: SeatId | null,
+  ): ApplyResult<TState, TEvent>
   getResult(state: TState): MatchResult | null
 }
 
@@ -295,6 +307,12 @@ export interface AbortRunOptions<
   /** Normal moves to play before the abort action. */
   readonly afterSteps: number
   /**
+   * `manifest.timers` ids. A `set` outside this list fails the scenario — the
+   * platform would drop it, so a game relying on it is broken in production
+   * whichever arm the scenario uses.
+   */
+  readonly declaredTimerIds: readonly string[]
+  /**
    * Milliseconds added to `ctx.now` for the abort dispatch only. The
    * `afterSteps` plies before it keep the subject's `nowStepMs` clock, so a
    * deadline-gated abort becomes reachable without stretching the playout.
@@ -335,16 +353,57 @@ export interface AbortRun<TState> {
  * through `applyAction` like the real runner, so the abort is exercised as a
  * game action rather than as a state the test hand-builds.
  */
-export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
+/**
+ * The part both abort arms share: build the opening state, play `afterSteps`
+ * ordinary moves, and feed every `ApplyResult.timers` the game returned into a
+ * queue.
+ *
+ * Collecting those commands is what ADR-0010 changed here. The driver used to
+ * take `createInitialState(...).state` and drop the rest of the `ApplyResult`,
+ * so the harness was already carrying the data a timer-driven ending needs and
+ * throwing it away.
+ */
+interface Prologue<TState> {
+  readonly state: TState
+  /** `ctx.sequence` the next mutation should use. */
+  readonly sequence: number
+  /** `ctx.now` of the last mutation that ran. */
+  readonly now: number
+  readonly stepsPlayed: number
+  readonly queue: TimerQueue
+  /** Set when the scenario cannot proceed; the caller turns it into a failure. */
+  readonly unreachable: string | null
+  readonly result: MatchResult | null
+}
+
+function runPrologue<TState, TAction, TSettings, TEvent extends GameEvent>(
   options: AbortRunOptions<TState, TAction, TSettings, TEvent>,
-): AbortRun<TState> {
+  seedTag: string,
+): Prologue<TState> {
   const { server, roster, context } = options
   const run = <T>(body: () => T): T => (options.trapAmbient ? withoutAmbientSources(body) : body())
+  const queue = new TimerQueue(options.declaredTimerIds)
 
-  let state = run(() =>
-    server.createInitialState(contextAt(context, 0), options.settings, roster),
-  ).state
-  const driverRng = createRng(deriveSeed(String(context.seed), 'conformance-abort'))
+  const openingCtx = contextAt(context, 0)
+  const initial = run(() => server.createInitialState(openingCtx, options.settings, roster))
+  let state = initial.state
+  let now = openingCtx.now
+
+  try {
+    queue.apply(initial.timers ?? [], openingCtx.now)
+  } catch (error) {
+    return {
+      state,
+      sequence: 1,
+      now,
+      stepsPlayed: 0,
+      queue,
+      result: null,
+      unreachable: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  const driverRng = createRng(deriveSeed(String(context.seed), seedTag))
   const getLegalActions = server.getLegalActions?.bind(server)
 
   let sequence = 1
@@ -362,21 +421,37 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
     const chosen = options.chooseAction(state, candidates, driverRng)
     if (chosen === null) break
 
+    const ctx = contextAt(context, sequence)
     const before = state
-    state = run(() =>
-      server.applyAction(contextAt(context, sequence), before, chosen.seatId, chosen.action),
-    ).state
+    const applied = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action))
+    state = applied.state
+    now = ctx.now
     sequence += 1
     stepsPlayed += 1
+    try {
+      queue.apply(applied.timers ?? [], ctx.now)
+    } catch (error) {
+      return {
+        state,
+        sequence,
+        now,
+        stepsPlayed,
+        queue,
+        result: null,
+        unreachable: error instanceof Error ? error.message : String(error),
+      }
+    }
   }
 
   const early = run(() => server.getResult(state))
   if (early !== null) {
     return {
       state,
-      result: early,
+      sequence,
+      now,
       stepsPlayed,
-      abortNow: null,
+      queue,
+      result: early,
       unreachable: `the match was already over after ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves`,
     }
   }
@@ -389,10 +464,34 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
   if (stepsPlayed < options.afterSteps) {
     return {
       state,
+      sequence,
+      now,
+      stepsPlayed,
+      queue,
       result: null,
+      unreachable: `played ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves before the driver ran out of moves`,
+    }
+  }
+
+  return { state, sequence, now, stepsPlayed, queue, result: null, unreachable: null }
+}
+
+export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
+  options: AbortRunOptions<TState, TAction, TSettings, TEvent>,
+): AbortRun<TState> {
+  const { server, roster, context } = options
+  const run = <T>(body: () => T): T => (options.trapAmbient ? withoutAmbientSources(body) : body())
+
+  const prologue = runPrologue(options, 'conformance-abort')
+  let state = prologue.state
+  const { sequence, stepsPlayed } = prologue
+  if (prologue.unreachable !== null) {
+    return {
+      state,
+      result: prologue.result,
       stepsPlayed,
       abortNow: null,
-      unreachable: `played ${String(stepsPlayed)} of the requested ${String(options.afterSteps)} moves before the driver ran out of moves`,
+      unreachable: prologue.unreachable,
     }
   }
 
@@ -441,7 +540,21 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
   }
 
   const before = state
-  state = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action)).state
+  const applied = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action))
+  state = applied.state
+  try {
+    // Nothing fires after an abort, but a `set` for an id the manifest never
+    // declared is a bug in either arm and the platform would drop it.
+    prologue.queue.apply(applied.timers ?? [], ctx.now)
+  } catch (error) {
+    return {
+      state,
+      result: run(() => server.getResult(state)),
+      stepsPlayed,
+      abortNow: ctx.now,
+      unreachable: error instanceof Error ? error.message : String(error),
+    }
+  }
 
   return {
     state,
@@ -450,6 +563,180 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
     abortNow: ctx.now,
     unreachable: null,
   }
+}
+
+/** One expiry the driver delivered, for the report and for failure messages. */
+export interface TimerFire {
+  readonly timerId: TimerId
+  /** From the `set` command the game emitted, never from the scenario. */
+  readonly seatId: SeatId | null
+  /** `ctx.now` of the emitting call plus its `delayMs`. */
+  readonly deadline: number
+  /** `max(deadline, now of the previous mutation)` — the clock `onTimer` saw. */
+  readonly now: number
+  readonly sequence: number
+}
+
+export interface TimerAbortRunOptions<
+  TState,
+  TAction,
+  TSettings,
+  TEvent extends GameEvent,
+> extends Omit<AbortRunOptions<TState, TAction, TSettings, TEvent>, 'abortAction' | 'advanceMs'> {
+  /** The expiry the scenario declared. Must be in `declaredTimerIds`. */
+  readonly timerId: TimerId
+  /** Fires to allow before giving up. */
+  readonly maxFires: number
+}
+
+export interface TimerAbortRun<TState> {
+  readonly state: TState
+  readonly result: MatchResult | null
+  readonly stepsPlayed: number
+  /** Every expiry delivered, oldest first. Empty when none came due. */
+  readonly fires: readonly TimerFire[]
+  /** `ctx.now` of the declared timer's fire, or `null` if it never fired. */
+  readonly abortNow: number | null
+  readonly unreachable: string | null
+}
+
+/**
+ * Plays `afterSteps` normal moves and then fires the game's own timers until
+ * the declared one expires (ADR-0010).
+ *
+ * The driver never synthesises an `onTimer` call. Every expiry here traces back
+ * to a `setTimer` the game returned from `createInitialState` or `applyAction`,
+ * which is the whole point: a game that declares a `trigger: 'timer'` scenario
+ * for a timer it never arms fails, rather than certifying an ending the
+ * platform can never reach.
+ *
+ * **The clock.** A fire runs at `max(deadline, now of the previous mutation)`
+ * and the resulting offset is carried forward for the rest of the scenario, so
+ * a later sequence cannot rewind behind a fire that jumped the clock forward.
+ * `max(...)` rather than the real service's `dueAtMs`: under load `dueAtMs` can
+ * be behind the last action's `ctx.now`, and a harness that could rewind the
+ * clock would make a failure depend on a jitter value no fixture can pin.
+ * Inside a conformance run the two coincide — the harness is never late.
+ */
+export function timerAbortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
+  options: TimerAbortRunOptions<TState, TAction, TSettings, TEvent>,
+): TimerAbortRun<TState> {
+  const { server, context } = options
+  const run = <T>(body: () => T): T => (options.trapAmbient ? withoutAmbientSources(body) : body())
+  const wanted = String(options.timerId)
+
+  const prologue = runPrologue(
+    { ...options, abortAction: () => null },
+    'conformance-timer-abort',
+  )
+  let state = prologue.state
+  const { queue, stepsPlayed } = prologue
+  const fires: TimerFire[] = []
+
+  const stop = (unreachable: string | null, abortNow: number | null): TimerAbortRun<TState> => ({
+    state,
+    result: run(() => server.getResult(state)),
+    stepsPlayed,
+    fires,
+    abortNow,
+    unreachable,
+  })
+
+  if (prologue.unreachable !== null) return stop(prologue.unreachable, null)
+
+  const onTimer = server.onTimer?.bind(server)
+  if (onTimer === undefined) {
+    // A declared ending the game cannot produce. ADR-0010 §5: a failure, not a
+    // skip — same rule as an `abortAction` that returns `null`.
+    return stop(
+      `the game has no onTimer, so the declared timer '${wanted}' can never end a match`,
+      null,
+    )
+  }
+
+  if (!queue.wasEverArmed(options.timerId)) {
+    // The bug ADR-0010 §1 exists to reject. A harness that called `onTimer`
+    // directly would go green here on an ending production can never reach.
+    return stop(
+      `the timer '${wanted}' was never armed: the game returned no setTimer('${wanted}', …) from createInitialState or the ${String(stepsPlayed)} move(s) before the fire, so this ending is unreachable in production (armed instead: ${queue.describe()})`,
+      null,
+    )
+  }
+
+  let sequence = prologue.sequence
+  let previousNow = prologue.now
+  // Carried, not per-dispatch. `advanceMs` can be per-dispatch because the
+  // abort action is the last thing that happens; a timer fire is not.
+  let carriedOffset = 0
+
+  for (let fired = 0; fired < options.maxFires; fired += 1) {
+    if (run(() => server.getResult(state)) !== null) break
+
+    const due = queue.takeNext()
+    if (due === null) break
+
+    const now = Math.max(due.deadline, previousNow)
+    carriedOffset = now - (context.startNow + sequence * context.nowStepMs)
+    const ctx = contextAt(context, sequence, carriedOffset)
+
+    let applied: ApplyResult<TState, TEvent>
+    try {
+      applied = run(() => onTimer(ctx, state, due.timerId, due.seatId))
+    } catch (error) {
+      return stop(
+        `the game threw from onTimer('${String(due.timerId)}') at ctx.now=${String(ctx.now)} instead of returning an ApplyResult: ${error instanceof Error ? error.message : String(error)}`,
+        null,
+      )
+    }
+
+    state = applied.state
+    fires.push({
+      timerId: due.timerId,
+      seatId: due.seatId,
+      deadline: due.deadline,
+      now: ctx.now,
+      sequence,
+    })
+    previousNow = ctx.now
+    sequence += 1
+
+    try {
+      // `onTimer`'s own commands are applied, so a fire may re-arm or clear.
+      queue.apply(applied.timers ?? [], ctx.now)
+    } catch (error) {
+      return stop(error instanceof Error ? error.message : String(error), null)
+    }
+
+    if (String(due.timerId) === wanted) return stop(null, ctx.now)
+  }
+
+  const observed =
+    fires.length === 0
+      ? 'nothing fired'
+      : `fired: ${fires.map((fire) => `${String(fire.timerId)}@${String(fire.now)}`).join(', ')}`
+
+  const ended = run(() => server.getResult(state))
+  if (ended !== null) {
+    const last = fires.at(-1)
+    return stop(
+      last === undefined
+        ? `the match ended before the declared timer '${wanted}' could fire (${observed})`
+        : `the match ended on '${String(last.timerId)}' before the declared '${wanted}' fired (${observed})`,
+      null,
+    )
+  }
+
+  if (fires.length >= options.maxFires) {
+    return stop(
+      `the budget of ${String(options.maxFires)} fire(s) was spent before '${wanted}' fired (${observed}); raise TimerAbortScenario.maxFires if the ending is at the end of a cascade`,
+      null,
+    )
+  }
+
+  return stop(
+    `the declared timer '${wanted}' was armed but never came due — it was cleared or paused before it could fire (${observed}; still armed: ${queue.describe()})`,
+    null,
+  )
 }
 
 /**
