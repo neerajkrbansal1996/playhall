@@ -31,6 +31,32 @@ export interface JoinByCodeFormProps {
  * would leave the visible value and the request disagreeing, which is exactly
  * the class of bug that makes "I typed it right" support reports unfalsifiable.
  *
+ * ## Why the length cap is in `onChange` and not `maxLength`
+ *
+ * It used to be `maxLength={ROOM_CODE_LENGTH}` on the input, justified as "a
+ * 7th character is never part of a code". That is true of **canonical**
+ * characters and false of **raw** ones — and `maxLength` is enforced by the
+ * browser on the raw inserted string, before React's `onChange` can strip a
+ * separator. So both of the examples above, seven raw characters each, were
+ * clipped to `abc 23` on paste and normalised to a five-character `ABC23`, in a
+ * field the player had no way to tell was wrong ([PER-197](/PER/issues/PER-197)).
+ *
+ * The loss was not a fixed off-by-one, which is why the fix is a reordering and
+ * not an arithmetic tweak: what survived was the canonical characters among the
+ * first six **raw** ones, so `  abc-234  ` — the shape a double-tap selection
+ * produces on a phone — landed as `ABC`, and an indented chat line emptied the
+ * field entirely.
+ *
+ * Only the bulk-insert path broke: typing `abc 234` keystroke by keystroke
+ * normalises as it arrives, so the value never grows past six and `maxLength`
+ * never bit. `e2e/room-contract.spec.ts` asserts the typed and bulk-inserted
+ * paths separately, and keeps one case per inserted shape, so a regression in
+ * one cannot hide behind the other.
+ *
+ * Capping with `.slice(0, ROOM_CODE_LENGTH)` after normalising keeps the value
+ * bounded — the reason `maxLength` was there — while letting separators be
+ * stripped first. A 7th canonical character is still dropped silently.
+ *
  * The submit button is **never disabled for validation**. A disabled control
  * with no explanation is the worst of both worlds on a phone: nothing happens
  * on tap and no assistive technology announces why. Pressing it with a short
@@ -82,15 +108,19 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
             spellCheck={false}
             inputMode="text"
             enterKeyHint="go"
-            // A hard cap rather than a validator: a 7th character is never
-            // part of a code, and silently dropping it beats a late error.
-            maxLength={ROOM_CODE_LENGTH}
+            // Deliberately **no** `maxLength`. See the component doc comment:
+            // the browser applies it to the raw string before `onChange` runs,
+            // which truncates every pasted code that carries a separator. The
+            // cap lives in `onChange` instead, after normalisation.
             placeholder="ABC234"
             value={code}
             aria-invalid={message ? true : undefined}
             aria-describedby={message ? messageId : undefined}
             onChange={(event) => {
-              setCode(normalizeRoomCode(event.target.value))
+              // Normalise first, then cap. A 7th *canonical* character is still
+              // never part of a code, so it is still silently dropped — but a
+              // 7th *raw* character routinely is one, once a separator is gone.
+              setCode(normalizeRoomCode(event.target.value).slice(0, ROOM_CODE_LENGTH))
               setTooShort(false)
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
