@@ -22,6 +22,12 @@ export const APPROVED_NAME = 'Playhall'
  * else and a second copy of it is a second thing to forget at rename time. It is a
  * complete two-sentence string on purpose: copy that must be split across a layout
  * belongs in the layout, not stitched back together from fragments.
+ *
+ * Deliberately asymmetric with `name`, and not an oversight to be "fixed" later: the
+ * tagline has **no env override** and does **not** feed `isProvisional`. Copy is a
+ * product decision, not an environment knob — there is no deploy-time reason to show a
+ * different pitch per environment, and rewording the pitch does not make the brand any
+ * less settled than the approved name and the domain already determine.
  */
 export const TAGLINE = 'Play with friends. No downloads.'
 
