@@ -180,6 +180,34 @@ describe('join by code', () => {
     )
   })
 
+  it('names the count when a paste carries two candidate codes', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    await user.click(input)
+    // An invite link carrying a six-character referrer: two distinct six-runs,
+    // so PER-242's rule declines to choose between them.
+    await user.paste('https://playhall.app/r/ABC234?ref=XYZ789')
+
+    // The copy decision, pinned in full here as the one place that does it.
+    // Its distinguishing property against the overflow message is the
+    // instruction: "enter just the one you were sent" asks for a value, where
+    // "check the code you were sent" asks the player to verify ours. Nothing
+    // was "extra" here, so the overflow copy would be a false diagnosis.
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'More than one 6-character code in that paste — enter just the one you were sent.',
+    )
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+
+    // The hint composes in front of it, and — PER-225 — the message does not
+    // restate `6 characters` as a rule the hint has already given. It names the
+    // count of codes, which is a different fact that happens to use the number.
+    expect(input).toHaveAccessibleDescription(
+      '6 characters. Codes never use O, 0, I, 1 or L. More than one 6-character code in that paste — enter just the one you were sent.',
+    )
+  })
+
   it('describes the field before the first keystroke', () => {
     render(<JoinByCodeForm onJoin={vi.fn()} />)
 
