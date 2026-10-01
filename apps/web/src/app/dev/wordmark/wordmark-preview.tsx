@@ -60,9 +60,24 @@ export function WordmarkPreview({ defaultName }: WordmarkPreviewProps) {
       </div>
 
       <div className="flex flex-col gap-8 p-4">
+        {/*
+          `lg` is the one size whose overflow rule is the opposite of the others — it
+          wraps where `sm`/`md` ellipsise — and the acceptance pair (4 and 14 characters)
+          fits at every size, so this section is only meaningful with the overlong
+          fixture. The wrapper is `max-w-md` to match the landing column: without a
+          constrained container nothing would be asked to wrap and a screenshot of an
+          unwrapped hero would read as a pass.
+        */}
+        <section data-testid="wordmark-lg" className="flex max-w-md flex-col gap-2">
+          <h2 className="text-muted-foreground text-xs uppercase tracking-wide">
+            lg — landing hero (wraps, never truncates)
+          </h2>
+          <Wordmark name={name} size="lg" />
+        </section>
+
         <section className="flex flex-col gap-2">
           <h2 className="text-muted-foreground text-xs uppercase tracking-wide">
-            md — landing, footer, OG
+            md — landing header bar, footer, OG
           </h2>
           <Wordmark name={name} size="md" />
         </section>

@@ -18,8 +18,14 @@ export default function HomePage() {
           reaches it as a prop — the import of `BRAND` stops at this app layer. It is an
           `h1` here because on the landing page the wordmark genuinely *is* the page
           heading; in an app bar it is a `span`.
+
+          `lg`, not `md`: component specs §17 reserves `lg` for the landing hero, and
+          design tokens §3 allocates `--text-5xl`/`--text-6xl` to the landing headline —
+          which is what this element is. `md` is the landing *header bar*, and rendering
+          the hero at it put the product name at card-title size on the first screen a
+          stranger sees after tapping an invite.
         */}
-        <Wordmark as="h1" size="md" name={BRAND.name} />
+        <Wordmark as="h1" size="lg" name={BRAND.name} />
         <p className="text-muted-foreground text-sm">{BRAND.tagline}</p>
       </div>
 

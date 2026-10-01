@@ -85,6 +85,51 @@ describe('Wordmark', () => {
     expect(label.className).toContain('truncate')
   })
 
+  it('truncates the name at sm and md but wraps it at lg', () => {
+    // The overflow rule is per size and the two halves are opposites, so each size is
+    // asserted at its own call site: a shared helper that regressed to one behaviour
+    // would still satisfy a test that only ever rendered the default size. `min-w-0`
+    // stays on the row at every size — at lg it is what makes the hero wrap inside the
+    // column instead of overflowing it.
+    const overlong = 'A Product Name Nobody Would Ever Pick Yet'
+
+    for (const size of ['sm', 'md'] as const) {
+      const { container } = render(<Wordmark name={overlong} size={size} />)
+      const root = container.firstElementChild as HTMLElement
+      const label = root.lastElementChild as HTMLElement
+
+      expect(root.className).toContain('min-w-0')
+      expect(label.className).toContain('truncate')
+      expect(label.className).not.toContain('text-balance')
+      expect(label.className).not.toContain('wrap-anywhere')
+    }
+
+    const { container: lg } = render(<Wordmark name={overlong} size="lg" />)
+    const lgRoot = lg.firstElementChild as HTMLElement
+    const lgLabel = lgRoot.lastElementChild as HTMLElement
+
+    expect(lgRoot.className).toContain('min-w-0')
+    // Ellipsising the product's own name in the hero is a defect, not graceful
+    // degradation — there is nothing to the right of it competing for the space.
+    expect(lgLabel.className).not.toContain('truncate')
+    expect(lgLabel.className).toContain('text-balance')
+    // `text-wrap: balance` will not break an unbroken word; this is what stops a single
+    // very long name overflowing the column anyway.
+    expect(lgLabel.className).toContain('wrap-anywhere')
+  })
+
+  it('disables ligatures, so an unlucky board-chosen name cannot render a surprising pair', () => {
+    // Unprovable by screenshot: no candidate name has a ligating pair, so this line's
+    // absence stays invisible until the rename the component exists for. There is no
+    // Tailwind utility for it, which is why the assertion is on the arbitrary property.
+    for (const size of ['sm', 'md', 'lg'] as const) {
+      const { container } = render(<Wordmark name={BRAND.name} size={size} />)
+      const root = container.firstElementChild as HTMLElement
+
+      expect(root.className).toContain('[font-variant-ligatures:none]')
+    }
+  })
+
   it('carries no gradient or brand-only hue, so it survives forced-colors', () => {
     const { container } = render(<Wordmark name={BRAND.name} />)
     const root = container.firstElementChild as HTMLElement
@@ -93,17 +138,35 @@ describe('Wordmark', () => {
     expect(root.className).not.toMatch(/gradient|bg-clip-text/)
   })
 
-  it('uses --text-base at sm and --text-xl at md, both 700 and tight', () => {
-    const { container: sm } = render(<Wordmark name={BRAND.name} size="sm" />)
-    const { container: md } = render(<Wordmark name={BRAND.name} size="md" />)
+  it('uses --text-base at sm, --text-xl at md and --text-5xl/6xl at lg, all 700', () => {
+    const roots = (['sm', 'md', 'lg'] as const).map((size) => {
+      const { container } = render(<Wordmark name={BRAND.name} size={size} />)
+      return container.firstElementChild as HTMLElement
+    })
+    const [sm, md, lg] = roots
 
-    for (const c of [sm, md]) {
-      const root = c.firstElementChild as HTMLElement
-      expect(root.className).toContain('font-bold')
-      expect(root.className).toContain('tracking-tight')
+    for (const root of roots) expect(root.className).toContain('font-bold')
+
+    expect(sm.className).toContain('text-base')
+    expect(md.className).toContain('text-xl')
+    // Design tokens §3 allocates --text-5xl to the landing headline on mobile and
+    // --text-6xl to it on desktop. The hero wordmark *is* that headline.
+    expect(lg.className).toContain('text-5xl')
+    expect(lg.className).toContain('md:text-6xl')
+  })
+
+  it('carries tracking-tight only at lg, because tokens forbid it at body size', () => {
+    // Design tokens §3: --tracking-tight only at --text-3xl and above, never at body
+    // size. `sm` is --text-base, i.e. body size, so a root-level tracking-tight — which
+    // is what this was — violated the token rule outright.
+    const tracking = (size: 'sm' | 'md' | 'lg') => {
+      const { container } = render(<Wordmark name={BRAND.name} size={size} />)
+      return (container.firstElementChild as HTMLElement).className
     }
-    expect((sm.firstElementChild as HTMLElement).className).toContain('text-base')
-    expect((md.firstElementChild as HTMLElement).className).toContain('text-xl')
+
+    expect(tracking('sm')).not.toContain('tracking-tight')
+    expect(tracking('md')).not.toContain('tracking-tight')
+    expect(tracking('lg')).toContain('tracking-tight')
   })
 
   it('defaults to a span and is a heading only when asked', () => {
