@@ -37,7 +37,10 @@ import {
   formatReport,
   describeProblem,
   jsonRoundTrip,
+  playout,
+  replay,
   stableStringify,
+  statesOf,
   withoutAmbientSources,
 } from '../src/index.js'
 
@@ -549,6 +552,168 @@ describe('timerAbortRun fires the game’s own timers on the ADR-0010 §2 clock'
     })
     expect(outcome.abortNow).toBe(1_001_500)
     expect(outcome.result).toEqual(ABORTED)
+  })
+})
+
+/**
+ * PER-269. Every purity baseline in the suite is `stableStringify(step.before)`,
+ * so if the driver's own record is the object it handed to `applyAction`, an
+ * impure reducer has already rewritten the baseline before any check reads it.
+ * These pin the driver-level invariant directly, so the guarantee survives a
+ * refactor of the checks that read it.
+ */
+describe('the driver keeps its record of a state out of the game’s hands', () => {
+  const context = {
+    gameId: 'g',
+    gameVersion: '1.0.0',
+    sdkContractVersion: 1,
+    startNow: 1_000_000,
+    nowStepMs: 1_000,
+    seed: 'seed' as never,
+  }
+
+  interface CountState {
+    readonly plays: number
+  }
+
+  /** Writes a constant onto its input — the memoisation shape, idempotent. */
+  function memoisingServer() {
+    return {
+      createInitialState: () => ({ state: { plays: 0 }, events: [] }),
+      validateAction: () => VALID,
+      applyAction: (_ctx: GameContext, state: CountState) => {
+        ;(state as unknown as Record<string, unknown>).memo = 'written in place'
+        return { state: { plays: state.plays + 1 }, events: [] }
+      },
+      getLegalActions: (): readonly 'play'[] => ['play'],
+      getResult: (state: CountState): MatchResult | null =>
+        state.plays >= 3
+          ? {
+              reason: 'completed' as const,
+              standings: [{ seatId: asSeatId('seat-1'), rank: 1, outcome: 'win' as const }],
+            }
+          : null,
+    }
+  }
+
+  const options = {
+    settings: {},
+    variantLabel: 'v',
+    roster: buildDefaultRoster(1, false),
+    context,
+    maxSteps: 10,
+    chooseAction: () => ({ seatId: asSeatId('seat-1'), action: 'play' as const }),
+    trapAmbient: false,
+  }
+
+  function strayKeys(state: unknown): readonly string[] {
+    return Object.keys(state as Record<string, unknown>).filter((key) => key !== 'plays')
+  }
+
+  it('records a pristine before and after even when applyAction writes in place', () => {
+    const result = playout({ ...options, server: memoisingServer() })
+
+    expect(result.steps.length).toBe(3)
+    for (const step of result.steps) {
+      expect(strayKeys(step.before)).toEqual([])
+      expect(strayKeys(step.after)).toEqual([])
+    }
+    // `statesOf` is what determinism, serialization and reconnect all compare.
+    expect(statesOf(result).flatMap(strayKeys)).toEqual([])
+  })
+
+  /**
+   * `abortRun` validates before it applies, against the same retained state.
+   * So a `validateAction` that writes onto its input poisons the state the
+   * abort's `applyAction` then spreads into `AbortRun.state`, which
+   * `result-standings-well-formed` reads.
+   *
+   * This is the only one of the four abort-driver hand-overs whose removal is
+   * observable: the other three write onto an input the game immediately
+   * replaces with its own output, so nothing the driver returns carries the
+   * scribble. They are kept anyway, because they are where a future change that
+   * starts recording an intermediate abort state would silently reopen this.
+   */
+  it('returns a pristine state from abortRun when validateAction writes in place', () => {
+    interface AbortState {
+      readonly plays: number
+      readonly aborted: boolean
+    }
+    const server = {
+      createInitialState: () => ({ state: { plays: 0, aborted: false }, events: [] }),
+      validateAction: (_ctx: GameContext, state: AbortState) => {
+        ;(state as unknown as Record<string, unknown>).fromValidate = 'written in place'
+        return VALID
+      },
+      applyAction: (_ctx: GameContext, state: AbortState, _seatId: SeatId, action: string) =>
+        action === 'abort'
+          ? { state: { ...state, aborted: true }, events: [] }
+          : { state: { ...state, plays: state.plays + 1 }, events: [] },
+      getLegalActions: (): readonly string[] => ['play'],
+      getResult: (state: AbortState): MatchResult | null =>
+        state.aborted ? { reason: 'aborted' as const, standings: [] } : null,
+    }
+
+    const outcome = abortRun<AbortState, string, Record<string, never>, GameEvent>({
+      server,
+      settings: {},
+      variantLabel: 'v',
+      roster: buildDefaultRoster(1, false),
+      context,
+      maxSteps: 10,
+      chooseAction: defaultChooseAction,
+      trapAmbient: false,
+      afterSteps: 2,
+      declaredTimerIds: [],
+      abortAction: () => ({ seatId: asSeatId('seat-1'), action: 'abort' }),
+    })
+
+    expect(outcome.unreachable).toBeNull()
+    expect(Object.keys(outcome.state).sort()).toEqual(['aborted', 'plays'])
+  })
+
+  /**
+   * The documented degradation. A state carrying a function cannot be
+   * `structuredClone`d, and that state's real problem is that it does not
+   * survive Redis — which is `serialization-round-trip`'s verdict to give. A
+   * driver that threw here would pre-empt it with "the game threw during a
+   * playout", so the hand-over falls back to the retained object instead.
+   */
+  it('does not crash the playout on a state structuredClone cannot copy', () => {
+    const server = {
+      createInitialState: () => ({ state: { plays: 0, notJson: () => 1 }, events: [] }),
+      validateAction: () => VALID,
+      applyAction: (_ctx: GameContext, state: { readonly plays: number }) => ({
+        state: { ...state, plays: state.plays + 1 },
+        events: [],
+      }),
+      getLegalActions: (): readonly string[] => ['play'],
+      getResult: (state: { readonly plays: number }): MatchResult | null =>
+        state.plays >= 2 ? { reason: 'aborted' as const, standings: [] } : null,
+    }
+
+    const result = playout({ ...options, server, chooseAction: defaultChooseAction })
+
+    expect(result.steps.length).toBe(2)
+    expect(findJsonSafetyProblems(result.finalState)[0]?.reason).toContain('not JSON-safe')
+  })
+
+  it('replays the log without letting the reducer edit the replayed states', () => {
+    const server = memoisingServer()
+    const first = playout({ ...options, server })
+    const log = first.steps.map((step) => ({
+      sequence: step.sequence,
+      seatId: step.seatId,
+      action: step.action,
+    }))
+
+    const replayed = replay(server, {}, options.roster, context, log, false)
+
+    // Both sides pristine. If only one of the two call sites cloned, these
+    // would diverge and determinism would report a replay failure for what is
+    // really a purity bug.
+    expect(replayed.states.flatMap(strayKeys)).toEqual([])
+    expect(replayed.states).toEqual(statesOf(first))
   })
 })
 

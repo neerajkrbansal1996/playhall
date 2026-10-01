@@ -36,9 +36,42 @@ import {
 } from '@playhall/game-sdk'
 import { withoutAmbientSources } from './ambient.js'
 import { TimerQueue } from './timer-queue.js'
+import { detachedClone } from './value.js'
 import type { ActionCandidate } from '../subject.js'
 
 export const FAKE_MATCH_ID = asMatchId('conformance-match')
+
+/**
+ * The copy a mutating call gets, so the driver's own record of the state
+ * cannot be rewritten behind its back.
+ *
+ * Without this, `step.before` is the very object the playout passed to
+ * `applyAction`, so an `applyAction` that writes onto its input has already
+ * edited the driver's log entry by the time a check reads it. Every purity
+ * baseline is then taken from a polluted state, and the one class of mutation
+ * that matters most — memoising a computed value, `state.cache = analyse(…)`,
+ * which writes the *same* value every call — compares equal and passes
+ * (PER-269). Recording the pristine value is what turns "does a second
+ * application change anything?" back into "did the reducer mutate its input?".
+ *
+ * Only the calls the contract requires to be pure go through this:
+ * `applyAction`, `validateAction` and `onTimer`. `getResult` and
+ * `getLegalActions` keep the retained object, because no check claims they are
+ * pure and cloning on every loop iteration would buy nothing.
+ *
+ * A state `structuredClone` cannot copy (a function, a symbol) falls back to
+ * the retained object rather than throwing: that state fails
+ * `serialization-round-trip` on its own terms, and a driver crash there would
+ * be reported as "the game threw during a playout", which is the wrong
+ * attribution.
+ */
+function handOver<T>(state: T): T {
+  try {
+    return detachedClone(state)
+  } catch {
+    return state
+  }
+}
 
 export interface ClockOptions {
   readonly startNow: number
@@ -110,6 +143,11 @@ export interface PlayoutStep<TState, TAction, TEvent extends GameEvent> {
   readonly sequence: number
   readonly seatId: SeatId
   readonly action: TAction
+  /**
+   * The state as the platform handed it over, not the object the game was
+   * handed. `handOver` below is what makes those two different things, and
+   * why `before` is still pristine after an impure reducer has run.
+   */
   readonly before: TState
   readonly after: TState
   readonly events: readonly TEvent[]
@@ -270,7 +308,9 @@ export function playout<TState, TAction, TSettings, TEvent extends GameEvent>(
 
     const ctx = contextAt(context, sequence)
     const before = state
-    const applied = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action))
+    const applied = run(() =>
+      server.applyAction(ctx, handOver(before), chosen.seatId, chosen.action),
+    )
     steps.push({
       sequence,
       seatId: chosen.seatId,
@@ -423,7 +463,9 @@ function runPrologue<TState, TAction, TSettings, TEvent extends GameEvent>(
 
     const ctx = contextAt(context, sequence)
     const before = state
-    const applied = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action))
+    const applied = run(() =>
+      server.applyAction(ctx, handOver(before), chosen.seatId, chosen.action),
+    )
     state = applied.state
     now = ctx.now
     sequence += 1
@@ -519,7 +561,7 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
   // a game can ship green conformance and an abort production refuses.
   let verdict: ValidationResult<string>
   try {
-    verdict = run(() => server.validateAction(ctx, state, chosen.seatId, chosen.action))
+    verdict = run(() => server.validateAction(ctx, handOver(state), chosen.seatId, chosen.action))
   } catch (error) {
     return {
       state,
@@ -540,7 +582,7 @@ export function abortRun<TState, TAction, TSettings, TEvent extends GameEvent>(
   }
 
   const before = state
-  const applied = run(() => server.applyAction(ctx, before, chosen.seatId, chosen.action))
+  const applied = run(() => server.applyAction(ctx, handOver(before), chosen.seatId, chosen.action))
   state = applied.state
   try {
     // Nothing fires after an abort, but a `set` for an id the manifest never
@@ -678,7 +720,7 @@ export function timerAbortRun<TState, TAction, TSettings, TEvent extends GameEve
 
     let applied: ApplyResult<TState, TEvent>
     try {
-      applied = run(() => onTimer(ctx, state, due.timerId, due.seatId))
+      applied = run(() => onTimer(ctx, handOver(state), due.timerId, due.seatId))
     } catch (error) {
       return stop(
         `the game threw from onTimer('${String(due.timerId)}') at ctx.now=${String(ctx.now)} instead of returning an ApplyResult: ${error instanceof Error ? error.message : String(error)}`,
@@ -772,7 +814,9 @@ export function replay<TState, TAction, TSettings, TEvent extends GameEvent>(
     if (from !== undefined && entry.sequence < from.fromSequence) continue
     const ctx = contextAt(context, entry.sequence)
     const current = state
-    const applied = run(() => server.applyAction(ctx, current, entry.seatId, entry.action))
+    const applied = run(() =>
+      server.applyAction(ctx, handOver(current), entry.seatId, entry.action),
+    )
     state = applied.state
     states.push(state)
     events.push(applied.events)
