@@ -18,7 +18,9 @@
  *
  * - **Prose before the code** — the kept six are not the code at all
  *   (`"Code: ABC234"` → `CDEABC`). The player reaches not-found holding a
- *   plausible six characters.
+ *   plausible six characters. The pasted invite link belongs here and is the
+ *   most likely member of the class to actually happen
+ *   (`"https://example.test/join/ABC234"` → `HTTPSE`).
  * - **Prose after the code** — the kept six *are* the code
  *   (`"ABC234 join me"` → `ABC234`). The join succeeds.
  *
@@ -58,6 +60,15 @@ afterEach(cleanup)
  * than computed: the point of the case is that the value is a plausible code
  * bearing no resemblance to the one the player was sent, and a computed
  * expectation would restate the implementation instead of pinning that.
+ *
+ * The invite link is a member of this class and the highest-traffic one — every
+ * lobby has a link as well as a code, and "tap the link text, paste it" is at
+ * least as common as pasting a sentence. The host is deliberately
+ * `example.test`: the product domain is an open board decision and nothing
+ * under `apps/web/src` or `packages/shared/src` hard-codes one. The row pins
+ * what the field does with a link *today*; whether a pasted link should have
+ * its code extracted is a product decision tracked on
+ * [PER-242](/PER/issues/PER-242), not something this file asserts.
  */
 const LEADING_PROSE = [
   { raw: 'Code: ABC234', kept: 'CDEABC' },
@@ -66,25 +77,32 @@ const LEADING_PROSE = [
   { raw: 'Room code is ABC234', kept: 'RMCDES' },
   { raw: 'ok ABC234', kept: 'KABC23' },
   { raw: 'Join my game: ABC234 - see you there', kept: 'JNMYGA' },
+  { raw: 'https://example.test/join/ABC234', kept: 'HTTPSE' },
 ] as const
 
 describe('a code pasted with prose in front of it', () => {
+  // Hoisted out of the per-row cases below, where it operated only on the
+  // table literals and so could not fail for any change to the component.
+  // Stated once, as what it is: a property of the fixtures.
+  it('is a table of plausible codes, none of which is the real one', () => {
+    for (const { kept } of LEADING_PROSE) {
+      expect(isValidRoomCode(kept)).toBe(true)
+      expect(kept).not.toBe('ABC234')
+    }
+  })
+
   for (const { raw, kept } of LEADING_PROSE) {
     it(`announces the overflow for ${JSON.stringify(raw)}`, async () => {
       const user = userEvent.setup()
-      const onJoin = vi.fn()
-      render(<JoinByCodeForm onJoin={onJoin} />)
+      render(<JoinByCodeForm onJoin={vi.fn()} />)
 
       await pasteInto(user, raw)
 
+      // The kept six are a well-formed code — see the table self-check above —
+      // which is why silence here was the dangerous option: nothing downstream
+      // of the field can tell this is not the code the player was sent.
       const input = screen.getByTestId(testIds.joinCodeInput)
       expect(input).toHaveAttribute('data-value', kept)
-
-      // The kept six are a *well-formed* code, which is why silence here was
-      // the dangerous option: nothing downstream of the field can tell that
-      // this is not the code the player was sent.
-      expect(isValidRoomCode(kept)).toBe(true)
-      expect(kept).not.toBe('ABC234')
 
       const alert = screen.getByRole('alert')
       expect(alert).toHaveTextContent(OVERFLOW)
