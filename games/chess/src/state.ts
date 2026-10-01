@@ -1,4 +1,5 @@
 import { availableDrawClaims, detectAutomaticEnding, timeoutEnding } from './rules/endings.js'
+import { canPossiblyMate } from './rules/material.js'
 import { analyse, replay, START_FEN, tryMove } from './rules/position.js'
 import {
   opponent,
@@ -61,7 +62,9 @@ export type ChessActionError =
  * Actions the reducer accepts.
  *
  * `flag` and `first_move_timeout` carry no actor: they are raised by the server
- * from the platform clock, never by a client.
+ * from the platform clock, never by a client. That is not a convention the
+ * reducer trusts — it refuses either one that arrives with an actor. See the
+ * runner obligations documented in `sdk/contract.ts`.
  */
 export type ChessAction =
   | { readonly type: 'move'; readonly move: MoveInput }
@@ -75,6 +78,9 @@ export type ChessAction =
    * Opponent has been gone past the platform's grace period. Presence is a
    * platform fact, so the runner is responsible for only dispatching this once
    * grace has actually elapsed — see the SDK note in `sdk/contract.ts`.
+   *
+   * `outcome` is a *request*, not a decision: a `win` is only granted to a side
+   * that could still deliver mate. The reducer decides, not the claimant.
    */
   | { readonly type: 'claim_abandonment'; readonly outcome: 'win' | 'draw' }
   | { readonly type: 'flag'; readonly color: Color }
@@ -165,6 +171,13 @@ function finish(state: ChessMatchState, ending: ChessEnding): ChessMatchState {
  * Every legality decision lives here and runs on the server. The client may draw
  * legal-move dots, but a client that skips them cannot get an illegal move past
  * this function: the move is replayed through chess.js from the stored SAN list.
+ *
+ * `actor` is the authenticated seat the action came from, or `null` for an action
+ * the *server* raised from a platform fact. The two are not interchangeable and
+ * the reducer enforces that in both directions: a server-raised action from a
+ * seat is refused, and a seat action with no seat is refused. A runner that
+ * forwards a client envelope straight in therefore cannot end a game with a
+ * `flag` — which is the one thing this module has no way to verify.
  */
 export function applyAction(
   state: ChessMatchState,
@@ -174,19 +187,27 @@ export function applyAction(
 ): ChessActionResult {
   if (state.phase === 'finished') return fail('game_over')
 
-  // Server-raised actions carry no actor and are handled before seat checks.
+  // Server-raised actions are handled before the seat check, so the absence of
+  // an actor is checked here instead of falling through to `colorOf`. The module
+  // holds no clock, so `flag` cannot be verified against anything — the actor
+  // shape is the whole guard, and it has to be enforced rather than assumed.
   if (action.type === 'flag') {
+    if (actor !== null) return fail('not_a_player')
     const { fen } = analyse(state.initialFen, state.moves)
     return done(finish(state, timeoutEnding(fen, action.color)))
   }
 
   if (action.type === 'first_move_timeout') {
+    if (actor !== null) return fail('not_a_player')
     const deadline = firstMoveDeadline(state)
     if (deadline === null) return fail('abort_not_allowed')
     if (ctx.now < deadline) return fail('first_move_deadline_not_reached')
     return done(finish(state, { reason: 'abort', cause: 'first_move_timeout' }))
   }
 
+  // Everything below is seat-raised: it must carry a seat that holds a colour in
+  // this match. `actor === null` here means a runner dispatched a player action
+  // as if the server had raised it, which is refused for the same reason.
   const color = actor === null ? null : colorOf(state, actor)
   if (color === null) return fail('not_a_player')
 
@@ -220,14 +241,7 @@ export function applyAction(
       return claimDraw(state, action.claim, color)
 
     case 'claim_abandonment':
-      return done(
-        finish(
-          state,
-          action.outcome === 'win'
-            ? { reason: 'abandonment', winner: color }
-            : { reason: 'abandonment_draw' },
-        ),
-      )
+      return claimAbandonment(state, action.outcome, color)
   }
 }
 
@@ -271,6 +285,34 @@ function offerDraw(state: ChessMatchState, color: Color): ChessActionResult {
     drawOffer: { by: color },
     lastDrawOfferPly: { ...state.lastDrawOfferPly, [color]: state.moves.length },
   })
+}
+
+/**
+ * Resolve an abandonment claim from `color`, whose opponent has gone.
+ *
+ * Whether a claim is *available* is a platform fact: presence and the grace
+ * period live outside this module, so the runner gates the dispatch (the exact
+ * obligation is written down in `sdk/contract.ts`). What the claimant does not
+ * get to choose is the *outcome*.
+ *
+ * A win is only granted to a side that could still deliver mate, by the same
+ * FIDE 6.9 material test a flag uses: a lone king whose opponent walked away is
+ * no more entitled to the full point than a lone king whose opponent flagged.
+ * Such a claimant may still claim a draw — or keep waiting, which is simply not
+ * dispatching anything. An unavailable win is refused rather than silently
+ * downgraded, so the claimant keeps that choice.
+ */
+function claimAbandonment(
+  state: ChessMatchState,
+  requested: 'win' | 'draw',
+  color: Color,
+): ChessActionResult {
+  if (requested === 'draw') return done(finish(state, { reason: 'abandonment_draw' }))
+
+  const { fen } = analyse(state.initialFen, state.moves)
+  if (!canPossiblyMate(fen, color)) return fail('claim_unavailable')
+
+  return done(finish(state, { reason: 'abandonment', winner: color }))
 }
 
 function claimDraw(state: ChessMatchState, claim: DrawClaim, color: Color): ChessActionResult {
