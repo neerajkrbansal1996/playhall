@@ -257,6 +257,10 @@ describe('abortRun scopes advanceMs to the abort dispatch', () => {
       chooseAction: defaultChooseAction,
       trapAmbient: false,
       afterSteps: 2,
+      // This game arms no timers at all, so the allowlist is empty. It is a
+      // required option rather than a defaulted one on purpose: an omitted
+      // allowlist would silently reject every legal `set` a game emitted.
+      declaredTimerIds: [],
       ...(advanceMs === undefined ? {} : { advanceMs }),
       abortAction: (_state: ClockState, seats) => {
         const host = seats[0]

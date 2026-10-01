@@ -77,7 +77,14 @@ export interface StandoffState {
   readonly abandonedAtOpening: boolean
 }
 
-export const actionSchema = z.object({ type: z.literal('fire') })
+/**
+ * `.strict()`, so an unrecognised field is rejected rather than stripped. The
+ * suite's `illegal-action-rejected` check treats a silently-stripped extra key
+ * as a malformed payload the game accepted, and it is right to: a client
+ * sending `{type:'fire', target:'b2'}` against a schema that drops `target`
+ * gets a shot it did not ask for.
+ */
+export const actionSchema = z.object({ type: z.literal('fire') }).strict()
 
 export type StandoffAction = z.infer<typeof actionSchema>
 
