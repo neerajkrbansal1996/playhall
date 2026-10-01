@@ -1,12 +1,14 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Link2 } from 'lucide-react'
 
-import { ROOM_CODE_LENGTH, isValidRoomCode, normalizeRoomCode } from '@playhall/shared'
+import { ROOM_CODE_LENGTH, isValidRoomCode } from '@playhall/shared'
 
 import { Button } from '@/components/ui/button'
 import { testIds } from '@/lib/testids'
+
+import { readRoomCodeInput, type RoomCodeInputReading } from './read-room-code-input'
 
 export interface JoinByCodeFormProps {
   /**
@@ -87,6 +89,21 @@ export interface JoinByCodeFormProps {
  * A server `error` still outranks it: an actual join outcome is more actionable
  * than our note about the input.
  *
+ * ## Why an invite link is not read as code characters
+ *
+ * `readRoomCodeInput` carries that decision and its reasoning
+ * ([PER-235](/PER/issues/PER-235)). What lands here is that the field has a
+ * **second, non-error message tone**: lifting `ABC234` out of a pasted
+ * `https://…/r/ABC234` replaces forty visible characters with six, which the
+ * player has to be told about — but it is a *success*, and announcing it
+ * through the destructive-styled `role="alert"` slot with `aria-invalid` set
+ * would mark a field that is about to join the right room as broken.
+ *
+ * So the slot takes a tone. `error` keeps everything it had: the alert role,
+ * the destructive colour, `aria-invalid`, the warning icon. `note` is
+ * `role="status"`, muted, link-icon, and leaves `aria-invalid` unset. It is
+ * still **one** slot, so the messages can never stack or contradict.
+ *
  * The submit button is **never disabled for validation**. A disabled control
  * with no explanation is the worst of both worlds on a phone: nothing happens
  * on tap and no assistive technology announces why. Pressing it with a short
@@ -96,19 +113,41 @@ export interface JoinByCodeFormProps {
  */
 const TOO_SHORT_MESSAGE = `A room code is ${ROOM_CODE_LENGTH} characters.`
 const OVERFLOW_MESSAGE = `${TOO_SHORT_MESSAGE} Extra characters were not used — check the code you were sent.`
+const LINK_MESSAGE = 'Took the code from that link.'
+const LINK_WITHOUT_CODE_MESSAGE = `That looks like a link with no room code in it. Open the link instead, or paste just the ${ROOM_CODE_LENGTH}-character code.`
+
+/** An empty field has been read as nothing, not as a link and not as a loss. */
+const EMPTY_READING: RoomCodeInputReading = {
+  code: '',
+  source: 'characters',
+  overflowed: false,
+}
+
+interface FieldMessage {
+  readonly text: string
+  /** `error` marks the field invalid; `note` reports what we did with the input. */
+  readonly tone: 'error' | 'note'
+}
 
 /**
  * The single message the field shows, in authority order: a real join outcome,
- * then a character we dropped, then a code too short to send.
+ * then a link we could not read, then a character we dropped, then a code too
+ * short to send, and last the note that a link was read for them.
+ *
+ * The note sits at the bottom because every message above it is a reason the
+ * press will not do what the player wants, and the note is a reason it will.
  */
 function fieldMessage(
   error: string | undefined,
+  source: RoomCodeInputReading['source'],
   overflowed: boolean,
   tooShort: boolean,
-): string | undefined {
-  if (error !== undefined) return error
-  if (overflowed) return OVERFLOW_MESSAGE
-  if (tooShort) return TOO_SHORT_MESSAGE
+): FieldMessage | undefined {
+  if (error !== undefined) return { text: error, tone: 'error' }
+  if (source === 'link-without-code') return { text: LINK_WITHOUT_CODE_MESSAGE, tone: 'error' }
+  if (overflowed) return { text: OVERFLOW_MESSAGE, tone: 'error' }
+  if (tooShort) return { text: TOO_SHORT_MESSAGE, tone: 'error' }
+  if (source === 'link') return { text: LINK_MESSAGE, tone: 'note' }
   return undefined
 }
 
@@ -120,11 +159,12 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
   // Only set once the player has actually pressed join, so the field does not
   // shout at someone who is still typing their second character.
   const [tooShort, setTooShort] = useState(false)
-  // Set as it happens, by contrast: a dropped character is already lost, and
-  // the field cannot show the player what it removed.
-  const [overflowed, setOverflowed] = useState(false)
+  // The rest of the reading is kept as it happens, by contrast: a dropped
+  // character is already lost and a link has already been swapped for its
+  // code, and the field cannot show the player either one after the fact.
+  const [reading, setReading] = useState<RoomCodeInputReading>(EMPTY_READING)
 
-  const message = fieldMessage(error, overflowed, tooShort)
+  const message = fieldMessage(error, reading.source, reading.overflowed, tooShort)
 
   return (
     <form
@@ -165,17 +205,19 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
             // cap lives in `onChange` instead, after normalisation.
             placeholder="ABC234"
             value={code}
-            aria-invalid={message ? true : undefined}
+            // `aria-invalid` tracks the *tone*, not the presence of a message:
+            // the field holding a code we lifted out of a link is as valid as
+            // one the player typed.
+            aria-invalid={message?.tone === 'error' ? true : undefined}
             aria-describedby={message ? messageId : undefined}
             onChange={(event) => {
-              // Normalise first, then cap. A 7th *canonical* character is still
-              // never part of a code, so it is still dropped — but a 7th *raw*
-              // character routinely is one, once a separator is gone, which is
-              // why the overflow flag reads the canonical length and not
-              // `event.target.value.length`.
-              const canonical = normalizeRoomCode(event.target.value)
-              setCode(canonical.slice(0, ROOM_CODE_LENGTH))
-              setOverflowed(canonical.length > ROOM_CODE_LENGTH)
+              // One reading per keystroke or paste, and the field shows what it
+              // says: an invite link becomes the code inside it, anything else
+              // is normalised then capped. `readRoomCodeInput` holds both rules
+              // and why they are in that order.
+              const next = readRoomCodeInput(event.target.value)
+              setReading(next)
+              setCode(next.code)
               setTooShort(false)
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
@@ -188,18 +230,33 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
 
         {/*
           `role="alert"` rather than a live region on a permanently-mounted
-          node: the message only ever appears in response to a press, so an
-          announcement on mount is what we want. Icon plus text, never colour
-          alone.
+          node: the message only ever appears in response to a press or a
+          paste, so an announcement on mount is what we want. Icon plus text,
+          never colour alone — which is also what keeps the two tones apart
+          without relying on destructive-red versus muted-grey: a different
+          icon and a different sentence.
+
+          A note takes `role="status"` instead. It is polite rather than
+          assertive because the player has not been stopped from doing
+          anything — the code is in the field and the button works.
         */}
         {message ? (
           <p
             id={messageId}
-            role="alert"
-            className="flex items-center gap-1.5 text-sm text-destructive [&_svg]:size-4"
+            role={message.tone === 'error' ? 'alert' : 'status'}
+            data-tone={message.tone}
+            className={
+              message.tone === 'error'
+                ? 'flex items-center gap-1.5 text-sm text-destructive [&_svg]:size-4'
+                : 'flex items-center gap-1.5 text-sm text-muted-foreground [&_svg]:size-4'
+            }
           >
-            <AlertCircle aria-hidden="true" />
-            {message}
+            {message.tone === 'error' ? (
+              <AlertCircle aria-hidden="true" />
+            ) : (
+              <Link2 aria-hidden="true" />
+            )}
+            {message.text}
           </p>
         ) : null}
       </div>
