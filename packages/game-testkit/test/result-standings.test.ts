@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { asSeatId, validateMatchResult } from '@playhall/game-sdk'
 import { runTurnBasedConformance } from '../src/turn-based.js'
 import { describeProblem } from '../src/checks/result-standings.js'
-import { formatReport, type ConformanceReport } from '../src/report.js'
+import { failedChecks, formatReport, type ConformanceReport } from '../src/report.js'
 import { makeRace, type RaceBreakage } from './fixtures/race.js'
 
 const CHECK = 'result-standings-well-formed'
@@ -235,6 +235,81 @@ describe('result-standings-well-formed', () => {
     expect(text).toContain('FAIL')
     expect(text).toContain(CHECK)
     expect(text).toContain('missing_seat')
+  })
+})
+
+/**
+ * A deadline-gated unrecorded ending, end to end through the gate.
+ *
+ * Without `advanceMs` the abort is dispatched at `startNow + (afterSteps + 1) *
+ * nowStepMs` — two seconds in — so a game whose abort only opens after 30 s is
+ * structurally out of reach and the gate can never see its empty standings.
+ * Both directions are asserted, because a field that has only ever been seen
+ * green proves nothing about the hole it was added to close.
+ */
+describe('AbortScenario.advanceMs reaches a deadline-gated unrecorded ending', () => {
+  const DEADLINE_MS = 30_000
+
+  function runDeadline(abortAdvanceMs?: number): ConformanceReport {
+    return runTurnBasedConformance(
+      makeRace(
+        {},
+        {
+          abortDeadlineMs: DEADLINE_MS,
+          ...(abortAdvanceMs === undefined ? {} : { abortAdvanceMs }),
+        },
+      ),
+      { playoutsPerVariant: 2, only: [CHECK] },
+    )
+  }
+
+  it('fails with advanceMs unset — the abort runs but the game says it is too early', () => {
+    const report = runDeadline()
+
+    expect(check(report).status).toBe('failed')
+    expect(messages(report)).toContain('left getResult() null')
+    // The message has to name the lever, or the next author re-derives this hole.
+    expect(messages(report)).toContain('AbortScenario.advanceMs')
+  })
+
+  it('passes with advanceMs past the deadline', () => {
+    const report = runDeadline(DEADLINE_MS + 1_000)
+    const result = check(report)
+
+    expect(result.status).toBe('passed')
+    // The abort half really ran: aborts on top of the playout endings.
+    expect(result.assertions).toBeGreaterThan(4)
+    expect(report.passed).toBe(true)
+  })
+
+  it('uses the number, not merely its presence: an offset short of the deadline still fails', () => {
+    expect(check(runDeadline(DEADLINE_MS - 5_000)).status).toBe('failed')
+  })
+
+  it('is deterministic: two runs of the same scenario produce the same report', () => {
+    expect(formatReport(runDeadline(DEADLINE_MS + 1_000))).toBe(
+      formatReport(runDeadline(DEADLINE_MS + 1_000)),
+    )
+  })
+
+  it('leaves a game with no deadline untouched when advanceMs is declared anyway', () => {
+    // The offset is scoped to the abort dispatch, so it cannot flag a
+    // time-based ending mid-playout the way a larger `nowStepMs` would.
+    const report = runTurnBasedConformance(makeRace({}, { abortAdvanceMs: 31_000 }), {
+      playoutsPerVariant: 2,
+      only: [CHECK],
+    })
+
+    expect(check(report).status).toBe('passed')
+  })
+
+  it('does not disturb the whole suite: every check stays green with advanceMs set', () => {
+    const report = runTurnBasedConformance(
+      makeRace({}, { abortDeadlineMs: DEADLINE_MS, abortAdvanceMs: DEADLINE_MS + 1_000 }),
+      { playoutsPerVariant: 2 },
+    )
+
+    expect(failedChecks(report)).toEqual([])
   })
 })
 

@@ -134,6 +134,19 @@ export interface AbortScenario<TState, TAction> {
    */
   readonly afterSteps?: number
   /**
+   * Extra milliseconds added to `ctx.now` **for the abort dispatch only**.
+   * Default 0. The `afterSteps` playout plies are unaffected and still advance
+   * at the subject's `nowStepMs`. Use it to reach an unrecorded ending that is
+   * gated on a deadline, e.g. a first-move timeout.
+   *
+   * It is deliberately not a clock option: `nowStepMs` is subject-level and
+   * shared by every check, so raising it far enough to clear one deadline
+   * stretches every playout too and trips time-based endings mid-match. The
+   * offset stays declared data, so `now` is still a pure function of
+   * `(scenario, sequence, offset)` and two runs see the same clock.
+   */
+  readonly advanceMs?: number
+  /**
    * The action that ends the match without recording a result. Return `null`
    * to say this scenario is not reachable from `state`; the suite reports that
    * as a failure, because a declared abort that never runs is a hole in the

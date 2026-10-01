@@ -8,7 +8,17 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { asSeatId, validateMatchResult } from '@playhall/game-sdk'
+import {
+  VALID,
+  asSeatId,
+  invalid,
+  validateMatchResult,
+  type GameContext,
+  type GameEvent,
+  type MatchResult,
+  type SeatId,
+} from '@playhall/game-sdk'
+import { abortRun } from '../src/internal/driver.js'
 import {
   AmbientAccessError,
   CheckRecorder,
@@ -166,6 +176,142 @@ describe('contextAt', () => {
   it('gives the same sequence the same RNG stream', () => {
     expect(contextAt(base, 3).rng.next()).toBe(contextAt(base, 3).rng.next())
     expect(contextAt(base, 3).rng.next()).not.toBe(contextAt(base, 4).rng.next())
+  })
+
+  it('adds a one-off offset without touching the step size, and defaults it to 0', () => {
+    expect(contextAt(base, 3, 500).now).toBe(1530)
+    expect(contextAt(base, 3).now).toBe(contextAt(base, 3, 0).now)
+    // Still a pure function of its arguments — the determinism lens.
+    expect(contextAt(base, 3, 500).now).toBe(contextAt(base, 3, 500).now)
+    expect(contextAt(base, 3, 500).sequence).toBe(3)
+  })
+})
+
+/**
+ * `AbortScenario.advanceMs` at the driver seam.
+ *
+ * The scoping is the whole point of the affordance: an offset that leaked into
+ * the preceding plies would be `nowStepMs` again, and raising `nowStepMs` is
+ * what trips time-based endings mid-playout. So this records the `ctx.now` of
+ * every mutation and pins which one moved.
+ */
+describe('abortRun scopes advanceMs to the abort dispatch', () => {
+  const base = {
+    gameId: 'g',
+    gameVersion: '1.0.0',
+    sdkContractVersion: 1,
+    startNow: 1_000_000,
+    nowStepMs: 1_000,
+    seed: 'seed' as never,
+  }
+
+  interface ClockState {
+    readonly startedAt: number
+    readonly plays: number
+    readonly aborted: boolean
+  }
+  type ClockAction = 'play' | 'abort'
+
+  /**
+   * The smallest deadline-gated game: `abort` only lands once `deadlineMs` has
+   * passed, and before that it is a no-op — a first-move timeout in miniature.
+   */
+  function run(deadlineMs: number, advanceMs: number | undefined, gateInValidate = false) {
+    const nows: number[] = []
+    const server = {
+      createInitialState: (ctx: GameContext) => {
+        nows.push(ctx.now)
+        return { state: { startedAt: ctx.now, plays: 0, aborted: false }, events: [] }
+      },
+      validateAction: (
+        ctx: GameContext,
+        state: ClockState,
+        _seatId: SeatId,
+        action: ClockAction,
+      ) =>
+        gateInValidate && action === 'abort' && ctx.now - state.startedAt < deadlineMs
+          ? invalid('too_early')
+          : VALID,
+      applyAction: (ctx: GameContext, state: ClockState, _seatId: SeatId, action: ClockAction) => {
+        nows.push(ctx.now)
+        if (action === 'abort') {
+          return ctx.now - state.startedAt >= deadlineMs
+            ? { state: { ...state, aborted: true }, events: [] }
+            : { state, events: [] }
+        }
+        return { state: { ...state, plays: state.plays + 1 }, events: [] }
+      },
+      getLegalActions: (): readonly ClockAction[] => ['play'],
+      getResult: (state: ClockState): MatchResult | null =>
+        state.aborted ? { reason: 'aborted', standings: [] } : null,
+    }
+
+    const roster = buildDefaultRoster(2, false)
+    const outcome = abortRun<ClockState, ClockAction, Record<string, never>, GameEvent>({
+      server,
+      settings: {},
+      variantLabel: 'v',
+      roster,
+      context: base,
+      maxSteps: 50,
+      chooseAction: defaultChooseAction,
+      trapAmbient: false,
+      afterSteps: 2,
+      ...(advanceMs === undefined ? {} : { advanceMs }),
+      abortAction: (_state: ClockState, seats) => {
+        const host = seats[0]
+        return host === undefined ? null : { seatId: host.seatId, action: 'abort' }
+      },
+    })
+    return { outcome, nows }
+  }
+
+  it('leaves the plies before the abort on the plain step clock', () => {
+    const plain = run(0, undefined)
+    const offset = run(0, 30_000)
+
+    // createInitialState at sequence 0, then two plies at 1 and 2.
+    expect(plain.nows.slice(0, 3)).toEqual([1_000_000, 1_001_000, 1_002_000])
+    expect(offset.nows.slice(0, 3)).toEqual(plain.nows.slice(0, 3))
+    expect(plain.outcome.stepsPlayed).toBe(2)
+    expect(offset.outcome.stepsPlayed).toBe(2)
+  })
+
+  it('moves the abort dispatch, and only it', () => {
+    const { outcome, nows } = run(0, 30_000)
+
+    // sequence 3 = afterSteps + 1, plus the declared offset.
+    expect(nows.at(-1)).toBe(1_003_000 + 30_000)
+    expect(outcome.abortNow).toBe(1_033_000)
+  })
+
+  it('defaults the offset to 0', () => {
+    expect(run(0, undefined).outcome.abortNow).toBe(1_003_000)
+  })
+
+  it('is what makes a deadline-gated abort reachable at all', () => {
+    // 30 s of deadline against a 1 s step: the step counter never gets there.
+    expect(run(30_000, undefined).outcome.result).toBeNull()
+    expect(run(30_000, 31_000).outcome.result).toEqual({ reason: 'aborted', standings: [] })
+  })
+
+  it('reports the same clock on a second run of the same scenario', () => {
+    expect(run(30_000, 31_000).nows).toEqual(run(30_000, 31_000).nows)
+  })
+
+  it('validates and applies the abort at the same offset instant', () => {
+    // The realistic shape: the game gates the deadline in `validateAction`, so
+    // too early is a typed rejection rather than a silent no-op. A `validate`
+    // that saw the plain clock while `apply` saw the offset one would make a
+    // correct game unreachable, which is the scoping bug in its other form.
+    const tooEarly = run(30_000, undefined, true)
+    expect(tooEarly.outcome.unreachable).toContain("rejected the abort action with 'too_early'")
+    expect(tooEarly.outcome.unreachable).toContain('AbortScenario.advanceMs')
+    expect(tooEarly.outcome.abortNow).toBe(1_003_000)
+
+    const inTime = run(30_000, 31_000, true)
+    expect(inTime.outcome.unreachable).toBeNull()
+    expect(inTime.outcome.result).toEqual({ reason: 'aborted', standings: [] })
   })
 })
 

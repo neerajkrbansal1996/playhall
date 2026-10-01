@@ -15,6 +15,11 @@
  * lobby action, so random playouts cannot reach it. That is the whole reason
  * `abortScenarios` exists, and this fixture would not test the abort path if
  * the fuzzer could stumble into it by itself.
+ *
+ * `makeRace(breakage, clock)` additionally makes the abort **deadline-gated**,
+ * which is the shape `AbortScenario.advanceMs` exists for: an abort that only
+ * takes effect once `abortDeadlineMs` has passed is out of reach of the step
+ * clock, so the gate needs a declared offset to see its empty standings.
  */
 
 import {
@@ -49,6 +54,8 @@ export interface RaceState {
   readonly turn: number
   readonly target: number
   readonly aborted: boolean
+  /** `ctx.now` at `createInitialState`. The deadline below is measured from it. */
+  readonly startedAt: number
 }
 
 export const actionSchema = z.discriminatedUnion('type', [
@@ -110,6 +117,25 @@ export interface RaceBreakage {
   readonly bogusReason?: string
 }
 
+/**
+ * How the lobby's abort relates to the clock. Kept apart from `RaceBreakage`
+ * because none of it is a contract violation: a game whose abort only opens
+ * once a deadline has passed is ordinary turn-based behaviour (a first-move
+ * timeout, a "nobody showed up" abort), and the point of the fixture variant
+ * is that the *gate* could not reach it.
+ */
+export interface RaceClock {
+  /**
+   * Milliseconds after the match starts before `abort` takes effect. Default 0
+   * — abort is available from move one. A value larger than
+   * `afterSteps * nowStepMs` is unreachable from the step clock alone, which is
+   * what `AbortScenario.advanceMs` exists for.
+   */
+  readonly abortDeadlineMs?: number
+  /** `advanceMs` to declare on the abort scenario. Default: left unset. */
+  readonly abortAdvanceMs?: number
+}
+
 const GHOST = asSeatId('seat-from-another-match')
 
 function rank(state: RaceState, breakage: RaceBreakage): Standing[] {
@@ -144,7 +170,9 @@ function rank(state: RaceState, breakage: RaceBreakage): Standing[] {
 
 export function makeRace(
   breakage: RaceBreakage = {},
+  clock: RaceClock = {},
 ): TurnBasedConformanceSubject<RaceState, RaceAction, RaceView, RaceSettings, GameEvent, string> {
+  const abortDeadlineMs = clock.abortDeadlineMs ?? 0
   const manifest: GameManifest<RaceSettings> = {
     id: 'race',
     slug: 'race',
@@ -194,7 +222,7 @@ export function makeRace(
     actionSchema,
     disconnectPolicy: DEFAULT_DISCONNECT_POLICY,
 
-    createInitialState(_ctx: GameContext, settings: RaceSettings, seats: SeatRoster) {
+    createInitialState(ctx: GameContext, settings: RaceSettings, seats: SeatRoster) {
       return {
         state: {
           seatIds: seats.map((seat) => seat.seatId),
@@ -202,6 +230,7 @@ export function makeRace(
           turn: 0,
           target: settings.target,
           aborted: false,
+          startedAt: ctx.now,
         },
         events: [],
       }
@@ -220,9 +249,14 @@ export function makeRace(
       return VALID
     },
 
-    applyAction(_ctx, state, seatId, action) {
+    applyAction(ctx, state, seatId, action) {
       if (action.type === 'abort') {
         if (breakage.abortThrows === true) throw new Error('race: abort blew up')
+        // Deadline-gated: before it, the claim is simply too early and does
+        // nothing. This is the first-move-timeout shape, and `getResult` then
+        // stays null — which is what the gate sees when it cannot reach the
+        // deadline.
+        if (ctx.now - state.startedAt < abortDeadlineMs) return { state, events: [] }
         if (breakage.abortDoesNothing === true) return { state, events: [] }
         return { state: { ...state, aborted: true }, events: [] }
       }
@@ -282,6 +316,7 @@ export function makeRace(
               ...(breakage.abortAfterSteps === 'omit'
                 ? {}
                 : { afterSteps: breakage.abortAfterSteps ?? 1 }),
+              ...(clock.abortAdvanceMs === undefined ? {} : { advanceMs: clock.abortAdvanceMs }),
               abortAction: (_state: RaceState, roster: SeatRoster) => {
                 if (breakage.abortUnreachable === true) return null
                 const host = roster[0]

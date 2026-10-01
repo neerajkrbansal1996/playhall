@@ -22,6 +22,12 @@
  * which is where empty standings are *required* and therefore where a game is
  * most likely to fill them in anyway. The abort half is driven from the
  * game's declared `abortScenarios`.
+ *
+ * The abort's clock is the scenario's to declare. `now` at the dispatch is
+ * `startNow + (afterSteps + 1) * nowStepMs + advanceMs`, so an ending gated on
+ * a real deadline — a first-move timeout, a lobby idle-kick — is reached by
+ * declaring `advanceMs`, not by stretching the subject's `nowStepMs` (which is
+ * shared by every check and would trip time-based endings mid-playout).
  */
 
 import {
@@ -150,6 +156,9 @@ function checkAbortedMatches<
           chooseAction: prep.chooseAction,
           trapAmbient: prep.trapAmbient,
           afterSteps,
+          // The declared one-dispatch clock offset. Scoped here and nowhere
+          // else: the plies above still run on the subject's `nowStepMs`.
+          advanceMs: abort.advanceMs ?? 0,
           abortAction: (state, roster) => abort.abortAction(state, roster),
         })
       } catch (error) {
@@ -170,7 +179,10 @@ function checkAbortedMatches<
 
       const result = outcome.result
       recorder.assert(result !== null, () => ({
-        message: 'the abort action left getResult() null, so the match never ended',
+        // The clock is named because a deadline-gated abort is the common
+        // reason for this failure and looks nothing like a bug from here: the
+        // action ran, the game simply decided it was too early.
+        message: `the abort action left getResult() null, so the match never ended (dispatched at ctx.now=${String(outcome.abortNow)}, ${String(abort.advanceMs ?? 0)} ms of declared advanceMs; an abort gated on a deadline needs AbortScenario.advanceMs)`,
         where,
         detail: preview(outcome.state, 300),
       }))
