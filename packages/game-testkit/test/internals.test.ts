@@ -623,6 +623,57 @@ describe('the driver keeps its record of a state out of the game’s hands', () 
   })
 
   /**
+   * PER-275. Keeping the record pristine is only half of it: something has to
+   * *notice*. The driver watches the copy it handed over, so the verdict exists
+   * for every call rather than for the four steps per run `reducer-purity` used
+   * to re-probe on a fixed stride.
+   */
+  it('records which pure call wrote onto the copy it was handed, per step', () => {
+    const impure = playout({ ...options, server: memoisingServer() })
+    expect(impure.steps.map((step) => step.mutatedBy)).toEqual([
+      ['applyAction'],
+      ['applyAction'],
+      ['applyAction'],
+    ])
+
+    const pure = playout({
+      ...options,
+      server: {
+        ...memoisingServer(),
+        applyAction: (_ctx: GameContext, state: CountState) => ({
+          state: { plays: state.plays + 1 },
+          events: [],
+        }),
+      },
+    })
+    expect(pure.steps.length).toBe(3)
+    expect(pure.steps.flatMap((step) => step.mutatedBy)).toEqual([])
+  })
+
+  /**
+   * The mutation that only fires at one depth — the shape the stride sampler
+   * was blind to. The verdict has to land on *that* step and on no other, or a
+   * check reading it cannot tell a game author where to look.
+   */
+  it('records the verdict only on the step whose call mutated', () => {
+    const result = playout({
+      ...options,
+      server: {
+        ...memoisingServer(),
+        applyAction: (_ctx: GameContext, state: CountState) => {
+          if (state.plays === 1) {
+            ;(state as unknown as Record<string, unknown>).memo = 'written in place'
+          }
+          return { state: { plays: state.plays + 1 }, events: [] }
+        },
+      },
+    })
+
+    expect(result.steps.map((step) => step.mutatedBy)).toEqual([[], ['applyAction'], []])
+    expect(result.steps.flatMap((step) => strayKeys(step.before))).toEqual([])
+  })
+
+  /**
    * `abortRun` validates before it applies, against the same retained state.
    * So a `validateAction` that writes onto its input poisons the state the
    * abort's `applyAction` then spreads into `AbortRun.state`, which

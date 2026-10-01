@@ -36,10 +36,16 @@ import {
 } from '@playhall/game-sdk'
 import { withoutAmbientSources } from './ambient.js'
 import { TimerQueue } from './timer-queue.js'
-import { detachedClone } from './value.js'
+import { detachedClone, stableStringify } from './value.js'
 import type { ActionCandidate } from '../subject.js'
 
 export const FAKE_MATCH_ID = asMatchId('conformance-match')
+
+/**
+ * The calls the SDK contract requires to be pure, i.e. the ones the driver
+ * hands a detached copy of the state to.
+ */
+export type PureCall = 'applyAction' | 'validateAction' | 'onTimer'
 
 /**
  * The copy a mutating call gets, so the driver's own record of the state
@@ -71,6 +77,41 @@ function handOver<T>(state: T): T {
   } catch {
     return state
   }
+}
+
+/** A hand-over the driver keeps a verdict on. */
+export interface WatchedHandOver<T> {
+  /** The copy to pass to the game. */
+  readonly copy: T
+  /** True once the call has written onto the copy it was given. */
+  mutated(): boolean
+}
+
+/**
+ * A hand-over whose copy the driver also *watches*: it stringifies the value it
+ * handed over and compares after the call returns, so the verdict on "did this
+ * call mutate its input?" is produced at the seam where the state changed
+ * hands.
+ *
+ * This is what makes the verdict depth-independent. `reducer-purity` used to be
+ * the sole detector of an impure `applyAction` and it re-probed a *stride
+ * sample* of four steps per run, so a reducer that writes onto its input only
+ * in some branches was invisible whenever the branch fired at a step index off
+ * that lattice — 3 of tic-tac-toe's 9 depths, on every run, forever (PER-275).
+ * The driver already clones for every such call, so watching that copy costs
+ * one extra `stableStringify` per call and no second clone, and it covers every
+ * call at every depth instead of four per run.
+ *
+ * The fallback case (a state `structuredClone` cannot copy, so `handOver`
+ * returns the retained object) still gets a correct verdict: the baseline is
+ * read before the call either way, so a call that writes onto what it was given
+ * is still caught. That state's own problem is reported by
+ * `serialization-round-trip`.
+ */
+function watchedHandOver<T>(state: T): WatchedHandOver<T> {
+  const copy = handOver(state)
+  const baseline = stableStringify(copy)
+  return { copy, mutated: () => stableStringify(copy) !== baseline }
 }
 
 export interface ClockOptions {
@@ -150,6 +191,17 @@ export interface PlayoutStep<TState, TAction, TEvent extends GameEvent> {
    */
   readonly before: TState
   readonly after: TState
+  /**
+   * The pure calls that wrote onto the copy the driver handed them during this
+   * step, in call order. Empty for a conforming game.
+   *
+   * `reducer-purity` reads this for **every** step rather than re-probing a
+   * stride sample of four of them, which is what makes a conditional mutation
+   * visible at every depth (PER-275). The driver is also the only place that
+   * *can* carry this verdict: by the time a check runs, the copy the game was
+   * handed has been discarded.
+   */
+  readonly mutatedBy: readonly PureCall[]
   readonly events: readonly TEvent[]
   readonly timers: readonly TimerCommand[]
 }
@@ -308,15 +360,15 @@ export function playout<TState, TAction, TSettings, TEvent extends GameEvent>(
 
     const ctx = contextAt(context, sequence)
     const before = state
-    const applied = run(() =>
-      server.applyAction(ctx, handOver(before), chosen.seatId, chosen.action),
-    )
+    const given = watchedHandOver(before)
+    const applied = run(() => server.applyAction(ctx, given.copy, chosen.seatId, chosen.action))
     steps.push({
       sequence,
       seatId: chosen.seatId,
       action: chosen.action,
       before,
       after: applied.state,
+      mutatedBy: given.mutated() ? ['applyAction'] : [],
       events: applied.events,
       timers: applied.timers ?? [],
     })

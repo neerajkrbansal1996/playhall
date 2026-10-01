@@ -142,6 +142,31 @@ export function checkDeterminism<
   return recorder
 }
 
+/**
+ * What this check does and does not claim.
+ *
+ * **Claimed:** `validateAction`, `applyAction` and `getViewFor` do not mutate
+ * the state they are given — that is the title, and it is the contract
+ * `apps/realtime` relies on when it hands a live room's state to a game module
+ * and then keeps using its own copy.
+ *
+ * **Not claimed: `getResult` and `getLegalActions`.** The driver calls both of
+ * them once per loop iteration and deliberately hands them the *retained*
+ * object rather than a copy (`handOver` in `driver.ts` explains why). An impure
+ * one is therefore not invisible — it is reported by `determinism` as
+ * *"replaying the action log did not reproduce the live states"*, because the
+ * scribble lands on the live state and the replay's states never see it. That
+ * message blames replay for a purity bug, and PER-275 measured it on the
+ * testkit's own tic-tac-toe (`mutants.test.ts` pins both shapes so this
+ * paragraph cannot rot).
+ *
+ * Bringing those two under the hand-over would widen what this check promises a
+ * game author, which is an SDK-contract-adjacent change and needs a CTO ADR
+ * first; it would also silence the signal entirely unless the verdict is
+ * recorded, because the mutation would land on a copy nobody reads. So the
+ * decision here is to document the boundary and pin the current behaviour, not
+ * to move it.
+ */
 export function checkReducerPurity<
   TState,
   TAction,
@@ -161,9 +186,38 @@ export function checkReducerPurity<
     return recorder
   }
 
-  // Sampling: purity is a property of the code, not of the position, so a
-  // handful of states per scenario finds a mutating reducer just as reliably
-  // as all of them and keeps the suite inside a CI budget.
+  // 1. The driver's own verdict on every call it handed a copy to.
+  //
+  // This is the half that does not sample. The driver watches the copy it hands
+  // `applyAction` on every step of every run, so a reducer that writes onto its
+  // input in *some* branches is caught at whatever depth the branch fires. The
+  // probe loop below cannot do that job: it re-ran four steps per run on a fixed
+  // stride, so 3 of tic-tac-toe's 9 depths were blind on every run, forever
+  // (PER-275).
+  //
+  // One assertion per run, not per step: a reducer that mutates on every step
+  // would otherwise emit hundreds of identical failures, and the count of
+  // affected steps belongs in `detail` rather than in the failure list.
+  for (const run of runs) {
+    const where = `${run.scenario.label} seed=${String(run.context.seed)}`
+    const impure = run.playout.steps.filter((step) => step.mutatedBy.length > 0)
+    const first = impure[0]
+    recorder.assert(first === undefined, () => ({
+      message: `${first?.mutatedBy.join(' and ') ?? 'a pure call'} mutated the state it was given instead of returning a new one`,
+      where: `${where}, sequence ${String(first?.sequence)}`,
+      detail: `${String(impure.length)} of ${String(run.playout.steps.length)} steps mutated their input; state as the platform handed it over: ${preview(first?.before)}`,
+    }))
+  }
+
+  // 2. Probes the driver does not make for itself.
+  //
+  // `validateAction` and `getViewFor` are not called once per step by the
+  // playout, so there is no hand-over to watch and the check has to call them.
+  // Those two are still a stride sample — `maxStepsPerPlayout` is 500 and
+  // `getViewFor` is probed once per viewer kind, so probing every step is a
+  // budget decision rather than a free one. The blindness this leaves is
+  // narrower than PER-275's: it needs a game whose `validateAction` or
+  // `getViewFor` mutates only at some depths.
   for (const run of runs.slice(0, 8)) {
     const where = `${run.scenario.label} seed=${String(run.context.seed)}`
     for (const step of sample(run.playout.steps, 4)) {
@@ -188,13 +242,20 @@ export function checkReducerPurity<
         where,
       }))
 
+      // `applyAction` is probed here as well as watched above, and the overlap
+      // is not redundant: the driver watches the *first* call for each step,
+      // this probe is a *second* application of the same step. A reducer that
+      // is pure until it is called twice with the same state — a memo written
+      // on a cache hit rather than a miss — is only visible to the probe. The
+      // clone is needed for the equality assertion anyway, so the extra cost is
+      // one `stableStringify`.
       const probe = detachedClone(step.before)
       const applied = prep.guard(() =>
         server.applyAction(contextAt(run.context, step.sequence), probe, step.seatId, step.action),
       )
       recorder.assert(stableStringify(probe) === original, () => ({
         message: 'applyAction mutated the state it was given instead of returning a new one',
-        where,
+        where: `${where}, on a repeat application of sequence ${String(step.sequence)}`,
         detail: `before: ${preview(step.before)}`,
       }))
       recorder.assert(deepEqual(applied.state, step.after), () => ({

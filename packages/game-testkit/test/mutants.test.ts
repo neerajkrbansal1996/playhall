@@ -268,6 +268,92 @@ describe('determinism', () => {
     expect(purityMessages(report)).not.toContain('applyAction mutated')
   })
 
+  /**
+   * PER-275: the residual PER-269 left behind.
+   *
+   * `reducer-purity` used to be the sole detector of an impure `applyAction`,
+   * and it re-probed a **deterministic stride sample** of four steps per run
+   * (indices `0, ⌊n/4⌋, 2⌊n/4⌋, …`). A reducer that writes onto its input only
+   * in *some* branches was therefore invisible to the whole suite whenever the
+   * branch fired at a step index off that lattice. Measured on this subject
+   * before the fix: depths 5, 7 and 8 reported `[]` — three of nine, on every
+   * run, forever, because the stride is deterministic.
+   *
+   * For tic-tac-toe `state.moveCount` *is* the step index, so gating the mutant
+   * on it sweeps the gate across every depth a playout reaches. `fired` is
+   * asserted non-zero so no row can pass vacuously — a mutant whose branch
+   * never ran would otherwise look like a depth the gate covers.
+   */
+  it('catches a conditional input mutation at every depth it can fire at', () => {
+    const DEPTHS = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const
+
+    for (const depth of DEPTHS) {
+      let fired = 0
+      const report = mutateTicTacToe({
+        applyAction: (ctx, state, seatId, action) => {
+          if (state.moveCount === depth) {
+            fired += 1
+            // The PER-269 shape — idempotent, JSON-safe — but in one branch.
+            ;(state as unknown as Record<string, unknown>).memo = 'analysed'
+          }
+          return ticTacToeSubject.server.applyAction(ctx, state, seatId, action)
+        },
+      })
+
+      expect(
+        fired,
+        `the mutant never fired at depth ${depth}, so the row is vacuous`,
+      ).toBeGreaterThan(0)
+      // Equality, not `toContain`: the fix must not buy depth coverage by
+      // reintroducing the mis-attribution PER-269 removed.
+      expect(failedChecks(report), `depth ${depth} (fired ${fired} times)`).toEqual([
+        'reducer-purity',
+      ])
+      expect(purityMessages(report)).toContain('applyAction mutated the state it was given')
+    }
+  })
+
+  /**
+   * PER-275's second finding, pinned rather than fixed.
+   *
+   * `getResult` and `getLegalActions` are handed the **retained** state, not a
+   * copy, and `reducer-purity`'s title does not claim them. An impure one is
+   * not silent — it surfaces as a `determinism` failure, because the scribble
+   * lands on the live state and the replay never sees it. That is the wrong
+   * blame for a purity bug, and widening the check to claim these two is an
+   * SDK-contract-adjacent change that needs a CTO ADR first.
+   *
+   * So this test exists to stop the documented boundary (see
+   * `checkReducerPurity`'s doc comment) from rotting silently: if a later change
+   * brings either method under the hand-over, this test fails and the
+   * documentation has to be updated with it.
+   */
+  it('reports an impure getResult or getLegalActions as determinism, not purity', () => {
+    const memoise = (state: TicTacToeState): TicTacToeState => {
+      ;(state as unknown as Record<string, unknown>).memo = 'analysed'
+      return state
+    }
+
+    const viaGetResult = mutateTicTacToe({
+      getResult: (state) => ticTacToeSubject.server.getResult(memoise(state)),
+    })
+    expect(failedChecks(viaGetResult)).toEqual(['determinism'])
+
+    const viaGetLegalActions = mutateTicTacToe({
+      getLegalActions: (state, seatId) =>
+        ticTacToeSubject.server.getLegalActions?.(memoise(state), seatId) ?? [],
+    })
+    expect(failedChecks(viaGetLegalActions)).toEqual(['determinism'])
+
+    // The mis-attribution itself, quoted. This is the message a game author
+    // would be sent chasing their replay path for a purity bug.
+    const message = viaGetResult.checks
+      .find((check) => check.id === 'determinism')
+      ?.failures.map((failure) => failure.message)
+      .join('\n')
+    expect(message).toContain('replaying the action log did not reproduce the live states')
+  })
+
   it('catches a non-deterministic getViewFor', () => {
     let calls = 0
     const report = mutateTicTacToe({
