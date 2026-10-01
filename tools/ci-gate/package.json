@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Behaviour tests for the scripts that decide whether CI gated a change. The gate runner: a PENDING gate passes, CI_STRICT_GATES=1 turns it into a failure, a live gate whose script went missing fails regardless, the registry matches the workflow. The push audit: a commit must have arrived via a merged PR, not merely belong to one, and a force-push to `main` always fails.",
+  "description": "Behaviour tests for the scripts that decide whether CI gated a change. The gate runner: a PENDING gate passes, CI_STRICT_GATES=1 turns it into a failure, a live gate whose script went missing fails regardless, the registry matches the workflow. The push audit: a commit must have arrived via a merged PR, not merely belong to one, and a force-push to `main` always fails. The bundle gate: it scans the root layout's own chunk and not just the page entries, and its zod fingerprint self-check fails closed on a lineage it has no marker for or an `exports` subpath it cannot resolve, rather than skipping it and still reporting verified.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

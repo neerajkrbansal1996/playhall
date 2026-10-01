@@ -154,6 +154,31 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs boundaries
 
+  # The companion to `boundaries`, and deliberately separate from it (PER-126).
+  # `boundaries` reads the *import graph*; this reads the *emitted bytes*. They
+  # catch different regressions: a type-only import of a zod-backed module is a
+  # graph edge that ships nothing, while a client component that *calls* something
+  # zod-backed ships 79.6 kB through an import that is already legal — so there is
+  # no new edge for dependency-cruiser to object to. Only a build can tell those
+  # apart, so this is the job that runs `next build`.
+  #
+  # Deliberately NOT folded into `e2e`, even though `e2e`'s Playwright webServer
+  # builds `apps/web` too and this duplicates that build (PER-126 review). Two
+  # reasons: `e2e` is the long pole at ~2 min, so folding would delay the zod
+  # verdict from +46 s to +2 min for no wall-clock saving (these run in parallel);
+  # and `e2e`'s build does not set NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1, so
+  # /dev/settings-form would be absent from the manifest and the gate would
+  # hard-fail. Keeping the builds independent also stops a flaky browser test from
+  # masking a bundle regression.
+  bundle:
+    name: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs bundle
+
   unit:
     name: unit
     runs-on: ubuntu-latest
@@ -272,10 +297,46 @@ jobs:
     env:
       DATABASE_URL: postgresql://playhall:playhall@localhost:5432/playhall
       REDIS_URL: redis://localhost:6379
-      NODE_ENV: test
+      # Not `test`: the gate's `webServer` runs `next build`, and NODE_ENV=test
+      # makes Next warn and can change which deps are available to the build.
+      # Playwright's own env does not need it, and nothing in `e2e/` reads it.
+      NODE_ENV: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+
+      # One install, two browsers (PER-131). `--with-deps` is the part that needs
+      # to be a workflow step rather than living inside the pnpm script: it runs
+      # `apt-get` for the shared libraries WebKit and Chromium need on a bare
+      # ubuntu runner, which is a no-op on a developer's machine and wrong to run
+      # there. The version comes from the lockfile, so the cache key cannot drift
+      # from the Playwright that will use it — a stale key is how a suite ends up
+      # silently downloading browsers on every run, or worse, running the wrong
+      # ones.
+      - name: Resolve the Playwright version
+        id: playwright
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install Playwright browsers
+        # On a cache hit the browsers are already there, but `--with-deps`
+        # installs OS packages that are *not* in the cache path, so the deps half
+        # always has to run.
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm exec playwright install-deps chromium webkit
+          else
+            pnpm exec playwright install --with-deps chromium webkit
+          fi
+
       - run: node scripts/ci/gate.mjs e2e
       - name: Upload Playwright report
         if: always()
@@ -306,6 +367,7 @@ jobs:
         format,
         typecheck,
         boundaries,
+        bundle,
         unit,
         coverage,
         testkit,

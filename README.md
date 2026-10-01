@@ -96,7 +96,17 @@ docs/adr/           Architecture decision records.
 3. **Server-authoritative.** The server is the single source of truth for every action,
    position, timer and result. Never trust a client-supplied one.
 4. **Every message is validated.** `zod` for every JSON message and HTTP input.
-5. **Conventional commits.** `commitlint` runs on `commit-msg`; see `CHANGELOG.md`.
+5. **One move, one spelling.** An action a game accepts as legal must be byte-identical
+   to one `getLegalActions` offered at that state — _accepted ⊆ offered_, not merely
+   _offered ⊆ accepted_. A field your engine tolerates and then ignores (a `promotion`
+   letter on a move that cannot promote) is a second wire spelling for a move that
+   already has one: reject it in `validateAction` rather than listing both. The
+   real-time form is `inputSchema` plus a canonically round-tripping `inputCodec`.
+   Only the game knows its own canonical spelling, so this one is on the game author.
+   The conformance suite catches a subset, and
+   [ADR-0012](./docs/adr/0012-accepted-subset-of-offered.md)
+   states exactly which subset, and which it provably cannot.
+6. **Conventional commits.** `commitlint` runs on `commit-msg`; see `CHANGELOG.md`.
 
 ## Licences
 

@@ -252,9 +252,41 @@ proves the two agree.
   PER-115). `.` still re-exports all three, so server-side callers are unaffected. The
   `no-zod-in-pure-settings` boundary rule keeps the split honest, because nothing else would fail if
   it were reversed.
+- **The packaging claim is asserted against the build, not just the graph.** The `bundle` CI gate
+  (`pnpm check:bundle-zod-free`, [PER-126](/PER/issues/PER-126)) builds `apps/web` and fails if a
+  zod fingerprint appears in any client chunk that `app-build-manifest.json` attributes to the
+  create-lobby route or to the landing page. This is a **build assertion**, not a boundary rule, and
+  it is deliberately not a byte budget: the property is binary and a threshold would drift.
+  `no-zod-in-pure-settings` above can only see import edges, which is a weaker statement than it
+  looks — measurement on [PER-126](/PER/issues/PER-126) found that with `sideEffects: false` in
+  place, production tree-shaking already drops the schemas even when a client component imports a
+  _value_ from the `.` barrel, and even when `apps/web`'s settings-form barrel re-exports
+  `./normalize` as a value. Both were reintroduced and the route stayed at 12.1 kB. What does ship
+  zod is a client component that **calls** something zod-backed. The gate exists to catch the day
+  that optimisation stops holding, because nothing else verifies `sideEffects: false` is true.
+  **The `./settings-form` subpath nevertheless stays normative, and `no-zod-in-pure-settings` stays
+  `error`.** Tree-shaking absorbing the other two vectors is one bundler's behaviour under one set
+  of flags, and `sideEffects: false` is a claim the SDK makes about itself; neither binds a consumer
+  who bundles with Turbopack, with Vite in the testkit, or with whatever a third-party game author
+  uses. Measuring that webpack currently compensates for a barrel import is not licence to import
+  the schemas from the barrel.
+- **Why one marker per zod lineage is sufficient.** The gate fingerprints zod by its issue-code
+  string literals, and the two v3 codes it matches both sit inside a single
+  `util.arrayToEnum([...])` array literal in `v3/ZodError.js`, which a bundler cannot partially
+  shake — so any shipped v3 zod carries both or neither. That closes the "zod is present but the
+  code table was shaken out" mode without extra work. It does _not_ close variants:
+  `zod@3.25.76` ships v3 and v4 lineages side by side and v4 renamed every code, so the gate carries
+  a v4 fingerprint (`invalid_element`) too and asserts marker coverage **per lineage derived from
+  zod's `exports` map**, not per package. A future lineage with no fingerprint is a hard failure
+  rather than a green gate ([PER-126](/PER/issues/PER-126) review).
 
 ## Revisit triggers
 
+- **`apps/web` moves off webpack** — to `next build --turbopack`, or to any other bundler. That is an
+  ADR-0007 revisit, not just a CI chore: `app-build-manifest.json` is the webpack build's artefact,
+  so the `bundle` gate stops being able to read the client graph, _and_ the `sideEffects: false`
+  tree-shaking behaviour the gate verifies is webpack's, so the measurement above stops holding at
+  the same moment. Both the enforcement and the finding it rests on have to be re-derived together.
 - A game needs a control that is not a select, a number or a toggle — most likely a
   multi-select (map pool, enabled roles). That is a `multiselect` kind with array values, which
   breaks the flat-scalar rule, so it is a v2 descriptor and a fresh ADR.

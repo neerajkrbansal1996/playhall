@@ -5,6 +5,8 @@
 - **Author:** CTO
 - **Milestone:** M2
 - **Issue:** [PER-42](/PER/issues/PER-42) (raised from [PER-23](/PER/issues/PER-23), PR #7)
+- **Amended:** 2026-09-30 (rev 1.1 — cross-reference to
+  [ADR-0010](./0010-timer-driven-unrecorded-endings.md); the decision above is unchanged)
 
 ## Context
 
@@ -219,6 +221,14 @@ there is no latency or byte number to cite. The checkable claims:
 > They weaken the gate; they do not change the contract above. In particular a game that
 > declares no `abortScenarios` reports `passed` without ever producing empty standings, so a
 > green check is not yet proof that §1 was exercised.
+>
+> **Rev 1.1 (2026-09-30).** A third hole — a game whose unrecorded ending fires from `onTimer`
+> with no player action could not be declared at all — is decided in
+> [ADR-0010](./0010-timer-driven-unrecorded-endings.md) out of
+> [PER-142](/PER/issues/PER-142): `abortScenarios` becomes a union discriminated on `trigger`,
+> and the conformance driver reaches a timer-driven ending only by firing a timer the game
+> itself asked for. That is a change to the **harness**, not to §1–§4 above, which stand
+> unamended. `MatchResult`, `UNRECORDED_RESULT_REASONS` and `detail` are untouched.
 
 ## Consequences
 

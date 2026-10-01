@@ -41,6 +41,10 @@
  */
 
 export { SettingsForm, type SettingsFormProps } from './settings-form'
+// The derivation point for the M2 E2E observable contract's `setting-<key>`
+// selectors. Exported so a spec or a page can name the selector by construction
+// rather than by hand-typing a string that nothing checks.
+export { fieldTestAttributes, fieldIds, type FieldIds } from './field-shell'
 export { SettingsFieldRow, type SettingsFieldRowProps } from './settings-field'
 export { PresetQuickStart, type PresetQuickStartProps } from './preset-quick-start'
 export { PresetPicker, type PresetPickerProps } from './preset-picker'

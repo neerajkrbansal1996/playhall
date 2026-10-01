@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "Typecheck for the Playwright suite (PER-131).",
+    "",
+    "It needs its own project because `e2e/` belongs to no workspace package, so",
+    "`pnpm -r typecheck` never looks at it — and Playwright transpiles specs with",
+    "esbuild, which strips types without checking them. Without this, a spec could",
+    "assert on a field that does not exist and the `e2e` gate would still be green:",
+    "a gate whose own source is unchecked is a weak gate.",
+    "",
+    "`noEmit` and not `composite`, so it is a checker rather than a build input and",
+    "nothing in the solution file has to reference it."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // The in-page half of `e2e/lib/overflow.ts` is serialised into the browser by
+    // `page.evaluate`, so it reads `document`, `Element` and `DOMRect`. Those come
+    // from the DOM lib, not from `@types/node`.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false
+  },
+  "include": ["e2e/**/*.ts", "playwright.config.ts"]
+}

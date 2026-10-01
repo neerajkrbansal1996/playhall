@@ -14,9 +14,20 @@
   measurement**: the board read billing on 2026-09-30, the account is on **Free**, and Pro was
   declined ([PER-83](/PER/issues/PER-83)) — so branch protection is unavailable by plan _and_ by
   decision, which is now a premise of this ADR rather than an assumption in it.
+- **Amended:** 2026-09-30 (rev 3) — **Decision 2's stated scope was wrong, and the wrong text
+  produced the same bug twice.** Rev 1 wrote the compensating control as "a CI workflow triggered
+  on `push` to `main`". The control that exists audits **two** deploy-bearing refs: commits
+  reaching `main`, and _every tag, on any event_. The tag half is what makes Decision 5's
+  containment a control rather than a convention, and rev 1 never wrote it down — so two separate
+  edits narrowed the script back to `push`-to-`main` and disarmed the release audit while CI stayed
+  green. Rev 3 adds **Decision 8** (the scope is deploy-bearing refs, and a tag is never exempt)
+  and **Decision 9** (the predicate is _arrival_ via a merged PR, tested by ancestry against
+  `merge_commit_sha` — not PR membership, which reported a commit that is not on `main` as having
+  landed), and corrects Decision 2 in place. Decisions 1 and 3–7 stand unchanged. New section:
+  [Rev 3 — the audit's scope](#rev-3--the-audits-scope).
 - **Author:** CTO
 - **Milestone:** M0
-- **Issue:** [PER-3](/PER/issues/PER-3) (arising from [PER-35](/PER/issues/PER-35), implemented in [PER-6](/PER/issues/PER-6)); rev 2 on [PER-78](/PER/issues/PER-78)
+- **Issue:** [PER-3](/PER/issues/PER-3) (arising from [PER-35](/PER/issues/PER-35), implemented in [PER-6](/PER/issues/PER-6)); rev 2 on [PER-78](/PER/issues/PER-78); rev 3 on [PER-107](/PER/issues/PER-107)
 
 ## Context
 
@@ -63,11 +74,21 @@ Revisited at M5 (see triggers). Nobody should spend further time looking for a f
 the three facts above are the answer.
 
 **2. The gate moves from prevention to detection, and detection must be mechanical.** Add a CI
-workflow triggered on `push` to `main` that fails when the pushed commit is not reachable from
-a merged pull request. A direct push therefore turns `main` red within a minute and is visible
-in the commit list forever. This does not stop the push — nothing available to us does — but it
-converts a silent policy violation into a loud one. Implemented in
-[PER-6](/PER/issues/PER-6).
+job that fails when the audited commit is not reachable from a merged pull request. A direct
+push therefore turns `main` red within a minute and is visible in the commit list forever. This
+does not stop the push — nothing available to us does — but it converts a silent policy violation
+into a loud one. Implemented in [PER-6](/PER/issues/PER-6).
+
+> **Rev 3 —** rev 1 wrote this as "a CI workflow triggered on `push` to `main`", and that phrase
+> is the defect. It describes _one_ of the two refs the control has to cover, and it reads as an
+> exhaustive scope. **Decision 8** states the scope properly: commits reaching `main`, plus every
+> tag. Treat the sentence above as the _purpose_ of the control and Decision 8 as its _scope_ —
+> the wording in this bullet is not a licence to narrow the trigger.
+>
+> "Reachable from a merged pull request" is loose in the other direction, and it was implemented
+> loosely: a commit that merely _belongs_ to a merged PR passes that reading even when a squash
+> discarded it and it never reached the branch. **Decision 9** states the predicate properly —
+> the commit must be the PR's `merge_commit_sha` or an ancestor of it.
 
 **3. CI runs on `pull_request` for every PR regardless of the fact that it cannot be
 _required_.** "Green CI" stays observable even when it is not mandatory. An engineer merging a
@@ -88,6 +109,13 @@ nit.
 **5. Releases are cut from tags, never from "whatever is on `main`".** This is the containment:
 an unreviewed commit reaching `main` cannot become a release without a human cutting a tag.
 Without it, the blast radius of one bad push is production.
+
+> **Rev 3 —** "a human cutting a tag" is a step, not a control. On its own this decision says only
+> that shipping an unreviewed commit takes one deliberate act by someone who may not know the
+> commit is unreviewed — which is the "trust and a written process doc, with no mechanism"
+> alternative this ADR rejected two sections below. What makes Decision 5 a containment is that
+> the tag push is **itself audited** (Decision 8). Rev 1 built that in `release.yml` and did not
+> record it here, which is how the tag half came to be treated as optional.
 
 ## Alternatives considered
 
@@ -416,3 +444,249 @@ and Platform Engineer has already built the pipeline, so they switch on with no 
 protection is available. Required _reviews_ additionally need an identity. When the trigger above
 fires, adopt required status checks without waiting on the identity question — the cheap half should
 never queue behind the expensive one.
+
+## Rev 3 — the audit's scope
+
+Rev 2 settled _who_ can record a verdict. Rev 3 settles two things about the compensating control
+itself: _which commits it looks at_ (Decision 8), because rev 1 wrote that down wrongly and the
+wrong text has now caused two defects; and _what a pass actually asserts_ (Decision 9), because the
+answer turned out not to be the one the check's name implies.
+
+### What we found
+
+`scripts/ci/assert-merged-via-pr.mjs` is called from two workflows, and they are not symmetric:
+
+| Workflow      | Triggers                                  | What `push-audit` guards                                                    |
+| ------------- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| `main.yml`    | `push` to `main`, `workflow_dispatch`     | `staging-web`, `staging-realtime` (`needs: [gates, push-audit]`)            |
+| `release.yml` | `push` of a `v*` tag, `workflow_dispatch` | `deploy web`, `deploy realtime` (`needs: [release-ref, gates, push-audit]`) |
+
+Rev 1 described the control as "a CI workflow triggered on `push` to `main`". That sentence is
+true of the first row and silently false of the second — and the second row is production.
+
+The script originally had no event or ref guard at all, which made `main` safe (it audited
+everything) and made `workflow_dispatch` fail **by construction**: a dispatched run has no merged
+PR to be reachable from, so `push-audit` failed, so staging never deployed. Dispatch is the only
+way to exercise a staging deploy without landing a commit on `main`, which is the M0 AC2 path, so
+the over-broad check blocked the acceptance criterion it was supposed to sit alongside.
+
+The obvious repair is the dangerous one, and it was written twice:
+
+1. In the first draft of PR [#43](https://github.com/neerajkrbansal1996/playhall/pull/43), as
+   code — `eventName === 'push' && ref === 'refs/heads/main'` as the _only_ audited case.
+2. After the code was fixed, in that same file's docblock — "Scope: pushes to `main` only. Any
+   other event or ref is reported as not applicable and passes" — which contradicted the code
+   forty lines below it. Caught in review and fixed at `d79f02e` before merge.
+
+Both are the same mistake, and neither is a typo: **a `v*` tag push is a `push` event on
+`refs/tags/v1.2.3`, not on `refs/heads/main`.** Under the narrow rule, `release.yml`'s
+`push-audit` prints "not applicable", exits 0, and stays green — while its step is still named
+_"Assert the tagged commit arrived via a merged PR"_. Production would deploy with no audit and a
+green check, restoring in full the bypass the release-side audit exists to close:
+
+> push straight to `main` → ignore the red `main.yml` audit → tag that commit → ship it.
+
+Nothing would have surfaced it except a real production cut. The important part is not that an
+engineer made the mistake; it is that **the ADR text told them to**. An editor who reads Decision 2,
+sees "push to `main`", and tightens the guard to match has done the diligent thing and introduced a
+production hole. That is a defect in this document, which is why rev 3 exists.
+
+`workflow_dispatch` on a tag is the second route in, and it is not hypothetical: `release.yml`
+deliberately keeps `workflow_dispatch` (with no `inputs:`, so the ref comes from GitHub's own
+picker and `release-ref` rejects a non-tag). So an event-name test alone can never be sufficient.
+
+### Decision 8 — the audit's scope is deploy-bearing refs, and a tag is never exempt
+
+**The audit runs on every ref that can cause a deploy, and on nothing else:**
+
+- a **`push` to `refs/heads/main`** — the staging path;
+- **any ref under `refs/tags/`, on any event whatsoever** — the production path.
+
+Everything else (`workflow_dispatch` or `schedule` on a branch, a push to a feature branch) is
+reported as not applicable and **passes**, because it deploys nothing and there is nothing to
+audit.
+
+Three properties of the implementation are part of the decision, not incidental:
+
+1. **The exemption lives inside the script, not in a job-level `if:`.** A skipped job skips its
+   dependents, and `staging-web`/`staging-realtime` are `needs: [gates, push-audit]` — so a
+   job-level condition would take staging down instead of exempting it. The job must run and pass.
+2. **A tag is audited whatever the event.** Never test the event name alone. The predicate on the
+   production side is `ref.startsWith('refs/tags/')`, full stop.
+3. **A missing `GITHUB_EVENT_NAME` or `GITHUB_REF` is a misconfiguration, not an exemption**
+   (exit 2). A control whose scope test cannot evaluate must not conclude "out of scope"; the same
+   principle already applies to an unreachable GitHub API, which exits 1 rather than passing.
+
+This is a scoping correction, not a weakening: the audited set now covers strictly more of the
+deploy path than rev 1's stated rule, and strictly less than the unguarded script's "every run".
+
+### Decision 9 — the predicate is arrival, not PR membership (the residual weakness, measured and closed)
+
+Decision 8 fixes _which commits_ are audited. It does not fix _what the audit can prove_, and that
+turned out to be the larger defect of the two. This section is kept as found-and-closed rather than
+rewritten to look clean, because the finding is the reusable part: the check's name and the
+question it actually answered had drifted apart, and nothing in a green pipeline says so.
+
+**What was wrong.** The check asked GitHub `commits/{sha}/pulls` and passed if any returned PR had
+a non-null `merged_at`. That answers **"does this commit belong to a merged PR?"** It does not
+answer **"did this commit reach this ref by merging that PR?"** — and under squash-merge the two
+come apart for every commit that sat on a merged PR's head branch and was thrown away by the
+squash. Measured on this very change (2026-09-30):
+
+```
+commit d79f02e  (head of PR #43 before the squash)
+  commits/d79f02e/pulls  ->  #43, merged_at 2026-09-30T11:13:39Z, merge_commit_sha 45aa812
+  merge-base --is-ancestor d79f02e origin/main  ->  NO, not on main
+```
+
+`d79f02e` is not on `main`, and the old predicate reported it as having landed via a reviewed PR.
+That is worse than an incomplete proof: it is a confident wrong answer about a commit's presence on
+the branch, from the one control this ADR offers in place of branch protection.
+
+**The decision: arrival, tested by ancestry.** A commit arrived via PR _p_
+exactly when it is `p.merge_commit_sha` or an ancestor of it. `merge_commit_sha` is already in the
+response the script fetches, and the ancestry question is one more call:
+`GET compare/{sha}...{merge_commit_sha}`, where `identical` or `ahead` means arrival. A merged
+association is now necessary but not sufficient. Measured against the live API, same repo, same
+day:
+
+| commit    | what it is                                       | `merge_commit_sha` | `compare` | on `main`? | verdict  |
+| --------- | ------------------------------------------------ | ------------------ | --------- | ---------- | -------- |
+| `45aa812` | the squash commit of PR #43                      | `45aa812`          | identical | yes        | **pass** |
+| `d79f02e` | head of PR #43 **before** its squash             | `45aa812`          | diverged  | **no**     | **fail** |
+| `ee460b0` | head of PR #56, merged as merge commit `1452723` | `1452723`          | ahead     | yes        | **pass** |
+
+**Why the comparison and not `merge_commit_sha === GITHUB_SHA`.** Rev 3 was drafted expecting the
+equality to be the fix once the repo settled on one merge method. It is not, and the third row is
+why. This repo allows squash, merge-commit **and** rebase merges, and under either of the latter
+two a PR puts several commits on the branch while only the tip equals `merge_commit_sha` — so
+`ee460b0`, a real commit that is on `main`, is one the equality rejects. The two candidate
+predicates therefore fail in opposite directions and not at equal cost: equality fails _closed on a
+correct landing_, which turns `main` red for a violation that did not happen and teaches the next
+reader that a red `push-audit` sometimes means nothing. A detection-only control has no authority
+except being believed, so a false failure is the one defect it cannot absorb. Ancestry's failures
+are all true ones.
+
+That also disposes of the merge-method question rev 3 left open, in the direction of **not** asking
+it: restricting the repo to squash-only in order to make a one-line predicate correct would buy a
+script simplification with a permanent constraint on how every future change lands — an expensive,
+hard-to-reverse choice paid for with a cheap one. **No change to the allowed merge methods is
+required, and none was made.**
+
+**The force-push path is now detected directly.** Rev 3 correctly bounded the weakness by noting it
+was not a free bypass: to put a squashed-away commit on `main` as-is, its parent must already be
+`main`'s tip, which after a squash it is not — so the residual path is a non-fast-forward push. The
+`push` payload's `forced` and `before` are now read, and a forced push to `main` fails the run
+**regardless of the PR verdict**, including on the root-commit exemption path that otherwise exits 0. It is reported as its own annotation rather than folded into the PR verdict, because it is a
+different fact with a different remedy: the arrival check says "this commit did not come from a
+PR"; this says "whatever was on `main` before is gone". An unreadable payload warns rather than
+failing — the arrival predicate independently catches the same path, since a force-pushed PR-head
+commit is not an ancestor of its PR's `merge_commit_sha`, so hard-failing on a missing payload
+would trade a real detection for a false one.
+
+**What the audit still does not prove: review.** Per Decision 4 there is no GitHub review record to
+check, so the audit proves a change went through a pull request, not that anyone approved it. Its
+success annotation says "arrived via merged PR" and never "reviewed", and that wording is
+load-bearing — this ADR's compensating control for CTO review is the Paperclip issue thread plus
+`pr-hygiene`'s mandatory link to it, not `push-audit`.
+
+Closed by [PER-130](/PER/issues/PER-130) (Platform Engineer), reviewed on
+[PER-137](/PER/issues/PER-137). Regression-tested in `tools/ci-gate/test/push-audit.test.ts`, 27
+cases, run by the `unit` gate — which is the other half of the finding, since this file's behaviour
+had already been silently narrowed twice with nothing guarding it.
+
+### Evidence (rev 3)
+
+- **Exemption matrix, 7/7**, with the deploy-bearing cases asserted to _fail closed_ (API
+  unreachable → exit 1) rather than merely "not exit early":
+
+  ```
+  workflow_dispatch on main (staging re-run)   exempt     exit 0
+  schedule on main                             exempt     exit 0
+  push to a feature branch                     exempt     exit 0
+  push to main                                 audit      exit 1  (fails closed)
+  push of a v* tag             -- PRODUCTION   audit      exit 1  (fails closed)
+  workflow_dispatch on a tag   -- PRODUCTION   audit      exit 1  (fails closed)
+  GITHUB_EVENT_NAME/REF unset                  misconfig  exit 2
+  ```
+
+- **Against the live GitHub API**, proving the tag path passes for the right reason rather than
+  vacuously:
+
+  ```
+  tag at a merged-PR commit    (d90858a)  ->  exit 0  passes
+  tag at a never-merged commit (45be4d2)  ->  exit 1  "not reachable from any merged pull request"
+  push to main, merged commit  (d90858a)  ->  exit 0  passes
+  ```
+
+- Landed as `45aa812` on `main` (PR #43), reviewed on [PER-107](/PER/issues/PER-107). The
+  docblock contradiction was fixed in review at `d79f02e` before merge.
+
+- **Measurement owed → discharged, with one honest remainder.** Rev 3 was drafted with the two
+  blocks above hand-run and nothing re-running them, which it recorded as accepted for M0 and not
+  to survive M1. That is now closed inside rev 3: `tools/ci-gate/test/push-audit.test.ts` (27
+  cases, run by the `unit` gate) covers the arrival predicate, the force-push path, fail-closed on
+  an unreachable API, the root-commit exemption, the `exit 2` misconfigurations, and both
+  deploy-bearing rows of the matrix including a tag on `workflow_dispatch`. The harness is
+  `tools/ci-gate`, not a new runner under `scripts/` — it copies the real script and drives it
+  through `GITHUB_API_URL` against a loopback server, so **no test seam was added to the
+  production script**.
+
+  The remainder, stated rather than glossed: the three _exempt_ rows (`workflow_dispatch` on
+  `main`, `schedule` on `main`, a push to a feature branch) are asserted at the branch level by one
+  case, not row by row, because all four exempt inputs reach the same `!isTag && !isPushToMain`
+  predicate. That is adequate for a boolean but it is not the matrix, and if Decision 8's ref list
+  ever grows a second clause it stops being adequate.
+
+- **Mutation-tested**, which is the part that makes the suite worth citing: reverting the predicate
+  to membership-only turns 6 cases red, including both measured shas. The cases guard the
+  predicate rather than restate the implementation.
+
+### Consequences (rev 3)
+
+**Easier**
+
+- Staging is reachable by `workflow_dispatch`, which is the only way to exercise a deploy without
+  landing a commit on `main`. M0 AC2 has a path that does not require a push.
+- The scope is now written down once, in Decision 8, in the same terms the code uses.
+
+**Harder, and we should say so plainly**
+
+- **The failure mode inverted.** Before, the audit fired when it should not have — loudly, and
+  staging stayed broken until someone looked. Now it can fail to fire when it should — silently,
+  and green. The second is strictly worse to operate, and it is the cost of making the exemption
+  exist at all.
+- **The exemption is a widenable surface.** Every new event or ref added to `main.yml` or
+  `release.yml` implicitly asks "is this deploy-bearing?", and answering it wrongly is a green
+  build. Decision 8's revisit trigger below is the compensating habit; `tools/ci-gate` is the
+  compensating mechanism.
+- **The audit proves arrival via a pull request. It does not prove review** — see Decision 9 above.
+  Anyone citing this check as proof that everything on `main` was _reviewed_ is overstating it, and
+  this paragraph exists to be quoted back at them. What it does now prove is stronger than rev 3
+  shipped with, and still narrower than its name suggests to a reader in a hurry.
+- **One more API call per audited commit**, in the common case zero: equality with
+  `merge_commit_sha` is tested before the comparison, so the squash and merge commits themselves —
+  nearly every commit on `main` — cost nothing extra. The comparison is reached only for a
+  non-tip commit of a multi-commit merge.
+
+### Revisit triggers (rev 3)
+
+- **Any new trigger on `main.yml` or `release.yml`** → classify it as deploy-bearing or not,
+  in the script _and_ in Decision 8. A new trigger with no entry here is an unanswered question,
+  not a default exemption.
+- **A second deploy target, or a deploy from a branch other than `main`** → Decision 8's ref list
+  is enumerated, not inferred; extend it explicitly.
+- **`release.yml` stops calling `push-audit`, or `push-audit` leaves a deploy job's `needs:`** →
+  the tag half of the control is gone and Decision 5 reverts to a convention. Treat as an incident.
+- **Decision 8's ref list grows a second clause** → the three exempt rows named in the Evidence
+  remainder stop being covered by one branch-level case and need asserting individually.
+- **A rebase merge actually happens in this repo** → the `ahead` path is covered by fixture and by
+  the measured merge-commit case, but no rebase-merged commit exists here to measure. Re-measure
+  rather than assume the third row generalises.
+- **Anyone proposes restricting the repo's merge methods to make `push-audit` simpler** → Decision
+  9 already answered this: the ancestry test is correct under all three methods, and the constraint
+  buys nothing. Reopen only with a defect the ancestry test gets wrong, not with a preference.
+- **`compare` becomes unreliable or rate-limited** → the arrival predicate depends on a second API
+  call, and an unanswerable comparison is treated as a failure. If that starts producing false reds
+  the fix is to scope the failure to "no other associated PR proved arrival", not to loosen the
+  predicate back to membership.

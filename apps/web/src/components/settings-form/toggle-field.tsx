@@ -5,7 +5,7 @@ import type { SettingsValue, ToggleField as ToggleFieldDescriptor } from '@playh
 
 import { cn } from '@/lib/utils'
 
-import { fieldIds } from './field-shell'
+import { fieldIds, fieldTestAttributes } from './field-shell'
 
 export interface ToggleFieldProps {
   readonly field: ToggleFieldDescriptor
@@ -43,7 +43,10 @@ export function ToggleField({
   return (
     <div
       data-slot="settings-field"
-      data-field-key={field.key}
+      // Same attributes `FieldShell` emits, because this kind opts out of the
+      // shell's layout (see above) but not out of the test contract. Both call
+      // the same helper so a toggle can never drift from every other field.
+      {...fieldTestAttributes(field.key, value)}
       className="flex min-w-0 flex-col gap-2"
     >
       <div className="flex items-center justify-between gap-4">
