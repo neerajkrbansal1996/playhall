@@ -30,7 +30,9 @@
  *
  * Two rows did *not* survive the mechanism swap, and both are pinned below as
  * what they are rather than deleted: the ambiguous-query family, which this
- * branch fixes differently, and the codeless link, which it does not fix at all.
+ * branch fixes differently, and the codeless link, which PER-242 did not fix at
+ * all and [PER-277](/PER/issues/PER-277) fixes without reading a URL — see that
+ * block for the rule and for the two candidate rules it rejects.
  */
 
 import { cleanup, render, screen } from '@testing-library/react'
@@ -44,6 +46,13 @@ import { testIds } from '@/lib/testids'
 
 const OVERFLOW = new RegExp(`only the first ${ROOM_CODE_LENGTH} characters were used`, 'i')
 const AMBIGUOUS = new RegExp(`more than one ${ROOM_CODE_LENGTH}-character code`, 'i')
+/**
+ * Not interpolated, unlike the two above, because the point of this copy is that
+ * it does **not** restate the length — the hint above the field already gives it
+ * ([PER-225](/PER/issues/PER-225)). `testids.test.tsx` pins the literal in full,
+ * as the copy decision it is.
+ */
+const NO_ROOM_CODE = /no room code in that paste/i
 
 async function pasteInto(user: ReturnType<typeof userEvent.setup>, text: string) {
   await user.click(screen.getByTestId(testIds.joinCodeInput))
@@ -235,32 +244,48 @@ describe('a link with a second six-character value in the query', () => {
 })
 
 /**
- * **The one place the ruled rule is worse than #130's, pinned rather than
- * papered over.**
+ * A link with **no room code in it** empties the field
+ * ([PER-277](/PER/issues/PER-277)).
  *
- * A link with no six-character run in it has no candidate, so extraction
- * declines and the cap runs — leaving the first six alphabet characters of the
- * URL, which for a schemed link is always the scheme plus one: `HTTPSP`. That is
- * a value `isValidRoomCode` accepts, so nothing downstream can tell it is not a
- * code, and it is not a thing the player ever saw.
+ * No six-run means no candidate, so extraction declines and the caller's
+ * fallback — normalise, then keep six — runs on the whole URL. For a schemed
+ * link that is always the scheme plus one character, whatever the host, because
+ * `HTTPS` is a five-run: `HTTPSP`. A value `isValidRoomCode` accepts, so nothing
+ * downstream could tell it was not a code, and not a thing the player ever saw.
  *
- * #130 cleared the field for this family, which it could do because it knew it
- * was looking at a URL. The ruled rule cannot: it has no way to distinguish
- * `https://playhall.app/play/chess` from `Secret code ABC2345`, where the cap's
- * answer *is* close to the player's intent and clearing the field would destroy
- * [PER-214](/PER/issues/PER-214)'s announcement. Clearing on every declined
- * overflow would break the `ABC2345` row in
- * `join-code-prose-paste.test.tsx`; clearing only for URLs requires the URL
- * parsing the ruling declined.
+ * This was never the silent-wrong-value class PER-242 fixed — the overflow note
+ * fired, so the field said *something*. The defect was what it said. "Only the
+ * first 6 characters were used. Check the code you were sent." is a true sentence
+ * that does not describe what happened: nothing they were sent was used, and
+ * there is no code in that link to check.
  *
- * So the behaviour below is the accepted residual, and the overflow note is the
- * whole of the player's protection. What makes it tolerable and not a silent
- * wrong value is that the note *does* fire: unlike the leading-prose family
- * before PER-242, the field says something is wrong. What makes it worth a
- * ticket is that what it says — "only the first 6 characters were used" — is a
- * true statement that does not describe what happened.
+ * ## Why this is not the URL parsing the ruling declined
+ *
+ * #130 cleared the field for this family by reading the input as a URL, which
+ * the [PER-242 ruling](/PER/issues/PER-242) declined: the product name and
+ * domain are an open board decision and a rule keyed on URL shape must be
+ * re-litigated when they land. `capWouldKeepNoise` asks a different question —
+ * **was more than one character discarded, and are the six kept stitched out of
+ * more than the first run?** — and so reads no scheme, no host and no path. It
+ * reaches `www.playhall.app`, which has neither a scheme nor a slash, and it
+ * reaches `Code: ABC2345`, which is not a link at all.
+ *
+ * Both of PER-277's own ideas were measured over this corpus and lost. "Clear
+ * when there is no run of 4-6 characters" misses **every** row below, because
+ * `HTTPS` is a five-run and `PLAYHALL` shatters into `P` + `AYHA` on its two
+ * `L`s. "Clear when the input contains `://`" misses `www.playhall.app`. The
+ * scoring is in `packages/shared/test/room-code-extract.test.ts`, which also pins
+ * the rows the rule must *not* fire on — `ABC2345`, `ABC23456`, `ABC-2345` — each
+ * of which exists to defend one of the two clauses.
  */
 describe('a link with no room code in it', () => {
+  /**
+   * `capKeeps` is what the field used to hold, kept as a column for the same
+   * reason `join-code-prose-paste.test.tsx` keeps its `capWouldKeep`: it is the
+   * regression target. Asserting an empty field alone would pass if the whole
+   * paste path broke; asserting the field is *not* this specific valid-looking
+   * code is what fails loudly when the fallback starts running again.
+   */
   const NO_CODE = [
     { raw: 'https://playhall.app', capKeeps: 'HTTPSP' },
     { raw: 'https://playhall.app/', capKeeps: 'HTTPSP' },
@@ -272,20 +297,28 @@ describe('a link with no room code in it', () => {
   ] as const
 
   it('is a table of values that all pass the length check', () => {
-    // The property that makes this family a real defect rather than cosmetic,
-    // asserted on the fixtures once instead of restated per row.
+    // The property that made this family a real defect rather than cosmetic,
+    // asserted on the fixtures once instead of restated per row. It is also why
+    // the column cannot be replaced by `expect(field()).toHaveValue('')`: these
+    // are the values a regression would show, and they look fine.
     for (const { capKeeps } of NO_CODE) expect(isValidRoomCode(capKeeps)).toBe(true)
   })
 
   for (const { raw, capKeeps } of NO_CODE) {
-    it(`keeps ${capKeeps} and announces the overflow for ${JSON.stringify(raw)}`, async () => {
+    it(`empties the field rather than keeping ${capKeeps} for ${JSON.stringify(raw)}`, async () => {
       const user = userEvent.setup()
       render(<JoinByCodeForm onJoin={vi.fn()} />)
 
       await pasteInto(user, raw)
 
-      expect(field()).toHaveAttribute('data-value', capKeeps)
-      expect(screen.getByRole('alert')).toHaveTextContent(OVERFLOW)
+      expect(field()).toHaveAttribute('data-value', '')
+      expect(field()).not.toHaveAttribute('data-value', capKeeps)
+
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent(NO_ROOM_CODE)
+      // Not the overflow copy, which is the whole point of the ticket: it asks
+      // the player to check a value we assembled out of the scheme.
+      expect(alert).not.toHaveTextContent(OVERFLOW)
       expect(field()).toHaveAttribute('aria-invalid', 'true')
     })
   }
@@ -301,7 +334,68 @@ describe('a link with no room code in it', () => {
     await pasteInto(user, 'https://ab2.cde/play/chess')
 
     expect(field()).not.toHaveAttribute('data-value', 'AB2CDE')
-    expect(screen.getByRole('alert')).toHaveTextContent(OVERFLOW)
+    expect(field()).toHaveAttribute('data-value', '')
+    expect(screen.getByRole('alert')).toHaveTextContent(NO_ROOM_CODE)
+  })
+
+  it('refuses the press instead of sending six characters of the URL', async () => {
+    const user = userEvent.setup()
+    const onJoin = vi.fn()
+    render(<JoinByCodeForm onJoin={onJoin} />)
+
+    await pasteInto(user, 'https://playhall.app/play/chess')
+    await user.click(screen.getByTestId(testIds.joinSubmit))
+
+    // The behaviour change with the most product weight. Before this the press
+    // sent `HTTPSP` and spent a round trip landing on the friendly not-found
+    // page; an empty value fails `isValidRoomCode`, so there is nothing to ask
+    // the server about. Contrast the overflow case, where six canonical
+    // characters are a well-formed code and the press is a real join.
+    expect(onJoin).not.toHaveBeenCalled()
+  })
+
+  it('keeps the reason up across the press instead of swapping in the empty-field copy', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    await pasteInto(user, 'https://playhall.app/play/chess')
+    await user.click(screen.getByTestId(testIds.joinSubmit))
+
+    // Pressing Join on an empty field sets `tooShort`, so both accounts are live
+    // and only the ordering in `fieldMessage` decides. *Why* the field is empty
+    // is the more useful half, and this is the only state in which the two
+    // compete — without it, a reversed precedence would be invisible.
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(NO_ROOM_CODE)
+    expect(alert).not.toHaveTextContent('That code has 0 of')
+  })
+
+  it('clears the note once a real code is pasted over it', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    await pasteInto(user, 'https://playhall.app/play/chess')
+    expect(screen.getByRole('alert')).toHaveTextContent(NO_ROOM_CODE)
+
+    // The field is already empty, so there is nothing to clear first — which is
+    // the tap this fix saves the player, and the reason the state must not be
+    // sticky: no keystroke of a six-character code can reach `onChange` with a
+    // value this rule fires on.
+    await user.paste('ABC234')
+
+    expect(field()).toHaveAttribute('data-value', 'ABC234')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('yields the alert node to a server error, like the other two notes do', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} error="That room has closed." />)
+
+    await pasteInto(user, 'https://playhall.app/play/chess')
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('That room has closed.')
+    expect(alert).not.toHaveTextContent(NO_ROOM_CODE)
   })
 })
 

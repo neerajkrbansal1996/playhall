@@ -75,7 +75,9 @@ export type RoomCodeExtraction =
 /**
  * Pull a room code out of input that carries more than the code — an invite
  * link, or a code wrapped in a chat sentence. Anything but `extracted` is the
- * caller's signal to fall back to `normalizeRoomCode` + a length cap.
+ * caller's signal to fall back to `normalizeRoomCode` + a length cap — unless
+ * `capWouldKeepNoise` says that fallback has nothing to be right about, which is
+ * the one case where there is no value to show at all ([PER-277](/PER/issues/PER-277)).
  *
  * **The rule: exactly one _distinct_ run of exactly six alphabet characters.**
  * No URL parsing, no host list, no "strip the scheme" special case — so there is
@@ -152,6 +154,71 @@ export function extractRoomCode(input: string): RoomCodeExtraction {
   if (first === undefined) return { outcome: 'declined' }
   if (rest.length === 0) return { outcome: 'extracted', code: first }
   return { outcome: 'ambiguous', codes: [first, ...rest] }
+}
+
+/**
+ * Would "normalise, then keep the first six" land six characters that are not a
+ * damaged copy of anything the player typed? ([PER-277](/PER/issues/PER-277))
+ *
+ * Only meaningful when `extractRoomCode` has already `declined`: it is the
+ * caller's question about its own fallback, not a third extraction outcome. The
+ * cap itself stays in `JoinByCodeForm`, because the six-cell field is what makes
+ * a bound necessary; what lives here is the run structure the judgement needs.
+ *
+ * ## The claim the cap's announcement makes
+ *
+ * `OVERFLOW_MESSAGE` says *only the first 6 characters were used — check the
+ * code you were sent*. Both halves presume the kept six are the player's code
+ * with the tail trimmed off. That presumption is sound for `ABC2345` and
+ * `ABC-2345`, and false for `https://playhall.app/play/chess`, where the field
+ * ends up holding `HTTPSP`: a value `isValidRoomCode` accepts, assembled out of
+ * the scheme, that the player has never seen and cannot check. PER-214's note
+ * fires, so this was never the silent-wrong-value class — but a true sentence
+ * that does not describe what happened is its own defect.
+ *
+ * ## The rule, and why it is these two clauses
+ *
+ * **More than one canonical character was discarded, *and* the six kept do not
+ * all come from the first run.** Both are needed, and each rules out one family
+ * the other would wreck:
+ *
+ * - *Dropped more than one.* `ABC-2345` is seven canonical characters stitched
+ *   out of two runs, so the second clause alone would clear it — and that is
+ *   [PER-197](/PER/issues/PER-197)'s shape, a real code typed with a separator,
+ *   where `ABC234` is exactly the right value and the note is exactly right
+ *   about it.
+ * - *Not all from the first run.* `ABC23456` is one long run, so the first
+ *   clause alone would clear it — and an over-long code is precisely what
+ *   PER-214's note was written for. If the six are the head of a single token
+ *   the player typed, "only the first six were used" is a true account of that
+ *   token however long it ran on.
+ *
+ * Checking the **first** run is the whole of the second clause because the cap
+ * takes canonical characters in order: they all come from one run exactly when
+ * that run is already at least `ROOM_CODE_LENGTH` long.
+ *
+ * ## No URL shape, measured not assumed
+ *
+ * Nothing here asks whether the input is a link — same constraint as
+ * `extractRoomCode`, same reason: the product name and domain are an open board
+ * decision ([PER-2](/PER/issues/PER-2)) and a rule keyed on URL shape has to be
+ * re-litigated when they land. The two candidates PER-277 proposed were measured
+ * against the pinned corpus and both lost, which is recorded in
+ * `room-code-extract.test.ts`:
+ *
+ * - *"no run of 4-6 characters"* misses **every** codeless link — `HTTPS` is a
+ *   five-run and `AYHA` a four-run — and clears `ABC2345`, the PER-214 row.
+ * - *"the input contains `://`"* is clean but partial: it misses
+ *   `www.playhall.app`, the form a chat app delivers once it has stripped the
+ *   scheme, and `Code: ABC2345`, which turns out to be in this family too (the
+ *   cap keeps `CDEABC` there, not `ABC234`).
+ */
+export function capWouldKeepNoise(input: string): boolean {
+  const runs = canonicalRuns(input)
+  const canonicalLength = runs.reduce((total, run) => total + run.length, 0)
+  if (canonicalLength <= ROOM_CODE_LENGTH + 1) return false
+  const [first] = runs
+  return first !== undefined && first.length < ROOM_CODE_LENGTH
 }
 
 export function isValidRoomCode(code: string): boolean {

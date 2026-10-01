@@ -17,7 +17,14 @@
 import { describe, expect, it } from 'vitest'
 
 import { APPROVED_NAME } from '../src/brand'
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, extractRoomCode } from '../src/room-code'
+import {
+  ROOM_CODE_ALPHABET,
+  ROOM_CODE_LENGTH,
+  capWouldKeepNoise,
+  extractRoomCode,
+  isValidRoomCode,
+  normalizeRoomCode,
+} from '../src/room-code'
 
 const CODE = 'ABC234'
 
@@ -269,5 +276,229 @@ describe('extractRoomCode', () => {
       expect(longRunCandidate.declines('Secret code ABC23')).toBe(false)
       expect(extractRoomCode('Secret code ABC23')).toEqual(found('SECRET'))
     })
+  })
+})
+
+/**
+ * PER-277 — `capWouldKeepNoise`, the rule by which the caller's fallback is
+ * refused rather than trusted.
+ *
+ * `extractRoomCode` declining is not one situation but two, and the difference
+ * is in what the *caller's* fallback would produce. `normalizeRoomCode` + a
+ * six-character cap turns `ABC2345` into `ABC234` — the player's code with the
+ * seventh character trimmed, which is what PER-214's overflow note was written
+ * to report. It turns `https://playhall.app/play/chess` into `HTTPSP`, which is
+ * the scheme plus one character and no part of anything the player was sent.
+ * Both used to get the same note. One of them was lying.
+ *
+ * These cases pin the rule; `apps/web/test/room/join-code-link-paste.test.tsx`
+ * pins what `JoinByCodeForm` does with the answer, which is the half a
+ * helper-level test cannot reach — it empties the field and says so.
+ */
+describe('capWouldKeepNoise', () => {
+  /** What the caller does when this returns false: normalise, then keep six. */
+  const capKeeps = (input: string) => normalizeRoomCode(input).slice(0, ROOM_CODE_LENGTH)
+
+  /**
+   * The family. `keeps` is spelled out per row rather than computed, for the
+   * same reason the `capWouldKeep` column in the component tests is: the point
+   * is that each one is a plausible code bearing no relation to the paste, and
+   * a computed expectation would restate the implementation instead of pinning
+   * that.
+   *
+   * The hosts are mixed on purpose and none of them is read. `www.playhall.app`
+   * is the row that matters most to the mechanism: it has no scheme and no
+   * slash, so every "does this look like a link" signal misses it, and it is the
+   * form a chat app delivers once it has stripped `https://`.
+   */
+  const NOISE = [
+    { raw: 'https://playhall.app', keeps: 'HTTPSP' },
+    { raw: 'https://playhall.app/', keeps: 'HTTPSP' },
+    { raw: 'https://playhall.app/play/chess', keeps: 'HTTPSP' },
+    { raw: 'https://playhall.app/r/ABC23', keeps: 'HTTPSP' },
+    { raw: 'https://playhall.app/r/ABC2345', keeps: 'HTTPSP' },
+    { raw: 'www.playhall.app', keeps: 'WWWPAY' },
+    { raw: 'https://example.com/some/article', keeps: 'HTTPSE' },
+    { raw: 'https://ab2.cde/play/chess', keeps: 'HTTPSA' },
+    // Not a link at all, and in this family all along — the ticket's table only
+    // listed links. `CODE:` contributes `C` and `DE`, so the cap stitches
+    // `CDEABC` out of two runs and the seven-character typo is never reached.
+    { raw: 'Code: ABC2345', keeps: 'CDEABC' },
+  ] as const
+
+  it('is a table of values that all pass the length check', () => {
+    // The property that makes the family a defect rather than cosmetic: nothing
+    // downstream of the field can tell any of these is not a code.
+    for (const { raw, keeps } of NOISE) {
+      expect(capKeeps(raw)).toBe(keeps)
+      expect(isValidRoomCode(keeps)).toBe(true)
+    }
+  })
+
+  it('only ever speaks about input extraction has already declined', () => {
+    // The precondition. If any row grew a six-run, the component would extract
+    // it and never consult this rule, so the row would be measuring nothing.
+    for (const { raw } of NOISE) expect(extractRoomCode(raw).outcome).toBe('declined')
+  })
+
+  for (const { raw, keeps } of NOISE) {
+    it(`refuses ${keeps} for ${JSON.stringify(raw)}`, () => {
+      expect(capWouldKeepNoise(raw)).toBe(true)
+    })
+  }
+
+  /**
+   * The other half of every declined input: the cap's answer *is* the player's
+   * code, damaged, and PER-214's note is the right thing to say about it. Each
+   * row is here because one clause of the rule exists to save it — delete that
+   * clause and exactly these fail.
+   */
+  const SALVAGEABLE = [
+    // PER-214: one run, one character too many. Saved by "not all from the
+    // first run" — the whole canonical value is one run of seven.
+    { raw: 'ABC2345', keeps: 'ABC234' },
+    // …and the same at greater length. An over-long code is still a code the
+    // player typed, however far it ran on, so the note stays true of it. This
+    // is the row that rules out "dropped more than one" as a rule on its own.
+    { raw: 'ABC23456', keeps: 'ABC234' },
+    { raw: 'ABC234567', keeps: 'ABC234' },
+    // PER-197: a real code typed with separators. Stitched out of two runs, so
+    // saved by the other clause — only one character was discarded.
+    { raw: 'ABC-2345', keeps: 'ABC234' },
+    { raw: 'ABC-234-5', keeps: 'ABC234' },
+  ] as const
+
+  for (const { raw, keeps } of SALVAGEABLE) {
+    it(`trusts the cap's ${keeps} for ${JSON.stringify(raw)}`, () => {
+      expect(extractRoomCode(raw).outcome).toBe('declined')
+      expect(capKeeps(raw)).toBe(keeps)
+      expect(capWouldKeepNoise(raw)).toBe(false)
+    })
+  }
+
+  it('says nothing about input the cap never sees', () => {
+    // Below the cap there is nothing to discard, so the question does not
+    // arise. Asserted rather than assumed because the component calls this
+    // before it normalises, on every keystroke, and a `true` here would empty
+    // the field mid-type.
+    for (const raw of ['', 'lol', 'ABC23', 'ABC234', 'ABC-234', '  abc-234  ', '3.14159']) {
+      expect(capWouldKeepNoise(raw)).toBe(false)
+    }
+  })
+
+  it('trusts a first run of exactly six, which is the clause boundary', () => {
+    // `< ROOM_CODE_LENGTH` and `<= ROOM_CODE_LENGTH` differ only here, and the
+    // component cannot tell them apart: a six-run means extraction extracted or
+    // reported ambiguity, so the fallback is never reached and no rendered case
+    // can fail. Caught by mutating the comparison, pinned here because this is
+    // the only level at which it is observable.
+    //
+    // The answer has to be `false`. A first run of exactly six is the one case
+    // where the cap keeps a whole token, untrimmed — the most trustworthy thing
+    // it can do, not the least.
+    expect(capWouldKeepNoise('ABCDEF GHJKMN')).toBe(false)
+    expect(capKeeps('ABCDEF GHJKMN')).toBe('ABCDEF')
+    expect(extractRoomCode('ABCDEF GHJKMN').outcome).toBe('ambiguous')
+  })
+
+  it('reads no domain, so the naming decision stays open', () => {
+    // The same guard `extractRoomCode` carries, for the same reason (PER-2).
+    // Two hosts nobody will ship, one with a scheme and one without: if either
+    // clause grew a host allowlist or a domain constant, these diverge.
+    expect(capWouldKeepNoise('https://zzz.invalid/play/chess')).toBe(true)
+    expect(capWouldKeepNoise('zzz.invalid/play/chess')).toBe(true)
+  })
+
+  /**
+   * The measurement, in the form the ticket asked for: both of PER-277's
+   * proposed rules run over the pinned corpus, with the rows they get wrong
+   * named. Neither is implemented in `src/` — this fails if someone adds one.
+   *
+   * The corpus is the two tables above, which between them are every paste in
+   * `join-code-link-paste.test.tsx`, `join-code-prose-paste.test.tsx` and
+   * `join-code-overflow.test.tsx` that reaches the cap at all.
+   */
+  const runsOf = (input: string) =>
+    input
+      .toUpperCase()
+      .split(new RegExp(`[^${ROOM_CODE_ALPHABET}]`))
+      .filter((run) => run !== '')
+
+  const CANDIDATES = [
+    {
+      // PER-277's second idea: clear only when nothing in the paste could
+      // plausibly be a mistyped code.
+      name: 'no run of 4-6 characters',
+      fires: (input: string) => !runsOf(input).some((r) => r.length >= 4 && r.length <= 6),
+      // It misses every codeless link, because `HTTPS` is a five-run and
+      // `PLAYHALL` shatters into `P` + `AYHA` on its two `L`s — a four-run.
+      misses: 'https://playhall.app/play/chess',
+      // And it clears PER-214's row, because `ABC2345` is a seven-run.
+      wrecks: 'ABC2345',
+    },
+    {
+      // PER-277's first idea: a signal that the input was a link. The weakest
+      // form, which is the only form the PER-242 ruling leaves available — a
+      // stronger one would be the URL parsing that ruling declined.
+      name: 'the input contains ://',
+      fires: (input: string) => input.includes('://'),
+      // Clean on everything it fires on, but it cannot see a schemeless host —
+      // and `contains /` misses this row too.
+      misses: 'www.playhall.app',
+      wrecks: undefined,
+    },
+  ] as const
+
+  for (const candidate of CANDIDATES) {
+    it(`"${candidate.name}" is rejected: it misses ${JSON.stringify(candidate.misses)}`, () => {
+      expect(candidate.fires(candidate.misses)).toBe(false)
+      // …where the shipped rule does not, which is the whole point.
+      expect(capWouldKeepNoise(candidate.misses)).toBe(true)
+    })
+
+    if (candidate.wrecks !== undefined) {
+      const wrecks: string = candidate.wrecks
+      it(`"${candidate.name}" is rejected: it also clears ${JSON.stringify(wrecks)}`, () => {
+        expect(candidate.fires(wrecks)).toBe(true)
+        // A row the cap gets right and PER-214 exists to announce.
+        expect(capWouldKeepNoise(wrecks)).toBe(false)
+      })
+    }
+  }
+
+  it('scores both candidates over the whole corpus, not one row each', () => {
+    // The row-at-a-time cases above name a failure; this one bounds it, so a
+    // candidate cannot be waved through on the grounds that its one counter-
+    // example is unusual. The first is wrong about twelve of the fourteen rows,
+    // in both directions: it misses every link in the family it was proposed to
+    // fix, and clears every over-long code the cap gets right.
+    const corpus = [
+      ...NOISE.map((row) => ({ raw: row.raw, noise: true })),
+      ...SALVAGEABLE.map((row) => ({ raw: row.raw, noise: false })),
+    ]
+    const wrongFor = (fires: (input: string) => boolean) =>
+      corpus.filter((row) => fires(row.raw) !== row.noise).map((row) => row.raw)
+
+    const [noRun46, hasScheme] = CANDIDATES
+    expect(wrongFor(noRun46.fires)).toEqual([
+      'https://playhall.app',
+      'https://playhall.app/',
+      'https://playhall.app/play/chess',
+      'https://playhall.app/r/ABC23',
+      'https://playhall.app/r/ABC2345',
+      'www.playhall.app',
+      'https://example.com/some/article',
+      'https://ab2.cde/play/chess',
+      'ABC2345',
+      'ABC23456',
+      'ABC234567',
+      'ABC-234-5',
+    ])
+    expect(wrongFor(hasScheme.fires)).toEqual(['www.playhall.app', 'Code: ABC2345'])
+
+    // The shipped rule, measured the same way. Exact over the corpus is the
+    // claim this fix is made on, and it is one assertion rather than a column
+    // of green ticks.
+    expect(wrongFor(capWouldKeepNoise)).toEqual([])
   })
 })

@@ -208,6 +208,37 @@ describe('join by code', () => {
     )
   })
 
+  it('names the absence when a paste carries no code at all', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    await user.click(input)
+    // A link with no six-run in it. Before PER-277 the field held `HTTPSP` — the
+    // scheme plus one character — under the overflow copy, which asked the
+    // player to check a code that was never in the paste.
+    await user.paste('https://playhall.app/play/chess')
+
+    // The copy decision, pinned in full here as the one place that does it. Two
+    // properties distinguish it from the other four messages: it names the
+    // *paste* rather than what we did to it, and it does not say "link",
+    // because nothing upstream of it knows the input was one — reading URL
+    // shape is what the PER-242 ruling declined.
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No room code in that paste. Enter the code from your invite.',
+    )
+    expect(input).toHaveValue('')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+
+    // PER-225 again: the second sentence is borrowed verbatim from the
+    // empty-field message, which is the right instruction for a field this
+    // outcome has just emptied, and the composed description still states the
+    // length rule exactly once — in the hint.
+    expect(input).toHaveAccessibleDescription(
+      '6 characters. Codes never use O, 0, I, 1 or L. No room code in that paste. Enter the code from your invite.',
+    )
+  })
+
   it('describes the field before the first keystroke', () => {
     render(<JoinByCodeForm onJoin={vi.fn()} />)
 

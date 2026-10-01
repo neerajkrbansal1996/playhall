@@ -5,6 +5,7 @@ import { AlertCircle } from 'lucide-react'
 
 import {
   ROOM_CODE_LENGTH,
+  capWouldKeepNoise,
   extractRoomCode,
   isValidRoomCode,
   normalizeRoomCode,
@@ -146,8 +147,9 @@ export interface JoinByCodeFormProps {
  *   survived and asks the player to check the code they were sent; once the
  *   field shows the code they were *actually* sent, that is a false alarm, and
  *   it was being raised on `ABC234 join me` — a paste that joins the right room
- *   — before this. The cap's announcement is unchanged for everything
- *   extraction declines.
+ *   — before this. The cap's announcement still fires for everything extraction
+ *   declines *and* the cap can salvage — see the PER-277 section below for the
+ *   declines it cannot.
  *
  * Silence has a known cost, and it is not smaller everywhere. `Secret code
  * ABC2345` — a six-letter word of prose beside a *mistyped* code — has exactly
@@ -192,7 +194,47 @@ export interface JoinByCodeFormProps {
  * not ambiguous at all. The rule counts distinct runs, so that extracts
  * silently like any other link.
  *
- * ## Why none of the four messages restate the length rule
+ * ## A paste with no code in it empties the field ([PER-277](/PER/issues/PER-277))
+ *
+ * The third thing the cap can be is simply wrong, with nothing to be right
+ * about. `https://example.test/play/chess` has no six-run, so extraction
+ * declines, and the cap keeps the first six alphabet characters of the URL:
+ * `HTTPSE`. For *any* schemed link that is always the scheme plus one character,
+ * whatever the host, because `HTTPS` is a five-run.
+ *
+ * This was never the silent-wrong-value class — the overflow note fires, so the
+ * player is told something. What they are told is the defect: *only the first 6
+ * characters were used — check the code you were sent* is a true sentence that
+ * does not describe what happened. Nothing they were sent was used, and there is
+ * no code in that link to check. Pressing Join sent `HTTPSE`, which
+ * `isValidRoomCode` accepts, and landed on the friendly not-found page.
+ *
+ * So the cap no longer runs when its answer would be noise. `capWouldKeepNoise`
+ * in `packages/shared` carries the rule and the measurement behind it — **more
+ * than one canonical character discarded, and the six kept not all from the first
+ * run** — and the two clauses are what keep PER-197's `ABC-2345` and PER-214's
+ * `ABC2345` on the overflow path where they belong. Three properties here:
+ *
+ * - **The field is emptied, not filled with a guess.** A six-cell field showing
+ *   `HTTPSE` asserts that we read a code out of the paste. We did not. Emptying
+ *   it also spares the player a select-all before they can retype, which is the
+ *   one thing the old behaviour cost them in taps.
+ * - **The press is still refused, not routed to the server.** An empty value
+ *   fails `isValidRoomCode`, so `onJoin` is not called — unlike the overflow
+ *   case, where six canonical characters are a well-formed code and the server
+ *   is the authority on whether that room exists. Here there is nothing to ask
+ *   it about.
+ * - **`noCode` outranks `tooShort`, so the press does not swap the message.**
+ *   Both are live after a press on an emptied field, and *why* the field is
+ *   empty is more use than `Enter the code from your invite.` alone — which is
+ *   why `NO_CODE_MESSAGE` ends with that sentence rather than competing with it.
+ *
+ * It costs one row that used to be told about its loss: `Code: ABC2345` kept
+ * `CDEABC` — not `ABC234`, which is the point — under the overflow note, and now
+ * empties instead. That row was in this family all along; the ticket's table only
+ * listed links.
+ *
+ * ## Why none of the five messages restate the length rule
  *
  * The hint says `${ROOM_CODE_LENGTH} characters` two lines above the field, so a
  * message that opens `A room code is 6 characters.` states a rule the player
@@ -207,11 +249,13 @@ export interface JoinByCodeFormProps {
  * - ambiguity names the count, because "more than one" is the whole diagnosis
  *   and the instruction that follows from it is different from every other
  *   message's: enter one code, do not re-check the one we showed;
+ * - a codeless paste names the absence, which is the fact the player cannot see
+ *   from an emptied field, and then borrows the empty field's instruction;
  * - an empty field gets an instruction rather than a specification;
  * - a partial code gets its own length, which is the one number the player
  *   cannot read off a `tracking-[0.3em]` six-cell field at a glance.
  *
- * A server `error` still outranks all three: an actual join outcome is more
+ * A server `error` still outranks all four: an actual join outcome is more
  * actionable than our note about the input.
  *
  * The submit button is **never disabled for validation**. A disabled control
@@ -235,6 +279,16 @@ const HINT = `${ROOM_CODE_LENGTH} characters. Codes never use O, 0, I, 1 or L.`
 const EMPTY_MESSAGE = 'Enter the code from your invite.'
 const OVERFLOW_MESSAGE = `Only the first ${ROOM_CODE_LENGTH} characters were used. Check the code you were sent.`
 const AMBIGUOUS_MESSAGE = `More than one ${ROOM_CODE_LENGTH}-character code in that paste — enter just the one you were sent.`
+/**
+ * It does not say *link*, because nothing upstream of it knows whether the paste
+ * was one — see `capWouldKeepNoise`. It does not restate the length either; the
+ * hint two lines above the field already gives it, and PER-225 is why no message
+ * here repeats a rule the player can read.
+ *
+ * The second clause is `EMPTY_MESSAGE`'s, deliberately: this outcome *leaves the
+ * field empty*, so the instruction that fits an empty field is the right one.
+ */
+const NO_CODE_MESSAGE = 'No room code in that paste. Enter the code from your invite.'
 
 /**
  * What the last `onChange` made of the input, beyond the value it produced.
@@ -242,11 +296,15 @@ const AMBIGUOUS_MESSAGE = `More than one ${ROOM_CODE_LENGTH}-character code in t
  * overflows, and these are two accounts of the same event, so they must not be
  * able to both be set and race for the one message slot.
  */
-type PasteOutcome = 'clean' | 'overflowed' | 'ambiguous'
+type PasteOutcome = 'clean' | 'overflowed' | 'ambiguous' | 'noCode'
 
 /**
  * The single message the field shows, in authority order: a real join outcome,
  * then what we could not do with the paste, then a code too short to send.
+ *
+ * The three paste outcomes are mutually exclusive by construction — one state,
+ * not three flags — so their order here is readability, not precedence. Only
+ * `error` outranks anything.
  */
 function fieldMessage(
   error: string | undefined,
@@ -256,6 +314,7 @@ function fieldMessage(
 ): string | undefined {
   if (error !== undefined) return error
   if (paste === 'ambiguous') return AMBIGUOUS_MESSAGE
+  if (paste === 'noCode') return NO_CODE_MESSAGE
   if (paste === 'overflowed') return OVERFLOW_MESSAGE
   if (!tooShort) return undefined
   if (code.length === 0) return EMPTY_MESSAGE
@@ -353,6 +412,18 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
               if (extraction.outcome === 'ambiguous') {
                 setCode(extraction.codes[0])
                 setPaste('ambiguous')
+                return
+              }
+
+              // No candidate at all, and the cap's six would be stitched out of
+              // the surrounding noise rather than trimmed off the player's code
+              // — `https://example.test/play/chess` → `HTTPSP`. Leave the field
+              // empty and say so, because the alternative is to display a value
+              // `isValidRoomCode` accepts that the player has never seen, under
+              // a note asking them to check it. See the PER-277 section above.
+              if (capWouldKeepNoise(event.target.value)) {
+                setCode('')
+                setPaste('noCode')
                 return
               }
 

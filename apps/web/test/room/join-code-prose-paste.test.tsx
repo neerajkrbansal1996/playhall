@@ -55,6 +55,14 @@
  * as *not a code* and refuse it" rule discussed on PER-197 is **not**
  * implemented and must not be, because it would refuse a paste that joins the
  * right room.
+ *
+ * [PER-277](/PER/issues/PER-277) is close enough to that rule to be worth telling
+ * apart from it. It does empty the field for some over-long input, but only after
+ * extraction has already declined — so `"ABC234 join me"` never reaches it — and
+ * only when more than one character would be dropped *and* the six kept are
+ * stitched out of more than the first run. `ABC2345` fails both tests and keeps
+ * PER-214's announcement. One row in this file does reach it, for a reason worth
+ * reading: see `'Code: ABC2345'` below.
  */
 
 import { cleanup, render, screen } from '@testing-library/react'
@@ -244,21 +252,33 @@ describe('prose that vanishes into the alphabet', () => {
   })
 })
 
-describe('what extraction declines, where the cap still announces', () => {
+describe('what extraction declines, and whether the cap can salvage it', () => {
   it('does not rescue a seven-character code out of prose', async () => {
     const user = userEvent.setup()
     render(<JoinByCodeForm onJoin={vi.fn()} />)
 
-    // `ABC2345` is one seven-run, not a six-run, so extraction declines and the
-    // cap drops the 7th character and says so. This pairing is the reason the
-    // rule matches *whole runs* instead of searching for a six-character
-    // substring, which would have found `ABC234` inside `ABC2345` and swallowed
-    // exactly the loss PER-214 exists to report.
+    // `ABC2345` is one seven-run, not a six-run, so extraction declines. This
+    // pairing is the reason the rule matches *whole runs* instead of searching
+    // for a six-character substring, which would have found `ABC234` inside
+    // `ABC2345` and swallowed exactly the loss PER-214 exists to report.
+    //
+    // What the field then says changed with [PER-277](/PER/issues/PER-277), and
+    // the reason is a fact this case asserted without naming: the cap's answer
+    // here was never `ABC234`. `CODE:` contributes `C` and `DE`, so the six kept
+    // were `CDEABC` — stitched out of the prose, and nothing to do with the typo
+    // the player made. That is the codeless-link family wearing prose, so it gets
+    // that family's treatment: the field empties and says there was no code in
+    // the paste, rather than claiming six characters of the player's code
+    // survived. The row is kept, with `capWouldKeep` spelled out, because it is
+    // the one shape in this file that reaches the new branch.
     await pasteInto(user, 'Code: ABC2345')
 
     const input = screen.getByTestId(testIds.joinCodeInput)
     const alert = screen.getByRole('alert')
-    expect(alert).toHaveTextContent(OVERFLOW)
+    expect(input).toHaveAttribute('data-value', '')
+    expect(input).not.toHaveAttribute('data-value', 'CDEABC')
+    expect(alert).toHaveTextContent('No room code in that paste.')
+    expect(alert).not.toHaveTextContent(OVERFLOW)
     expect(input).toHaveAttribute('aria-invalid', 'true')
     expectDescribedByHintThen(input, alert)
   })
