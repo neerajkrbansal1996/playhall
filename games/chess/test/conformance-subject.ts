@@ -24,6 +24,7 @@ import type {
 import {
   canAbort,
   chessSettingsSchema,
+  FIRST_MOVE_TIMER,
   manifest,
   server,
   type ChessClientAction,
@@ -230,16 +231,34 @@ function abortBy(index: number) {
 }
 
 /**
- * Both ends of chess's abort window, which is open until both players have moved
- * (`state.ts` → `canAbort`).
+ * Both ends of chess's abort window, plus the deadline that closes a lobby
+ * nobody ever played in. Between them they cover both of chess's `abort` causes.
  *
- * `afterSteps` is capped at 1 by the rules, not by taste: at 2 the window has
- * closed, the abort is unreachable, and the suite fails an unreachable declared
- * abort rather than skipping it.
+ * The first two use the action arm. The window is open until both players have
+ * moved (`state.ts` → `canAbort`), so `afterSteps` is capped at 1 by the rules
+ * and not by taste: at 2 the window has closed, the abort is unreachable, and
+ * the suite fails an unreachable declared abort rather than skipping it. Both
+ * land on `cause: 'agreed'`.
  *
- * Both scenarios land on `cause: 'agreed'`. The other cause,
- * `'first_move_timeout'`, is **not reachable through `abortScenarios`** and is
- * covered by unit test instead — see the note in `conformance.test.ts`.
+ * The third uses the timer arm (ADR-0010) and reaches the other cause,
+ * `'first_move_timeout'`: nobody acts, the 30 s first-move deadline comes due,
+ * and the platform calls `onTimer`. It needs no `advanceMs` and has none — the
+ * driver replays the `setTimer(FIRST_MOVE_TIMER, FIRST_MOVE_TIMEOUT_MS)` that
+ * chess returns from `createInitialState` and fires it at that command's own
+ * deadline, which is `startedAt + 30_000`, exactly the boundary
+ * `firstMoveDeadline` checks. Because the driver replays chess's commands rather
+ * than synthesising the call, this scenario doubles as the assertion that chess
+ * arms the window itself at setup instead of leaning on the lobby to do it.
+ *
+ * `maxFires: 1` is left at its default because `'first-move'` is the only timer
+ * chess ever `set`s: `CHESS_CLOCK_TIMER` is declared so `onTimer` can react to
+ * it, but the platform timer service owns arming it, so nothing else can come
+ * due first.
+ *
+ * `player-endings.test.ts` keeps its unit test of the same ending, and neither
+ * replaces the other. The unit test pins the rule — the reducer refuses the
+ * timeout a millisecond early. This scenario proves the ending is reachable the
+ * way production reaches it: through a timer, with no actor.
  */
 export const CHESS_ABORT_SCENARIOS: readonly AbortScenario<ChessMatchState, ChessClientAction>[] = [
   {
@@ -253,6 +272,13 @@ export const CHESS_ABORT_SCENARIOS: readonly AbortScenario<ChessMatchState, Ches
     label: 'second seat aborts after one move',
     afterSteps: 1,
     abortAction: abortBy(1),
+  },
+  {
+    // No `afterSteps`: the position production reaches this ending from is a
+    // lobby where nobody moved at all.
+    label: 'nobody plays a first move and the 30 s deadline aborts the match',
+    trigger: 'timer',
+    timerId: FIRST_MOVE_TIMER,
   },
 ]
 
