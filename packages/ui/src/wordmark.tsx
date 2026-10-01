@@ -54,13 +54,7 @@ const SIZE_CLASS: Record<NonNullable<WordmarkProps['size']>, string> = {
   md: 'text-xl',
 }
 
-export function Wordmark({
-  name,
-  size = 'sm',
-  logo,
-  as: Tag = 'span',
-  className,
-}: WordmarkProps) {
+export function Wordmark({ name, size = 'sm', logo, as: Tag = 'span', className }: WordmarkProps) {
   return (
     <Tag
       // `min-w-0` is the half of "shrink, never clip or wrap" that is easy to forget:

@@ -21,10 +21,7 @@ export interface WordmarkPreviewProps {
  */
 function AppBar({ name }: { readonly name: string }) {
   return (
-    <header
-      data-testid="wordmark-app-bar"
-      className="flex h-14 items-center gap-3 border-b px-4"
-    >
+    <header data-testid="wordmark-app-bar" className="flex h-14 items-center gap-3 border-b px-4">
       <Wordmark name={name} size="sm" />
 
       {/* Pushes the controls to the right edge, so any overflow shows up there. */}
@@ -71,15 +68,13 @@ export function WordmarkPreview({ defaultName }: WordmarkPreviewProps) {
         </section>
 
         <section className="flex flex-col gap-2">
-          <h2 className="text-muted-foreground text-xs uppercase tracking-wide">
-            sm — app bar
-          </h2>
+          <h2 className="text-muted-foreground text-xs uppercase tracking-wide">sm — app bar</h2>
           <Wordmark name={name} size="sm" />
         </section>
 
         <p className="text-muted-foreground text-sm">
-          Rendering <code>?name=</code> — {name.length} characters. The bar above is 56px
-          tall; the controls must stay fully on screen.
+          Rendering <code>?name=</code> — {name.length} characters. The bar above is 56px tall; the
+          controls must stay fully on screen.
         </p>
       </div>
     </main>

@@ -121,7 +121,8 @@ describe('brand literals', () => {
     // An allowlist that outlives its entries is how a gate goes quietly green. If the
     // testkit renames these, this case fails and the entry comes off the list.
     const stale = CODENAME_EXCEPTIONS.filter(
-      (file) => !new RegExp(INTERNAL_CODENAME, 'i').test(readFileSync(join(repoRoot, file), 'utf8')),
+      (file) =>
+        !new RegExp(INTERNAL_CODENAME, 'i').test(readFileSync(join(repoRoot, file), 'utf8')),
     )
 
     expect(stale).toEqual([])
