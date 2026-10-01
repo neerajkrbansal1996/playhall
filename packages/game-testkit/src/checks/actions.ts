@@ -97,9 +97,13 @@ export function checkIllegalActionRejected<
   // is still worth saying out loud, because `.strict()` turns a
   // client-version mismatch into a loud rejection instead of a silent
   // no-op — and that is the kind of thing you want to know about on a phone.
+  //
+  // The key is unknown *by construction* — no game declares it — so its spelling
+  // carries no meaning and must carry no product name either: a rebrand has no
+  // business editing a conformance probe.
   const sampleAction = runs.find((run) => run.playout.steps.length > 0)?.playout.steps[0]?.action
   if (sampleAction !== null && typeof sampleAction === 'object') {
-    const withExtra = { ...(sampleAction as object), __atriumUnknownKey: 'probe' }
+    const withExtra = { ...(sampleAction as object), __unknownProbeKey: 'probe' }
     if (server.actionSchema.safeParse(withExtra).success) {
       recorder.note(
         'actionSchema strips unknown keys instead of rejecting them; consider .strict() so a client sending an unrecognised field fails loudly',
