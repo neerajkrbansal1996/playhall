@@ -74,7 +74,39 @@ export interface RealtimeGameServer<
   TSettings,
   TEvent extends GameEvent = GameEvent,
 > {
-  /** Validates a decoded input before the game sees it. Never trust the client. */
+  /**
+   * Validates a decoded input before the game sees it. Never trust the client.
+   *
+   * **One input has exactly one wire spelling.** This is the real-time form of
+   * the accepted ⊆ offered rule stated on the turn-based contract's
+   * `getLegalActions`: if two distinct payloads decode to inputs that `onInput`
+   * treats identically, the extra spelling is a bug. A field the schema
+   * declares and the simulation ignores is the usual cause.
+   *
+   * Binary makes this *worse*, not better, and it is why the rule is written
+   * here before the netcode kit exists. A JSON contract has one obvious extra
+   * spelling per optional field; a packed encoding has several that are not
+   * visible in the type:
+   *
+   *   - **padding and reserved bits** — if the decoder does not require them
+   *     to be zero, every input has 2^n spellings;
+   *   - **flag bits that only mean something in one phase** — set during the
+   *     wrong phase they are dropped, not rejected;
+   *   - **non-canonical number encodings** — a varint with trailing zero
+   *     continuation bytes, a float `-0`, or a `NaN` payload bit pattern that
+   *     compares equal to a legal value;
+   *   - **out-of-range enum discriminants** that the decoder clamps rather
+   *     than refuses.
+   *
+   * `inputCodec` must therefore **round-trip canonically**: decoding a buffer
+   * and re-encoding the result must reproduce that buffer byte for byte, and a
+   * buffer that fails this must be rejected rather than normalised. A codec
+   * that silently normalises hands an attacker a free channel and makes the
+   * server's own replay non-deterministic, which breaks crash recovery
+   * (`determinism`, `server-authoritative`, `blast radius`).
+   *
+   * The M6 conformance work owes a check for this; see ADR-0012.
+   */
   readonly inputSchema: z.ZodType<TInput>
   readonly inputCodec: BinaryCodec<TInput>
   readonly snapshotCodec: BinaryCodec<TSnapshot>
