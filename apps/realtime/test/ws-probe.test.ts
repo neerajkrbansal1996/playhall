@@ -328,23 +328,62 @@ describe('ws probe — rejected frames', () => {
     expect(error.reason).toContain('y??31mRED')
   })
 
-  it('bounds a multi-byte key in bytes, not only in characters', async () => {
-    // `MAX_REPORTED_KEY_CHARS` is a character cap, and a character is up to four
-    // bytes — 3 keys x 32 astral characters is ~384 bytes of reason from a frame
-    // that fits the 1 KiB inbound cap. The alphabet runs first, so each surviving
-    // character is one ASCII byte and the character cap is a byte cap too. It
-    // also means no half of a surrogate pair can be clipped onto the wire.
+  it('clips an astral key without stranding half a surrogate pair', async () => {
+    // A key outside the BMP is two UTF-16 units per character, and `slice` cuts
+    // units, so a clip can land mid-pair and put an unpaired half on the wire.
+    //
+    // The **odd-length ASCII prefix is what makes this test able to fail.** A key
+    // of astral characters alone starts every pair at an even offset, so a clip
+    // at 32 units lands on a boundary and is well-formed even with no alphabet at
+    // all — a test without the prefix asserts nothing. One `x` shifts every pair
+    // by a unit, so unit 32 is the low half of the 16th pair.
+    //
+    // Both assertions are deliberately independent of whether the alphabet runs
+    // before or after the clip, because that order is cosmetic (see `quoteKey`).
     const { url } = await harness()
     const ws = await open(`${url}${WS_PROBE_PATH}`)
 
-    const astral = '\u{1f4a5}'.repeat(40)
+    const astral = `x${'\u{1f4a5}'.repeat(40)}`
     ws.send(
       JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, [astral]: 1, [`${astral}2`]: 1 }),
     )
     const error = (await nextMessage(ws)) as { reason: string }
 
     expect(error.reason).not.toMatch(/[\ud800-\udfff]/)
-    expect(Buffer.byteLength(error.reason, 'utf8')).toBeLessThan(160)
+    // And the clip fired at all: 40 characters of key cannot come back whole.
+    expect(error.reason).not.toContain('?'.repeat(33))
+  })
+
+  it('bounds a multi-byte key in bytes, not only in characters', async () => {
+    // `MAX_REPORTED_KEY_CHARS` is a character cap, and a character is up to four
+    // bytes, so without an ASCII-only alphabet 3 keys x 32 characters is ~384
+    // bytes of reason from a frame that fits the 1 KiB inbound cap.
+    //
+    // The keys are multi-byte **letters** on purpose. An emoji is a Symbol, and
+    // the plausible widening of this alphabet is "a legitimate field name may
+    // contain any letter" (`/[^\p{L}\p{N}_.:-]/gu`) — under which an emoji still
+    // quotes to `?` and an emoji-based test still passes while the byte bound is
+    // gone. A 2-byte and a 3-byte letter both die there. Both keys stay under the
+    // character cap so no `…` marker (three bytes by itself) is in the reason,
+    // which lets the property be asserted directly instead of against a magic
+    // number: every byte out is one character out.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        ['é'.repeat(10)]: 1,
+        ['日'.repeat(10)]: 1,
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(Buffer.byteLength(error.reason, 'utf8')).toBe(error.reason.length)
+    expect(error.reason).not.toContain('é')
+    expect(error.reason).not.toContain('日')
   })
 
   it('names an empty key rather than trailing off', async () => {
@@ -358,6 +397,21 @@ describe('ws probe — rejected frames', () => {
     const error = (await nextMessage(ws)) as { reason: string }
 
     expect(error.reason).toBe('frame is not a valid ping: unexpected (empty)')
+  })
+
+  it('does not let a caller forge the empty-key sentinel', async () => {
+    // A stand-in only names the empty key if nothing else can render as it.
+    // `(empty)` is unforgeable solely because the parentheses fall outside the
+    // alphabet — so this is a property of `UNQUOTABLE_KEY_CHAR`, not of
+    // `EMPTY_KEY`, and admitting parens for any reason would make the reason lie
+    // about which key the caller sent.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, '(empty)': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected ?empty?')
   })
 
   it('rejects a binary frame instead of guessing at a codec', async () => {

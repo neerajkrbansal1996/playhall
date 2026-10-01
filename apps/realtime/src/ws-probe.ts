@@ -273,20 +273,28 @@ function parseFrame(data: RawData): ParseResult {
     // **Field names only, never field values**, and even the names are bounded.
     //
     // Values are attacker-supplied and would make the error frame a reflector.
-    // Names are mostly schema-derived, but an `unrecognized_keys` issue carries
-    // no path (the object as a whole is wrong), so naming the rejected keys is
-    // the only way the caller learns what to remove — and those key names *are*
-    // caller-supplied. `maxFrameBytes` alone bounds them loosely enough to echo
-    // ~1 KiB back, so they are bounded here instead — in *amount* by
-    // `MAX_REPORTED_KEYS` / `MAX_REPORTED_KEY_CHARS`, and in *alphabet* by
-    // `quoteKey`. Keeping this invariant literally true matters more than the
-    // diagnostic detail — it is the invariant M1.6 inherits, and there fan-out
-    // exists.
+    // `maxFrameBytes` alone bounds a name loosely enough to echo ~1 KiB back, so
+    // names are bounded here instead — in *amount* by `MAX_REPORTED_KEYS` /
+    // `MAX_REPORTED_KEY_CHARS`, and in *alphabet* by `quoteKey`.
+    //
+    // Every arm goes through `quoteKey`, unconditionally, and that is the point.
+    // For `PingFrame` only the `unrecognized_keys` arm can carry caller bytes:
+    // it has no path (the object as a whole is wrong), so naming the rejected
+    // keys is the only way the caller learns what to remove. A *path segment* is
+    // caller-supplied only under `z.record()` / `z.object().catchall()` — the one
+    // pair of zod constructs that puts a caller's own key into `issue.path`. An
+    // array index arrives as a number, and an object key is schema-derived. No
+    // such schema exists in this tree today, so quoting the segments changes no
+    // reason this file can currently produce, which is precisely why it is worth
+    // doing now instead of writing the caveat down: shaping that holds only
+    // *given this schema* does not survive the move into M1.6's schema set,
+    // because the caveat does not travel with the code and there fan-out exists.
+    // Quote per segment rather than the joined string, so `.` stays structural.
     const detail = parsed.error.issues
       .map((issue) =>
         issue.code === 'unrecognized_keys'
           ? `unexpected ${summariseKeys(issue.keys)}`
-          : issue.path.join('.') || '(root)',
+          : issue.path.map((segment) => quoteKey(String(segment))).join('.') || '(root)',
       )
       .join(', ')
     return { ok: false, reason: `frame is not a valid ping: ${detail}` }
@@ -331,11 +339,17 @@ function summariseKeys(keys: readonly string[]): string {
  * panel — gets to be wrong about it. Shaping the string at the source is the
  * only place that choice does not have to be re-made per sink.
  *
- * The alphabet is applied **before** the length clip, so `MAX_REPORTED_KEY_CHARS`
- * is a cap on bytes as well as on characters: every surviving character is one
- * ASCII byte, where 32 characters of a multi-byte key would have been up to 128.
- * It also means the clip cannot bisect a surrogate pair and strand half of one
- * in a JSON string.
+ * `MAX_REPORTED_KEY_CHARS` bounds bytes and not only characters, and the
+ * invariant that buys that is **the allowlist is single-byte**, not the order of
+ * the two steps below. `UNQUOTABLE_KEY_CHAR` admits ASCII alone, so the clip only
+ * ever sees one byte per character, and a lone surrogate half is itself outside
+ * the allowlist and lands as `?` whichever step runs first — a 32-character key
+ * costs 32 bytes rather than the up-to-128 a multi-byte one would. Widening the
+ * alphabet to admit a non-ASCII field name (`\p{L}`, say) gives that up with the
+ * order untouched, so widen the test in `ws-probe.test.ts` with it. Classing
+ * before clipping buys only that the `…` marker is not itself quoted into `?`,
+ * which is cosmetic; the marker is three bytes, so a clipped result measures
+ * `MAX_REPORTED_KEY_CHARS` bytes plus that fixed three.
  */
 function quoteKey(key: string): string {
   const safe = key.replace(UNQUOTABLE_KEY_CHAR, '?')
