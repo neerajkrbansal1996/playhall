@@ -394,9 +394,25 @@ test('a 7th canonical keystroke on a full field is dropped without desyncing', a
   // two-id list, so `[id="${attr}"]` would match nothing and `toBeVisible`
   // would never be reached to notice. Hint first, then the message, same order
   // as the short-code case and as `fieldIds()` in the settings form.
+  //
+  // The second id is asserted to *be* the alert's id, not to resolve to a node
+  // with the alert's text: two separate elements rendering the same sentence
+  // satisfy a text comparison while the field describes the wrong one. This is
+  // the identity `apps/web/test/room/join-code-overflow.test.tsx` pins with
+  // `expect(messageId).toBe(alert.id)`, now pinned in a real browser too.
+  //
+  // The count is not redundant with the identity, and it is the one thing the
+  // text comparison carried that identity does not. `aria-describedby` resolves
+  // through `getElementById`, which takes the **first** node in document order,
+  // so a duplicate id leaves the alert holding the named id while a different
+  // element is what assistive technology actually reads — a tree the identity
+  // assertion alone passes. The old text comparison failed it, but only
+  // incidentally, as a strict-mode violation on a two-element locator. Saying
+  // it out loud keeps the catch and reports it as `Expected 1, Received 2`.
   const [hintRef, messageRef] = await describedByIds(input, 2)
   await expect(byId(page, hintRef)).toHaveText(/Codes never use/)
-  await expect(byId(page, messageRef)).toHaveText(await joinAlert(page).innerText())
+  await expect(byId(page, messageRef), 'exactly one node carries the described id').toHaveCount(1)
+  await expect(joinAlert(page)).toHaveAttribute('id', messageRef)
 })
 
 /**
@@ -432,10 +448,13 @@ test('a short code is rejected accessibly, with submit still enabled', async ({ 
 
   // The wiring, not just the presence: `aria-describedby` must name the element
   // that is actually showing the message, and must still name the hint — in
-  // that order, matching `fieldIds()` in the settings form.
+  // that order, matching `fieldIds()` in the settings form. Identity plus a
+  // uniqueness count, not text, for the two reasons given on the overflow case
+  // above.
   const [hintRef, messageRef] = await describedByIds(input, 2)
   await expect(byId(page, hintRef)).toHaveText(/Codes never use/)
-  await expect(byId(page, messageRef)).toHaveText(await joinAlert(page).innerText())
+  await expect(byId(page, messageRef), 'exactly one node carries the described id').toHaveCount(1)
+  await expect(joinAlert(page)).toHaveAttribute('id', messageRef)
 })
 
 /**
