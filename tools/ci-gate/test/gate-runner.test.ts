@@ -193,7 +193,7 @@ describe('the registry and the workflow do not drift', () => {
       .filter(Boolean)
   })()
 
-  it('found the nine gates', () => {
+  it('found the ten gates', () => {
     expect(registryGates).toEqual([
       'lint',
       'format',
@@ -201,6 +201,9 @@ describe('the registry and the workflow do not drift', () => {
       'unit',
       'coverage',
       'boundaries',
+      // Reads the emitted bytes, where `boundaries` reads the import graph
+      // (PER-126). Listed after it because that is where it sits in the registry.
+      'bundle',
       'testkit',
       'integration',
       'e2e',

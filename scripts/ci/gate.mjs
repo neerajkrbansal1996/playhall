@@ -67,6 +67,11 @@ const GATES = {
   // Went live with no edit here the moment PER-5 added the root `boundaries`
   // script — the PENDING branch keys on the script existing, not on this field.
   boundaries: { script: 'boundaries', pendingOwner: null },
+  // Live from the day it landed (PER-126), so no pendingOwner. `boundaries` can
+  // only see the import graph; this one reads the bytes that actually reach the
+  // browser on the create-lobby route. It builds `apps/web`, which is why it is
+  // its own job rather than a step on `lint`.
+  bundle: { script: 'check:bundle-zod-free', pendingOwner: null },
   testkit: {
     script: 'test:testkit',
     pendingOwner: 'PER-17 — game conformance testkit (first consumer: tic-tac-toe)',
