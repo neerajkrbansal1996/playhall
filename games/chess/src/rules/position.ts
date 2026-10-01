@@ -1,5 +1,6 @@
 import { Chess, type Move } from 'chess.js'
-import type { Color, MoveInput, PromotionPiece } from './types.js'
+import { derive, positionKey, type PositionInfo } from './derive.js'
+import type { MoveInput, PromotionPiece } from './types.js'
 
 const PROMOTION_PIECES: readonly string[] = ['q', 'r', 'b', 'n']
 
@@ -27,21 +28,17 @@ export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0
  *
  * Produced by replaying the move list rather than by loading a stored FEN: a FEN
  * cannot tell you how many times a position has repeated, so a FEN-only state
- * would silently get threefold repetition wrong.
+ * would silently get threefold repetition wrong. Defined next to the derivation
+ * that produces it; re-exported here because this is where callers look for it.
  */
-export interface PositionInfo {
-  readonly fen: string
-  readonly turn: Color
-  /** Plies since the last capture or pawn move, straight from the FEN. */
-  readonly halfmoveClock: number
-  /** How many times the *current* position has occurred in this game, including now. */
-  readonly repetitionCount: number
-  readonly inCheck: boolean
-  readonly legalMoveCount: number
-}
+export type { PositionInfo }
 
 /**
- * Replay a move list onto a starting position.
+ * Replay a move list onto a starting position, returning the `Chess` itself.
+ *
+ * For the callers that need chess.js's own history — PGN export, and tests that
+ * want the move list a position allows. Anything that only needs to *know* about
+ * the position should call `analyse`, which is memoised; this always replays.
  *
  * Throws if any move is illegal, which is the point: this is the only path by
  * which a move enters the state, so a tampered client cannot smuggle one in.
@@ -55,56 +52,39 @@ export function replay(initialFen: string, moves: readonly string[]): Chess {
   return chess
 }
 
-function fenField(fen: string, index: number): string {
-  const field = fen.split(' ')[index]
-  if (field === undefined) throw new Error(`Malformed FEN, missing field ${index}: ${fen}`)
-  return field
+/**
+ * A `Chess` holding exactly `fen`, with no history behind it.
+ *
+ * For deciding one candidate move. Legality and SAN disambiguation depend only on
+ * the position, and a FEN carries all of it — placement, side to move, castling
+ * rights, the en passant square and both clocks — so the reducer does not have to
+ * replay the game to reject an illegal move.
+ *
+ * Not for anything that needs history: repetition counts come from `analyse`, and
+ * PGN export needs `replay`.
+ */
+export function chessAt(fen: string): Chess {
+  return new Chess(fen)
 }
 
 /**
- * The repetition key for a position.
+ * The repetition key for a position, for callers holding a `Chess`.
  *
- * Placement, side to move, castling rights, and the en passant square — but the
- * en passant square only counts when an en passant capture is actually legal.
- * FEN records the square after any double pawn push; FIDE only treats positions
- * as different if the capture is available. Skipping this normalisation makes
- * threefold under-count after any double push, which players notice immediately.
+ * See `positionKey` in `derive.ts` for what goes into it and why the en passant
+ * square is normalised.
  */
 export function repetitionKey(chess: Chess): string {
-  const fen = chess.fen()
-  const placement = fenField(fen, 0)
-  const turn = fenField(fen, 1)
-  const castling = fenField(fen, 2)
-  const enPassant = fenField(fen, 3)
-
-  const captureAvailable =
-    enPassant !== '-' &&
-    chess.moves({ verbose: true }).some((move: Move) => move.flags.includes('e'))
-
-  return `${placement} ${turn} ${castling} ${captureAvailable ? enPassant : '-'}`
+  return positionKey(chess.fen(), () => chess.moves({ verbose: true }))
 }
 
-/** Replay the game and report the state of the position it arrives at. */
+/**
+ * Report the state of the position a move list arrives at.
+ *
+ * Memoised by `(initialFen, moves)` — see `derive.ts`. Same inputs, same answer;
+ * the cache only changes how long it takes to get it.
+ */
 export function analyse(initialFen: string, moves: readonly string[]): PositionInfo {
-  const chess = new Chess(initialFen)
-  const keys: string[] = [repetitionKey(chess)]
-
-  for (const san of moves) {
-    chess.move(san)
-    keys.push(repetitionKey(chess))
-  }
-
-  const current = keys[keys.length - 1]
-  const fen = chess.fen()
-
-  return {
-    fen,
-    turn: chess.turn(),
-    halfmoveClock: Number(fenField(fen, 4)),
-    repetitionCount: keys.filter((key) => key === current).length,
-    inCheck: chess.isCheck(),
-    legalMoveCount: chess.moves().length,
-  }
+  return derive(initialFen, moves).position
 }
 
 /**

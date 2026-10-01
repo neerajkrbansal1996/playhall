@@ -1,17 +1,19 @@
 import { type Move } from 'chess.js'
+import { derive, type CapturedPieces } from './rules/derive.js'
 import { availableDrawClaims } from './rules/endings.js'
 import { materialDifference } from './rules/material.js'
-import { analyse, replay } from './rules/position.js'
 import type { ChessEnding, Color, ColorAssignment, DrawClaim } from './rules/types.js'
 import type { MatchResult, Viewer } from './sdk/contract.js'
 import { getResult } from './result.js'
 import { canAbort, firstMoveDeadline, type ChessMatchState } from './state.js'
 
-/** Pieces one side has captured, as piece letters (`p`, `n`, `b`, `r`, `q`). */
-export interface CapturedPieces {
-  readonly w: readonly string[]
-  readonly b: readonly string[]
-}
+/**
+ * Pieces one side has captured, as piece letters (`p`, `n`, `b`, `r`, `q`).
+ *
+ * Accumulated ply by ply in the derivation rather than recounted from a replayed
+ * history, so it costs nothing to read here.
+ */
+export type { CapturedPieces }
 
 export interface ChessView {
   readonly phase: ChessMatchState['phase']
@@ -46,16 +48,6 @@ export interface ChessView {
   readonly result: MatchResult | null
 }
 
-function capturedPieces(history: readonly Move[]): CapturedPieces {
-  const captured: { w: string[]; b: string[] } = { w: [], b: [] }
-  for (const move of history) {
-    if (!move.captured) continue
-    // `move.color` is the capturing side, so the piece goes to their pile.
-    captured[move.color].push(move.captured)
-  }
-  return captured
-}
-
 function legalMovesFor(history: readonly Move[]): Readonly<Record<string, readonly string[]>> {
   const byOrigin: Record<string, string[]> = {}
   for (const move of history) {
@@ -72,12 +64,15 @@ function legalMovesFor(history: readonly Move[]): Readonly<Record<string, readon
  * about everything *around* it: a spectator must not learn that a player has a
  * draw offer pending, and nobody gets legal-move hints for a side they are not
  * playing.
+ *
+ * Everything about the position comes from one `derive` call, which is a cache hit
+ * once any viewer has built a view for this move list. That matters because the
+ * runner builds one view per viewer per broadcast: replaying the game here made a
+ * view cost O(plies), per viewer, on every single action.
  */
 export function getViewFor(state: ChessMatchState, viewer: Viewer): ChessView {
-  const chess = replay(state.initialFen, state.moves)
-  const position = analyse(state.initialFen, state.moves)
-  const history = chess.history({ verbose: true })
-  const last = history[history.length - 1]
+  const derived = derive(state.initialFen, state.moves)
+  const { position } = derived
 
   // A `replay` viewer has full information, but it is only ever constructed
   // after the match is over — by then there is no offer pending and no turn to
@@ -98,11 +93,11 @@ export function getViewFor(state: ChessMatchState, viewer: Viewer): ChessView {
     fen: position.fen,
     turn: position.turn,
     moves: state.moves,
-    lastMove: last ? { from: last.from, to: last.to } : null,
+    lastMove: derived.lastMove,
     inCheck: position.inCheck,
     colors: state.colors,
     yourColor,
-    legalMoves: isYourTurn ? legalMovesFor(chess.moves({ verbose: true })) : {},
+    legalMoves: isYourTurn ? legalMovesFor(derived.legalMoves) : {},
     drawOffer:
       yourColor !== null && state.drawOffer !== null
         ? { by: state.drawOffer.by, isYours: state.drawOffer.by === yourColor }
@@ -110,7 +105,7 @@ export function getViewFor(state: ChessMatchState, viewer: Viewer): ChessView {
     availableDrawClaims: isYourTurn ? availableDrawClaims(position) : [],
     canAbort: yourColor !== null && canAbort(state),
     firstMoveDeadline: firstMoveDeadline(state),
-    capturedPieces: capturedPieces(history),
+    capturedPieces: derived.capturedPieces,
     materialDifference: materialDifference(position.fen),
     ending: state.ending,
     result: getResult(state),
