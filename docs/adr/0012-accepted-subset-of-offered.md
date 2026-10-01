@@ -5,6 +5,9 @@
 - **Author:** CTO
 - **Milestone:** M1 (rule + turn-based check); real-time half owed in M6
 - **Issue:** [PER-203](/PER/issues/PER-203)
+- **Amended:** 2026-10-01 by the CTO, carried in the [PER-211](/PER/issues/PER-211)
+  implementation PR — the cost law is an upper bound rather than an equality on a union
+  schema, the perturbed field may be nested, and two bounds are named as revisit triggers.
 
 ## Context
 
@@ -69,6 +72,12 @@ than sampling, and the measured cost does not justify declining. At each state t
 already samples, take each _offered_ action, add one optional field that `actionSchema`
 declares and the action does not carry, re-parse, and require the result to be rejected unless
 it is itself in the offered set.
+
+The field may be **nested, bounded at three path segments**, and may sit inside a union
+member, because the discriminated-union shape this ADR recommends puts it there: chess's
+`promotion` is at `move.promotion` inside the `move` variant, so a collector reading only
+top-level keys would report "nothing to cover" on the very defect this ADR was written about.
+The bound is what keeps the cost law enumerable; see **Revisit triggers** before raising it.
 
 Three properties make this cheap and safe:
 
@@ -202,10 +211,14 @@ number of declared optional fields:
 [cost law] fields=1 forward=216 perturbed=216 ratio=1.000
 ```
 
-So the cost is **`|optional fields declared by actionSchema|` × the `validateAction` calls the
-forward direction already makes** — zero for a schema with no optional fields, 1× for chess
-(`promotion`). Against the full suite run, that is +216 `validateAction` calls on a baseline of
-1,083, i.e. **+20%** of the suite's `validateAction` calls.
+So the cost is bounded by **`|optional field paths actionSchema declares|` × the
+`validateAction` calls the forward direction already makes** — zero for a schema with no
+optional field. The bound is tight when no offered action already carries the field and
+`actionSchema` accepts every representative value, which is the flat-schema case measured
+above. On a discriminated union it is strictly a bound: a variant that does not contain the
+field's parent contributes no probe, and an action that already carries the field contributes
+none either. Against the full suite run on `hidden-hand`, the bound is attained: +216
+`validateAction` calls on a baseline of 1,083, i.e. **+20%**.
 
 Wall clock for those calls measured 0.6 ms, 1.3 ms and 0.6 ms on three consecutive runs
 against a 63–78 ms baseline — under 2% either way, but the spread is as large as the quantity,
@@ -231,7 +244,8 @@ forward direction is already in the budget.
   author who types an action loosely to keep the schema simple now pays for it in probes. That
   is the intended pressure.
 - **Harder:** the testkit gains a dependency on zod v3 schema internals (`_def.typeName`,
-  `.shape`). This is real coupling and I am accepting it with a named mitigation: the
+  `.shape`, `_def.options`, and the per-wrapper inner-schema keys `innerType` / `schema` /
+  `type` / `in`). This is real coupling and I am accepting it with a named mitigation: the
   introspector's self-check from decision 3 doubles as the version canary — if a zod upgrade
   changes the internals, the suite reports "could not read `actionSchema`" rather than quietly
   generating nothing. A zod major is a stack change and is board-gated under ADR-0001
@@ -262,3 +276,7 @@ forward direction is already in the budget.
   (a custom codec, a branded parser). The introspector's assumptions are then stale.
 - Chess's measured suite wall clock with perturbation enabled exceeds the PR-gate budget. The
   cost law says it should not; a measurement that disagrees beats the law.
+- A game's `actionSchema` declares an optional field deeper than three path segments, or
+  behind a zod wrapper the introspector does not unwrap. Both are bounds chosen to keep the
+  cost law enumerable, and both should be revisited by measurement rather than raised on
+  request.

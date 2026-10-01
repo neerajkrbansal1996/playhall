@@ -225,14 +225,35 @@ export interface TurnBasedConformanceSubject<
    * Well-formed actions the suite should try everywhere, on top of the ones
    * it observes during play.
    *
-   * This is what makes the *reverse* half of `legal-actions-agree`
-   * meaningful. Without it the suite can only probe actions
-   * `getLegalActions` itself offered, so a `getLegalActions` that omits an
-   * action category entirely — the classic being "forgot that resigning is
-   * always available" — hides from its own check. A handful of representative
-   * actions here closes that hole.
+   * This is what finds a `getLegalActions` that omits an action *category*
+   * entirely — the classic being "forgot that resigning is always available",
+   * which no probe derived from the offered set can see.
+   *
+   * It is an absolute payload, tried at whatever states a playout reached, so
+   * it is a sampling argument: a spelling that is only legal in a position
+   * random play does not visit stays invisible. The key-level half of that gap
+   * is closed by perturbation instead (ADR-0012); see `actionPerturbations`.
    */
   readonly probeActions?: readonly TAction[]
+
+  /**
+   * Fields to add to an offered action when probing `accepted ⊆ offered`
+   * (ADR-0012) — **the fallback, not the primary source.**
+   *
+   * The suite normally reads these off `actionSchema` itself, because the schema
+   * already contains the answer and a second source of truth drifts. Declare
+   * them only for a schema the introspector cannot read, or an optional field
+   * whose type it cannot sample a value from. In that case the check *still*
+   * reports the gap in its notes, so a schema that has become unreadable stays
+   * visible instead of looking covered.
+   *
+   * `key` is a dotted path, so a nested field can be declared:
+   * `{ key: 'move.promotion', values: ['q'] }`.
+   */
+  readonly actionPerturbations?: readonly {
+    readonly key: string
+    readonly values: readonly unknown[]
+  }[]
 
   /**
    * Error codes this game may return, beyond the standard set. Declaring them

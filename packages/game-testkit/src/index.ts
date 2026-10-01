@@ -83,6 +83,22 @@ export {
 } from './internal/driver.js'
 
 export { AmbientAccessError, withoutAmbientSources } from './internal/ambient.js'
+/**
+ * The `accepted ⊆ offered` corpus generator (ADR-0012). Exported so its
+ * zod-internals introspection can be unit-tested directly: it is the one piece
+ * of the testkit whose failure mode is a silently empty corpus.
+ */
+export {
+  type DeclaredPerturbation,
+  type PerturbationField,
+  type PerturbationGap,
+  type PerturbationPlan,
+  type Perturbed,
+  type SampledValue,
+  perturb,
+  planPerturbations,
+  sampleValue,
+} from './internal/perturb.js'
 export {
   type JsonSafetyProblem,
   deepEqual,

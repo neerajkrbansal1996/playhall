@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import type {
   ConformanceCheck,
   ConformanceReport,
@@ -260,6 +261,276 @@ describe('action rejection', () => {
         ),
     })
     expectCaughtBy(report, 'legal-actions-agree')
+  })
+
+  /**
+   * ADR-0012: `accepted ⊆ offered`. PER-198's shape, on a game whose playouts
+   * are reproducible — `actionSchema` declares an optional field, the reducer
+   * ignores it, and `getLegalActions` lists only the bare spelling. Every
+   * ordinary move then has a second wire spelling nothing enumerates, nothing
+   * hints and no replay reproduces.
+   *
+   * The CTO measured on `main` at `15efe05` that sampling is blind to this at
+   * 1, 3, 12 and 24 playouts per variant: the reverse corpus was
+   * `probeActions ∪ (actions offered to other seats)`, and the payload is in
+   * neither. These cases all run at FAST (3 playouts) on purpose — the point of
+   * perturbation is that it does not need seeds.
+   */
+  describe('accepted ⊆ offered (ADR-0012)', () => {
+    /** `face` is declared, parsed, and read by nothing. */
+    const toleratedField = z.object({
+      type: z.literal('play'),
+      cardId: z.string().min(1).max(8),
+      face: z.enum(['up', 'down']).optional(),
+    })
+
+    function noteOf(report: ConformanceReport, needle: string): string | undefined {
+      return report.checks
+        .find((check) => check.id === 'legal-actions-agree')
+        ?.notes.find((note) => note.includes(needle))
+    }
+
+    function notesOf(report: ConformanceReport): readonly string[] {
+      return report.checks.find((check) => check.id === 'legal-actions-agree')?.notes ?? []
+    }
+
+    /** `[cost law] fields=F forward=N perturbed=P asserted=A`, as ADR-0012 prints it. */
+    function costLaw(report: ConformanceReport): {
+      fields: number
+      forward: number
+      perturbed: number
+      asserted: number
+    } {
+      const note = noteOf(report, '[cost law]')
+      expect(note, `no cost-law note in:\n${notesOf(report).join('\n')}`).toBeDefined()
+      const matched = /fields=(\d+) forward=(\d+) perturbed=(\d+) asserted=(\d+)/.exec(note ?? '')
+      expect(matched, `cost-law note not parseable: ${String(note)}`).not.toBeNull()
+      return {
+        fields: Number(matched?.[1]),
+        forward: Number(matched?.[2]),
+        perturbed: Number(matched?.[3]),
+        asserted: Number(matched?.[4]),
+      }
+    }
+
+    it('catches an optional field the game tolerates and ignores', () => {
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField as HiddenHandSubject['server']['actionSchema'],
+      })
+      expectCaughtBy(report, 'legal-actions-agree')
+      // Nothing else moved: this is one defect, not a broken subject.
+      expect(failedChecks(report)).toEqual(['legal-actions-agree'])
+      const failures =
+        report.checks.find((check) => check.id === 'legal-actions-agree')?.failures ?? []
+      expect(failures[0]?.message).toContain('getLegalActions does not list')
+      // The finding has to name the spelling, or the author cannot act on it.
+      expect(failures.some((failure) => failure.detail?.includes('"face"') === true)).toBe(true)
+    })
+
+    it('passes the same game once validateAction rejects the extra spelling', () => {
+      // The fix ADR-0012 prescribes: reject the second spelling, never widen
+      // `getLegalActions` to enumerate both.
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField as HiddenHandSubject['server']['actionSchema'],
+        validateAction: (ctx, state, seatId, action) => {
+          if ('face' in action) return { ok: false, error: { code: 'invalid_action' } }
+          return hiddenHandSubject.server.validateAction(ctx, state, seatId, action)
+        },
+      })
+      expect(failedChecks(report)).toEqual([])
+      // …and it ran: a pass here must be distinguishable from a pass that
+      // never probed anything.
+      expect(noteOf(report, 'perturbation direction covered')).toBeDefined()
+      expect(costLaw(report).perturbed).toBeGreaterThan(0)
+    })
+
+    it('reports nothing to cover, not coverage, for a schema with no optional field', () => {
+      const report = runTurnBasedConformance(hiddenHandSubject, FAST)
+      expect(failedChecks(report)).toEqual([])
+      expect(noteOf(report, 'has nothing to cover')).toBeDefined()
+      expect(noteOf(report, 'perturbation direction covered')).toBeUndefined()
+      // Zero extra `validateAction` calls, which is the cost ADR-0012 claims
+      // for a schema that declares no optional field.
+      expect(costLaw(report)).toMatchObject({ fields: 0, perturbed: 0 })
+    })
+
+    it('holds the cost law: perturbed == forward × |optional fields|', () => {
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField as HiddenHandSubject['server']['actionSchema'],
+      })
+      const { fields, forward, perturbed } = costLaw(report)
+      expect(fields).toBe(1)
+      expect(forward).toBeGreaterThan(0)
+      // Equality, not just the bound: no offered action carries `face`, and
+      // `actionSchema` accepts every representative value.
+      expect(perturbed).toBe(forward * fields)
+    })
+
+    it('keeps the cost law as a bound when a field is declared twice over', () => {
+      const report = mutateHiddenHand(
+        { actionSchema: toleratedField as HiddenHandSubject['server']['actionSchema'] },
+        { actionPerturbations: [{ key: 'face', values: ['up', 'down'] }] },
+      )
+      const { fields, forward, perturbed } = costLaw(report)
+      expect(fields).toBe(2)
+      expect(perturbed).toBe(forward * fields)
+    })
+
+    it('skips a perturbation that is itself offered, instead of flagging it', () => {
+      // `promotion: 'q'` → `promotion: 'r'` on a real promotion is another
+      // genuinely legal move. The existing `listedKeys` skip has to absorb it,
+      // which is why perturbation feeds the assertion that already exists
+      // rather than a new one.
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField as HiddenHandSubject['server']['actionSchema'],
+        // Every spelling is offered, so every perturbation lands in `listed`.
+        getLegalActions: (state, seatId) =>
+          (hiddenHandSubject.server.getLegalActions?.(state, seatId) ?? []).flatMap((action) => [
+            action,
+            { ...action, face: 'up' as const },
+            { ...action, face: 'down' as const },
+          ]),
+      })
+      expect(failedChecks(report)).toEqual([])
+      const law = costLaw(report)
+      // The corpus is generated — so the direction ran — and every member of it
+      // is a move the game offers, so there is nothing left to assert.
+      expect(law.perturbed).toBeGreaterThan(0)
+      expect(law.asserted).toBe(0)
+      expect(noteOf(report, 'already offers every one of them')).toBeDefined()
+    })
+
+    it('says so when every probe is rejected by the schema it came from', () => {
+      // A readable field the value sampler cannot satisfy: `'atrium-probe'` is
+      // not two digits. The direction generated nothing, and the report has to
+      // say that rather than read as a pass — this is the value-level half the
+      // ADR names as not covered, surfacing as a corpus of zero.
+      const constrained = z.object({
+        type: z.literal('play'),
+        cardId: z.string().min(1).max(8),
+        tag: z
+          .string()
+          .regex(/^\d{2}$/)
+          .optional(),
+      })
+      const report = mutateHiddenHand({
+        actionSchema: constrained as HiddenHandSubject['server']['actionSchema'],
+      })
+      expect(failedChecks(report)).toEqual([])
+      expect(costLaw(report)).toMatchObject({ fields: 1, perturbed: 0 })
+      expect(noteOf(report, 'produced 0 surviving probes')).toBeDefined()
+      expect(noteOf(report, 'perturbation direction covered')).toBeUndefined()
+    })
+
+    it('still catches the defect when the schema carries a cross-field refinement', () => {
+      // `.superRefine()` is the single most ordinary thing to put on an action
+      // schema, and zod v3 stores its inner schema under `_def.schema` rather
+      // than `_def.innerType`. If the introspector does not follow it, this
+      // subject reports "cannot read actionSchema" and the planted defect walks.
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField.refine(
+          (action) => action.cardId !== '',
+        ) as unknown as HiddenHandSubject['server']['actionSchema'],
+      })
+      expectCaughtBy(report, 'legal-actions-agree')
+      expect(noteOf(report, 'NOT covered for actionSchema')).toBeUndefined()
+      expect(costLaw(report)).toMatchObject({ fields: 1 })
+    })
+
+    it('does not cry gap over a union variant that has no keys to perturb', () => {
+      // `z.union([z.object({…}), z.literal('resign')])` is an ordinary action
+      // schema. The direction is fully covered here; a note saying otherwise
+      // tells the author to declare a perturbation for a schema that cannot
+      // carry one, and that is how the loud-absence channel gets tuned out.
+      const withKeylessVariant = z.union([toleratedField, z.literal('resign')])
+      const report = mutateHiddenHand({
+        actionSchema: withKeylessVariant as unknown as HiddenHandSubject['server']['actionSchema'],
+      })
+      expect(notesOf(report).filter((note) => note.includes('NOT covered'))).toEqual([])
+      // …and it is covered because it ran, not because it was skipped.
+      expect(noteOf(report, 'perturbation direction covered')).toBeDefined()
+      expect(costLaw(report)).toMatchObject({ fields: 1 })
+    })
+
+    /**
+     * The loud-absence requirement, which is the condition ADR-0012's approval
+     * rests on. A direction that silently generates zero probes and reports a
+     * pass reproduces `passWithNoTests` on a check whose entire purpose is to
+     * stop a silent pass.
+     */
+    describe('loud absence', () => {
+      /** Not a zod schema at all — a hand-rolled parser, as a game may ship. */
+      const opaque = {
+        safeParse: (value: unknown) => {
+          const ok =
+            typeof value === 'object' &&
+            value !== null &&
+            (value as { type?: unknown }).type === 'play' &&
+            typeof (value as { cardId?: unknown }).cardId === 'string'
+          return ok
+            ? { success: true as const, data: value as HiddenHandAction }
+            : { success: false as const, error: new Error('nope') }
+        },
+      }
+
+      it('names an actionSchema it cannot introspect, and claims no coverage', () => {
+        const report = mutateHiddenHand({
+          actionSchema: opaque as unknown as HiddenHandSubject['server']['actionSchema'],
+        })
+        const note = noteOf(report, 'NOT covered for actionSchema')
+        expect(note, `notes were:\n${notesOf(report).join('\n')}`).toBeDefined()
+        expect(note).toContain('actionPerturbations')
+        expect(noteOf(report, 'perturbation direction covered')).toBeUndefined()
+        expect(noteOf(report, 'has nothing to cover')).toBeUndefined()
+        expect(costLaw(report)).toMatchObject({ fields: 0, perturbed: 0 })
+      })
+
+      it('still names the schema when actionPerturbations papers over it', () => {
+        // The fallback restores the direction; the gap stays visible, because a
+        // schema the introspector cannot read is a thing to fix, not to hide.
+        const report = mutateHiddenHand(
+          { actionSchema: opaque as unknown as HiddenHandSubject['server']['actionSchema'] },
+          { actionPerturbations: [{ key: 'face', values: ['up'] }] },
+        )
+        expectCaughtBy(report, 'legal-actions-agree')
+        expect(noteOf(report, 'NOT covered for actionSchema')).toBeDefined()
+        expect(noteOf(report, 'perturbation direction covered')).toBeDefined()
+      })
+
+      it('names an optional field whose inner type it cannot sample', () => {
+        const unsampleable = z.object({
+          type: z.literal('play'),
+          cardId: z.string().min(1).max(8),
+          meta: z.record(z.string()).optional(),
+        })
+        const report = mutateHiddenHand({
+          actionSchema: unsampleable as HiddenHandSubject['server']['actionSchema'],
+        })
+        const note = noteOf(report, "optional field 'meta'")
+        expect(note, `notes were:\n${notesOf(report).join('\n')}`).toBeDefined()
+        expect(note).toContain('NOT covered')
+        expect(note).toContain('ZodRecord')
+        expect(noteOf(report, 'perturbation direction covered')).toBeUndefined()
+      })
+
+      it('takes the loud path when zod moves its internals out from under us', () => {
+        // The version canary ADR-0012 names as the mitigation for coupling to
+        // `_def`. Shaped like a post-v3 schema: a `_def`, no `typeName`.
+        // (Measured against the real `zod/v4` on 3.25.76: `_def.typeName` is
+        // `undefined` there, so it lands here.)
+        const futureZod = {
+          _def: { type: 'object' },
+          shape: { type: {}, cardId: {} },
+          safeParse: (value: unknown) => ({ success: true as const, data: value as never }),
+        }
+        const report = mutateHiddenHand({
+          actionSchema: futureZod as unknown as HiddenHandSubject['server']['actionSchema'],
+        })
+        const note = noteOf(report, 'NOT covered for actionSchema')
+        expect(note).toBeDefined()
+        expect(note).toContain('zod v4')
+      })
+    })
   })
 })
 
