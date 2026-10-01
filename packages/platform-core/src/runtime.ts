@@ -81,8 +81,33 @@ export interface RandomSource {
 
 /**
  * Backed by the Web Crypto API, which Node 19+ and every supported browser
- * expose globally. Deliberately not `node:crypto` — this package has to stay
- * importable from an edge runtime.
+ * expose globally.
+ *
+ * Deliberately not `node:crypto`, but the reason is narrower than the one this
+ * comment used to give. It claimed "this package has to stay importable from an
+ * edge runtime", which is not true as written — `identity/guest-token.ts` signs
+ * with `node:crypto`, and because `src/index.ts` re-exports the whole package,
+ * one entrypoint decides the answer for every module behind it. Measured in
+ * ADR-0011 §3: a Next.js Edge middleware importing nothing but `readGuestCookie`
+ * still fails `next build`. Not a tree-shaking problem, and not fixable by
+ * declaring `sideEffects` — the build fails while webpack is still walking the
+ * graph, long before dead code is eliminated from the bundle.
+ *
+ * What is true (ADR-0011):
+ *
+ * - `@playhall/platform-core` — the default entrypoint — targets **Node** and
+ *   **Cloudflare Workers**. Both support `node:crypto` in full, so it may use it.
+ *   It is **not** importable from Next.js Edge middleware.
+ * - An edge consumer imports `@playhall/platform-core/edge`, a second entrypoint
+ *   whose module graph reaches no Node builtin. It carries the cookie *reader*
+ *   and these ports — read-only by design, so no cookie *serializer* — and it is
+ *   built when the first edge consumer lands. There is none today.
+ *
+ * So this function is not load-bearing for a package-wide invariant. It is the
+ * package's documented default `RandomSource` because a port is the right shape
+ * for an ambient capability (see the module doc above), and it is what the
+ * `/edge` entrypoint exports when it exists. "Documented" rather than "wired":
+ * callers inject a `RandomSource` today.
  */
 export function webCryptoRandomSource(): RandomSource {
   return {

@@ -17,3 +17,25 @@ export const SETTINGS = { seats: 2 }
 export const games = {
   'fx-b': () => import('@scope/fx-b'),
 }
+=== file: packages/platform-core/src/identity/guest-token.ts ===
+// The one exception `no-platform-core-node-builtins` carries, at its exact path, doing the exact
+// thing it is exempted for. It belongs in the positive control rather than in a negative fixture
+// because "the exception is allowed" can only be proven by a run that ends green: a negative
+// fixture asserts the rule fired somewhere, which is silent about whether this file is why.
+//
+// Paired with no-platform-core-node-builtins-sibling-of-exception.fixture, which adds a second
+// file under the same directory and must go red, the two together pin the exception to one file
+// instead of one folder. The edge is permanent — ADR-0011 §Decision part 4 governs it and
+// §Alternatives 1 rejects the async swap that would remove it — so this block is not waiting on a
+// follow-up. It comes out only if that ADR is amended.
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+export const sign = (input: string, key: string): Buffer => createHmac('sha256', key).update(input).digest()
+export const equal = (a: Buffer, b: Buffer): boolean => a.length === b.length && timingSafeEqual(a, b)
+=== file: packages/platform-core/src/index.ts ===
+// Imported rather than left orphaned, so the edge above is genuinely in the graph — an
+// unreferenced file would make this half of the control prove nothing.
+import { BRAND_KEY } from '@scope/shared'
+
+export const brandKey = BRAND_KEY
+export * from './identity/guest-token.js'
