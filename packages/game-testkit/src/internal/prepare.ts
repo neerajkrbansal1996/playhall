@@ -40,7 +40,19 @@ import type {
 export const DEFAULTS = {
   playoutsPerVariant: 24,
   maxStepsPerPlayout: 500,
-  seed: 'atrium-conformance-v1',
+  /**
+   * Root of the RNG stream for every playout, via `seedFor(baseSeed, label, index)`.
+   *
+   * **This literal is behaviour, not a label.** Edit it and every conformance subject
+   * is driven through a different action sequence, so a subject that passes today can
+   * fail — or, worse, keep passing for a different reason. It is therefore named for
+   * what it seeds and nothing else: no product name, so a rebrand can never reach it
+   * (PER-217 renamed it away from one, and PER-194's brand scan no longer has to carry
+   * an exception for this file). Bump the suffix when, and only when, you intend to
+   * resample every subject, and diff the reports before and after rather than trusting
+   * green. `conformance-seed.test.ts` pins the value so the change cannot be silent.
+   */
+  seed: 'turn-based-conformance-v2',
   startNow: 1_700_000_000_000,
   nowStepMs: 1_000,
 } as const

@@ -33,19 +33,24 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 /** The two files allowed to contain the brand literals: the constant and its own test. */
 const BRAND_SOURCES = ['packages/shared/src/brand.ts', 'packages/shared/test/brand.test.ts']
 
-/**
- * Two codename occurrences in `@playhall/game-testkit` that this change deliberately does
- * not touch, because neither is user-visible and one is load-bearing:
- * `checks/actions.ts` names an intentionally-unknown probe key, and `internal/prepare.ts`
- * uses the codename in `DEFAULTS.seed` — the default RNG seed for every conformance
- * playout. Renaming that string changes the action sequence every conformance subject is
- * driven through, which is the testkit owner's call and not a side-effect of a brand fix.
- * They are listed here rather than dropped from the scan so the exception stays visible.
+/*
+ * There is deliberately no allowlist here beyond `BRAND_SOURCES` — a plain block comment
+ * rather than JSDoc, because it documents the absence of a declaration.
+ *
+ * This file originally carried two `@playhall/game-testkit` exceptions — a probe key in
+ * `checks/actions.ts` and `DEFAULTS.seed` in `internal/prepare.ts` — because the second
+ * one is load-bearing: the seed roots the RNG stream for every conformance playout, so
+ * renaming it resamples every subject, and that was the testkit owner's call rather than
+ * a side-effect of a brand fix. [PER-217](/PER/issues/PER-217) made that call: both are
+ * now named for what they do and carry no product name at all, and the conformance
+ * reports were diffed across the rename (every check's status, failures and notes
+ * identical; assertion counts moved, which is what proves the stream really changed).
+ * `packages/game-testkit/test/conformance-seed.test.ts` now pins the seed so a future
+ * edit cannot be silent.
+ *
+ * Keep it empty. An exception here is a standing promise that some source file may spell
+ * the codename forever; prefer renaming the occurrence, as PER-217 did.
  */
-const CODENAME_EXCEPTIONS = [
-  'packages/game-testkit/src/checks/actions.ts',
-  'packages/game-testkit/src/internal/prepare.ts',
-]
 
 const COPY_EXTENSIONS = ['.ts', '.tsx', '.css']
 const ROOTS = ['apps', 'packages', 'games']
@@ -109,23 +114,9 @@ describe('brand literals', () => {
   it('keeps the internal codename out of every source file but the constant and its test', () => {
     // The codename survives in `brand.ts` as the sentinel `isProvisional` compares
     // against — containing it to that one line is the whole point of the sentinel.
-    const hits = scan(new RegExp(INTERNAL_CODENAME, 'i'), [
-      ...BRAND_SOURCES,
-      ...CODENAME_EXCEPTIONS,
-    ])
+    const hits = scan(new RegExp(INTERNAL_CODENAME, 'i'), BRAND_SOURCES)
 
     expect(format(hits)).toBe('')
-  })
-
-  it('still has exactly the two known codename exceptions, and no more', () => {
-    // An allowlist that outlives its entries is how a gate goes quietly green. If the
-    // testkit renames these, this case fails and the entry comes off the list.
-    const stale = CODENAME_EXCEPTIONS.filter(
-      (file) =>
-        !new RegExp(INTERNAL_CODENAME, 'i').test(readFileSync(join(repoRoot, file), 'utf8')),
-    )
-
-    expect(stale).toEqual([])
   })
 
   it('bakes no product host into the source', () => {
