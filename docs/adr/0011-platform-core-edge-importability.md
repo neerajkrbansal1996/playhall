@@ -6,6 +6,8 @@
 - **Milestone:** M1
 - **Issue:** [PER-164](/PER/issues/PER-164) (gate: [PER-162](/PER/issues/PER-162); origin:
   [PER-11](/PER/issues/PER-11) / [PER-65](/PER/issues/PER-65), PR #14, merged as `9f180cf`)
+- **Review:** [PER-185](/PER/issues/PER-185) — Platform Engineer, non-author. §3's mechanism and §5's
+  delta were independently re-measured there and this document reflects the corrected versions.
 
 ## Context
 
@@ -105,7 +107,7 @@ been misdiagnosed:
 So the constraint is real, it is caught at build time, and the error will not tell the next engineer
 what they actually did wrong.
 
-### 3. The barrel is not tree-shaken: importing **only** `readGuestCookie` still fails.
+### 3. No bundler setting rescues this: importing **only** `readGuestCookie` still fails.
 
 This is the finding that decides the ADR, and it is the opposite of what
 [PER-164](/PER/issues/PER-164)'s framing hoped for. A middleware that imports nothing but the pure
@@ -124,11 +126,34 @@ node:crypto
 ../../packages/platform-core/src/index.ts
 ```
 
-`packages/platform-core/package.json` exports exactly one path (`"." : "./src/index.ts"`) and
-declares no `sideEffects` field, so webpack must assume the barrel has side effects and keeps the
-whole re-exported subtree in the module graph. **"Read the cookie, never verify it" does not
-dissolve the constraint**, because there is no import path that reaches `cookie.ts` without
-reaching `guest-token.ts`.
+`packages/platform-core/package.json` exports exactly one path (`"." : "./src/index.ts"`), so every
+consumer enters through the barrel, the barrel re-exports `identity/index.ts`, and that re-exports
+`guest-token.ts`. **"Read the cookie, never verify it" does not dissolve the constraint**, because
+there is no import path that reaches `cookie.ts` without reaching `guest-token.ts`.
+
+**Tree-shaking is not the mechanism, and declaring `sideEffects` does not fix it.** This was
+re-measured under review ([PER-185](/PER/issues/PER-185)) against this exact graph shape, compiled
+with Next 15.5.26's own bundled webpack targeting `webworker` with `sideEffects` and `usedExports`
+both on:
+
+| Variant                                         | Result                                          |
+| ----------------------------------------------- | ----------------------------------------------- |
+| no `sideEffects` field (today)                  | `UnhandledSchemeError` · `guest-token.ts` built |
+| `"sideEffects": false`                          | **same `UnhandledSchemeError`** · still built   |
+| deep import `…/identity/cookie.js`, today's map | `Module not found: … is not exported`           |
+| same deep import + `"./src/*": "./src/*"` added | ✓ 0 errors · `guest-token.ts` **not** built     |
+
+The barrel _is_ tree-shaken — a control with the `node:crypto` import swapped for a benign function
+has the unused export dropped from the output in both of the first two variants. Tree-shaking is
+simply irrelevant to this failure, because it removes dead code from the **bundle**, not modules
+from the **build**: `SideEffectsFlagPlugin` rewrites re-export connections in `optimizeDependencies`,
+after the module graph is complete, whereas `UnhandledSchemeError` is thrown during module build
+while the graph is still being walked. Webpack cannot know `guest-token.ts`'s export names without
+building it, and building it means resolving `node:crypto`.
+
+So the invariant is not "we happen not to have declared `sideEffects`" — it is **no bundler setting
+can reach this**. Only a different _entry_ into the graph can, which is what the fourth row shows
+and what §4 builds on.
 
 The consequence for the invariant is sharper than the wording in `runtime.ts` admits:
 edge-importability is a property of an **entrypoint's reachable module graph**, not of a package and
@@ -149,7 +174,7 @@ pointing the same middleware at `@playhall/platform-core/edge`:
 `@testing-library/react` link in the throwaway symlink farm used for the experiment. The webpack
 compile — the phase that failed in §2 and §3 — is green.)
 
-### 5. The cost of async: **145 ns per verify**, or 0.0001% of the 150 ms budget.
+### 5. The cost of async: **indistinguishable from sync.** |delta| < 1 µs, under 0.001 % of the budget.
 
 169-byte signing input, 213-byte token — the real shape produced by `GuestClaimsSchema` with a
 16-byte `gid`, 16-byte `sid` and a suggested display name. 60 rounds × 2000 calls per case, cases
@@ -172,18 +197,32 @@ the absolutes as an upper bound and the **differences** as the load-invariant re
 
 Per-verify totals, min estimator:
 
-| Path                                   | Per verify | vs the 150 ms p95 round-trip |
-| -------------------------------------- | ---------: | ---------------------------: |
-| sync: `createHmac` + `timingSafeEqual` |    8.33 µs |                     0.0056 % |
-| async: `subtle.verify`, key cached     |    8.48 µs |                     0.0057 % |
-| **delta**                              | **145 ns** |                 **0.0001 %** |
-| async: `importKey` + `sign` every call |   14.74 µs |                     0.0098 % |
+| Path                                   |                  Per verify | vs the 150 ms p95 round-trip |
+| -------------------------------------- | --------------------------: | ---------------------------: |
+| sync: `createHmac` + `timingSafeEqual` |                     8.33 µs |                     0.0056 % |
+| async: `subtle.verify`, key cached     |                     8.48 µs |                     0.0057 % |
+| **delta**                              | **< 1 µs, sign unresolved** |                **< 0.001 %** |
+| async: `importKey` + `sign` every call |                    14.74 µs |                     0.0098 % |
+
+**The delta is reported as a bound, not a value, and that is deliberate.** This methodology was
+re-run independently under review ([PER-185](/PER/issues/PER-185)) on a second host — same
+round-robin ordering, same min-of-batches estimator, 40 × 2000 calls, four separate runs — and
+async measured _faster_ every time, by 0.5–1.1 µs. Both hosts agree the two paths sit at ~8–10 µs;
+neither can resolve the **sign** of the difference. A point estimate here would be spurious
+precision: round-robin and min-of-batches control for drift, but they do nothing about a quantity
+smaller than the run-to-run dispersion (~580 ns), and `min` carries no confidence interval. The
+floor for any async conversion is a bare `await` on a resolved promise — 53 ns here, 66–75 ns there
+— so anything this harness reports under ~1 µs is at or below the floor by construction and should
+not be printed as a measurement. Measuring it properly means paired samples (A and B in the same
+batch, reporting the distribution of per-batch differences), which nothing in this decision needs.
 
 Three readings:
 
-- **The async hop is free at this resolution.** 145 ns against a 150 ms budget is 1 part in a
-  million. `await` on an already-resolved promise costs 53 ns of that. **Performance is not a reason
-  to reject option 1**, and this ADR does not use it as one.
+- **The async hop is free at this resolution.** The two paths are indistinguishable: whatever the
+  delta is, it is under 1 µs against a 150 ms budget, i.e. under 0.001 %, and both hosts bound it
+  there. **Performance is not a reason to reject option 1**, and this ADR does not use it as one —
+  note that this cuts both ways, since the same data cannot be used to claim async is cheap _or_
+  that it is costly.
 - **Key caching is not optional.** Importing the `CryptoKey` per call costs 6.4 µs — a 77 % penalty
   and 4× worse than the entire sync path. Any WebCrypto implementation must import each keyring
   entry once at service construction. The naive port is the slow one.
@@ -257,16 +296,26 @@ enforceable:
 > whole package, so the default entrypoint is **not** importable from Edge middleware — see
 > ADR-0011 §3. Edge consumers import `@playhall/platform-core/edge`.
 
-`webCryptoRandomSource()` keeps its reason to exist — it is the default `RandomSource` and the thing
-the `/edge` entrypoint exports — but its doc comment stops asserting a package-wide invariant that
-§3 disproves.
+`webCryptoRandomSource()` keeps its reason to exist — it is the package's **documented default**
+`RandomSource` and the thing the `/edge` entrypoint exports — but its doc comment stops asserting a
+package-wide invariant that §3 disproves. "Documented" rather than "wired": today every `RandomSource`
+is injected at the call site (`rooms/code.ts`, `rooms/service.ts`) and the one module that wants sync
+random bytes reaches for `node:crypto` instead. Part 4's `service.ts` port is what makes the sentence
+true in code as well as in prose.
 
 ### 2. When the first edge consumer appears, it gets `@playhall/platform-core/edge`. Not async.
 
 The mechanism is §4's, which is measured working, not hypothesised: a second `exports` entry whose
-module graph reaches no Node builtin. It carries `cookie.ts` (`readGuestCookie`,
-`serializeGuestCookie`, `clearGuestCookie`, the cookie name and TTL) and the `runtime.ts` ports, and
-it does **not** re-export `identity/index.js`.
+module graph reaches no Node builtin. It does **not** re-export `identity/index.js`.
+
+Its surface is **least-privilege, and narrower than "everything in `cookie.ts`"**: `readGuestCookie`,
+`GUEST_COOKIE_NAME`, `GUEST_TOKEN_TTL_SECONDS`, `clearGuestCookie`, and the `runtime.ts` ports.
+`serializeGuestCookie` is deliberately **excluded**, because its `token` parameter is an arbitrary
+string — exporting it would let middleware mint `Set-Cookie: guest_token=<anything>`, a write
+capability at precisely the boundary part 3 restricts to reading. Clearing a cookie grants no
+authority, so `clearGuestCookie` stays for a logout-redirect UX. This enumeration is the contract
+whoever builds `/edge` implements; removing a public export after it ships is a breaking change,
+so the narrow version is the one that gets written down.
 
 It is **not built today.** No edge consumer exists (§7), and a second public entrypoint maintained
 for a hypothetical caller is a thing to keep in sync with no test exercising it. The decision
@@ -286,7 +335,7 @@ redirects on "no cookie" is a UX optimisation; a forged or expired cookie sails 
 rejected by `authenticate()` in the handler that actually does something. **Server-authoritative**:
 the only code that may turn a cookie into an identity is the code that checks the MAC.
 
-### 4. `guest-token.ts`'s dependency-cruiser exception becomes permanent and documented.
+### 4. `guest-token.ts`'s dependency-cruiser exception becomes permanent and documented — and stays at exactly one file.
 
 [PER-162](/PER/issues/PER-162)'s `no-platform-core-node-builtins` rule is kept, and its single
 `$`-anchored exception for `guest-token.ts` is **converted from a temporary carve-out owned by this
@@ -294,6 +343,25 @@ ADR into a permanent one governed by it**. The rule's comment is rewritten to sa
 enforces: not "platform-core reaches no Node builtin" (which §1 shows we do not want and §3 shows
 the rule cannot express), but **"every Node builtin in `platform-core` is in this list, and the list
 is short enough to read"**.
+
+**There is a second `node:crypto` importer on `main`, and it is ported rather than excepted.**
+`c08050e` landed `identity/service.ts:14` (`import { randomBytes as nodeRandomBytes }`) after
+[PER-162](/PER/issues/PER-162)'s branch was cut, so that rule goes red on rebase. The correct fix is
+a port, not a second exception: `service.ts:187` uses `randomBytes` **synchronously**
+(`config.randomBytes ?? ((size) => nodeRandomBytes(size))`), and `webCryptoRandomSource()` in
+`runtime.ts` already provides a sync `randomBytes(length): Uint8Array` over
+`crypto.getRandomValues` with a structurally identical signature. That is a one-line change with no
+async contagion, no contract change and no measurable cost — exactly the "take the capability as a
+port" path the rule's own comment prescribes, and it is what makes part 1's "documented default"
+sentence true.
+
+This matters beyond tidiness: the policy above ("the list is short enough to read") is only
+defensible while the list is one entry. Adding `service.ts` to it instead would convert a documented
+one-file carve-out into a growing allowlist and trip revisit trigger #2 by accident. **Owner:
+Platform Engineer, on [PER-162](/PER/issues/PER-162)**, which owns both the rule and `service.ts`;
+the port lands with the gate so the gate is green when it merges. It must also land **before** any
+`/edge` work, because the re-keying below is only expressible once the Node-builtin set in
+`platform-core/src` is one file you can reason about.
 
 When the `/edge` entrypoint lands (part 2), the rule should be re-keyed from a path denylist to a
 reachability assertion over the `/edge` graph — dependency-cruiser can express that, and it is the
@@ -307,23 +375,32 @@ only form that actually enforces the invariant rather than approximating it. Tha
 Make `crypto.subtle.sign`/`verify` the implementation. `signGuestToken`/`verifyGuestToken` become
 `Promise`-returning; `issue()` and `authenticate()` follow.
 
-What the evidence says _for_ it: the performance objection is dead. 145 ns per verify (§5) is 1 part
-in a million of the action round-trip budget. Next.js middleware is already async, so the call-site
+What the evidence says _for_ it: the performance objection is dead. Sync and async verification are
+indistinguishable at under 1 µs apart (§5), against a 150 ms budget — and note that the same data
+cannot be used in the other direction either, so performance is simply not evidence here. Next.js
+middleware is already async, so the call-site
 ergonomics are fine there. And today the change is astonishingly cheap — two functions, two methods,
 one test file, **zero production callers outside the package** (§7). This is the cheapest moment
 this option will ever have, and that argument was taken seriously.
 
 Why it still loses:
 
+- **It would not actually make the default entrypoint edge-importable — not even today.** Option 1
+  converts `guest-token.ts` only. But `identity/service.ts:14` imports `node:crypto` as well (§Decision
+  part 4), and it sits in the same barrel subtree, so it fails identically. Ship option 1 unchanged and
+  `platform-core`'s default entrypoint is _still_ not importable from Edge middleware. On the
+  edge-importability axis the swap buys **nothing at all**, while permanently making `issue()` and
+  `authenticate()` async. This is a stronger objection than reversibility and it is the one to lead
+  with: the option does not deliver the property it is named for.
 - **It is the least reversible option, and it buys a consumer that does not exist.** Async is
   contagious in one direction only. Once `authenticate()` returns a promise, every route handler,
   every test, and every future caller is shaped by it, and unwinding that later means touching all
   of them. Option 2 is a single line in an exports map and can be deleted. **Reversibility** says
   put the cheap-to-undo choice in first when both work, and both work.
-- **It buys less than it looks like it buys.** It removes `node:crypto` from `guest-token.ts`, but
-  the invariant it is supposed to restore — "the package is edge-importable" — is a property of the
-  entrypoint graph (§3). Any future module that needs a Node builtin re-breaks it and the async
-  signature does nothing to prevent that. It treats a symptom whose cause is the single entrypoint.
+- **It treats a symptom whose cause is the single entrypoint.** It removes `node:crypto` from
+  `guest-token.ts`, but the invariant it is supposed to restore — "the package is edge-importable" —
+  is a property of the entrypoint graph (§3). Any other module in that subtree re-breaks it and the
+  async signature does nothing to prevent that.
 - **It trades a sync primitive for an async one at the wrong layer.** `verifyGuestToken` is a pure
   function over bytes: same input, same output, no I/O. An async signature on a pure function is a
   lie about what the function does, and it forecloses using it anywhere a synchronous predicate is
@@ -343,6 +420,14 @@ The honest residual cost is that two entrypoints are two things to keep straight
 who imports the default barrel into middleware gets §2's misleading `UnhandledSchemeError` rather
 than a sentence telling them to use `/edge`. Mitigated by the rewritten `runtime.ts` comment naming
 the `/edge` path, and by the rule comment in part 4.
+
+**A wildcard subpath export is the cheaper-looking variant, and it is rejected.** §3's fourth row
+shows that adding `"./src/*": "./src/*"` and deep-importing `cookie.ts` also compiles clean, and it
+is what an engineer under deadline will reach for because it is one line and needs no curation. It
+loses on two counts: it makes **every** internal module public API, so any file in `src/` becomes
+something a consumer can pin and we must not move; and it defeats part 4's re-keying, because a
+reachability assertion cannot be written over an entrypoint set that is "any file". A curated
+`/edge` is a surface we chose; a wildcard is every surface we did not.
 
 ### 3. Keep sync `node:crypto` and amend the claim to "edge-importable except the token module" — **rejected as unwritable**
 
@@ -376,13 +461,18 @@ Note that the XOR compare would become _necessary_ under option 1, since `timing
 
 ## Consequences
 
-- **`runtime.ts` currently states a package-wide invariant this ADR contradicts.** Correcting that
-  comment is part of the follow-up work, not of this ADR. Until it lands, the file and this document
-  disagree, and **this document is right** — recorded per `docs/adr/README.md`'s rule that an
-  amendment contradicting the code must say which one is wrong.
+- **`runtime.ts`'s package-wide invariant is corrected in this same change.** The old comment
+  asserted something §3 disproves; the replacement text is §Decision part 1's, and it ships in this
+  commit rather than as follow-up work, so the file and this document do not disagree at any point.
+  Recorded per `docs/adr/README.md`'s rule that an amendment contradicting the code must say which
+  one is wrong.
 - **`platform-core` cannot be imported from Next.js Edge middleware today**, and will fail
   `next build` with an error that does not mention the edge runtime (§2). Anyone who hits
-  `UnhandledSchemeError: Reading from "node:crypto"` should read §3 first.
+  `UnhandledSchemeError: Reading from "node:crypto"` should read §3 first — though the path there
+  starts one step earlier: `platform-core` is not in `apps/web`'s `transpilePackages` (only
+  `game-sdk`, `shared` and `ui` are) and it ships TypeScript source via `exports: { ".":
+"./src/index.ts" }`, so the first engineer to import it from middleware hits a parse failure
+  _before_ they ever reach `UnhandledSchemeError`.
 - **The dependency-cruiser rule approximates the invariant rather than enforcing it.** A path
   denylist answers "which files import a Node builtin", not "is the edge graph clean". It is the
   right approximation while there is one entrypoint and it is wrong once there are two. Re-keying it
@@ -402,7 +492,8 @@ Note that the XOR compare would become _necessary_ under option 1, since `timing
 - **Real-time readiness (M6).** A guest token is verified **once, at connection handshake**, not per
   tick. ADR-0005's room runner authenticates on the WebSocket upgrade and thereafter addresses the
   player by a connection-scoped id. So even option 1's async verify would sit in the handshake path
-  and never inside the 33.3 ms tick budget — 145 ns is 0.0004 % of a tick in any case. This ADR does
+  and never inside the 33.3 ms tick budget — and a sub-microsecond delta is under 0.003 % of a tick
+  in any case. This ADR does
   **not** sign us up for an async verify inside a tick loop, and if a future design puts one there,
   that design is wrong for reasons that have nothing to do with this decision.
 - **Blast radius.** Getting this wrong is a red build, not a bad deploy — but only because

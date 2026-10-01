@@ -89,7 +89,9 @@ export interface RandomSource {
  * with `node:crypto`, and because `src/index.ts` re-exports the whole package,
  * one entrypoint decides the answer for every module behind it. Measured in
  * ADR-0011 §3: a Next.js Edge middleware importing nothing but `readGuestCookie`
- * still fails `next build`, because the barrel is not tree-shaken.
+ * still fails `next build`. Not a tree-shaking problem, and not fixable by
+ * declaring `sideEffects` — the build fails while webpack is still walking the
+ * graph, long before dead code is eliminated from the bundle.
  *
  * What is true (ADR-0011):
  *
@@ -97,14 +99,15 @@ export interface RandomSource {
  *   **Cloudflare Workers**. Both support `node:crypto` in full, so it may use it.
  *   It is **not** importable from Next.js Edge middleware.
  * - An edge consumer imports `@playhall/platform-core/edge`, a second entrypoint
- *   whose module graph reaches no Node builtin. It carries the cookie reader and
- *   these ports, and it is built when the first edge consumer lands — there is
- *   none today.
+ *   whose module graph reaches no Node builtin. It carries the cookie *reader*
+ *   and these ports — read-only by design, so no cookie *serializer* — and it is
+ *   built when the first edge consumer lands. There is none today.
  *
  * So this function is not load-bearing for a package-wide invariant. It is the
- * default `RandomSource` because a port is the right shape for an ambient
- * capability (see the module doc above), and it is what the `/edge` entrypoint
- * exports when it exists.
+ * package's documented default `RandomSource` because a port is the right shape
+ * for an ambient capability (see the module doc above), and it is what the
+ * `/edge` entrypoint exports when it exists. "Documented" rather than "wired":
+ * callers inject a `RandomSource` today.
  */
 export function webCryptoRandomSource(): RandomSource {
   return {
