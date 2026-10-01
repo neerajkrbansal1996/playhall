@@ -70,6 +70,32 @@
 // visible to a human reading the thread, and needs no state file in a
 // contended shared workspace.
 //
+// ## Self-close (PER-199)
+//
+// The sweep's own execution issue is assigned to the sweep's agent and sits
+// `in_progress` while it runs, so when its run dies it becomes a textbook
+// stranded issue. `--self-routine-id` stopped the sweep *flipping* those, but
+// nothing closed them: at the 14h mid-trial read, 7 of 9 fires were permanently
+// stranded `in_progress`. The detector was the board's single largest producer
+// of the condition it exists to detect. A fire now closes its own routine's dead
+// predecessors before it scans.
+//
+// ## Observation classes (PER-199)
+//
+// `in_progress` is only one of the ways an issue loses its wake path, and at the
+// mid-trial read it could see 7 of the 31 non-terminal issues that had none. Two
+// further classes are reported but never acted on:
+//
+//   - `in_review` with nothing owning the next action. The remedy here is NOT a
+//     status bounce — it is finding out whether a reviewer exists at all.
+//   - `blocked` with no open blocker edge: the recovery-parked case. It reads as
+//     intentional to every rollup, so it is invisible. PER-157 sat here holding
+//     finished, merged work (PR #85, commit fd00f81).
+//
+// Both are report-only by construction: no code path turns an observation into a
+// PATCH. Widening the acting scope would need a fresh authorisation, because the
+// trial was granted on `in_progress` and wake-by-status-change only.
+//
 // Usage:
 //   node scripts/ops/stranded-issue-sweep.mjs [options]
 //
@@ -81,7 +107,12 @@
 //                             to `blocked` (default 2)
 //   --strike-window-hours N   strike ledger window (default 24)
 //   --exclude a,b             issue ids or identifiers to never touch
-//   --self-routine-id ID      routine whose execution issues to never touch
+//   --self-routine-id ID      routine whose execution issues to never touch,
+//                             and whose dead prior fires to close under --act
+//   --no-self-close           do not close dead prior fires of --self-routine-id
+//   --observe a,b             statuses to report on without ever acting
+//                             (default in_review,blocked)
+//   --no-observe              skip the report-only observation classes
 //   --json                    emit machine-readable JSON instead of a table
 //   --exit-zero               always exit 0, even with findings
 //
@@ -112,6 +143,14 @@ export const PRIORITY_ORDER = ['critical', 'high', 'medium', 'low']
 // does. Counting markers in the thread IS the strike ledger.
 export const SWEEP_FLIP_MARKER = '<!-- stranded-issue-sweep:flip v1 -->'
 export const SWEEP_ESCALATE_MARKER = '<!-- stranded-issue-sweep:escalate v1 -->'
+export const SWEEP_SELF_CLOSE_MARKER = '<!-- stranded-issue-sweep:self-close v1 -->'
+// Statuses the sweep looks at but is not authorised to touch. See the header
+// note: the trial was granted on `in_progress` only.
+export const OBSERVE_STATUSES = ['in_review', 'blocked']
+// A fire that started but has not yet registered a run would otherwise look
+// dead to its own successor. `skip_if_active` should already make that
+// impossible; this costs nothing and makes it so regardless of the policy.
+export const OWN_FIRE_GRACE_MS = 10 * 60_000
 const ISSUE_PAGE_LIMIT = 500
 const DEFAULTS = {
   thresholdHours: 2,
@@ -120,14 +159,24 @@ const DEFAULTS = {
   strikeWindowHours: 24,
 }
 
-const BOOLEAN_FLAGS = { '--json': 'json', '--act': 'act', '--exit-zero': 'exitZero' }
+const BOOLEAN_FLAGS = {
+  '--json': 'json',
+  '--act': 'act',
+  '--exit-zero': 'exitZero',
+  '--no-self-close': 'noSelfClose',
+  '--no-observe': 'noObserve',
+}
 const NUMERIC_FLAGS = {
   '--threshold-hours': 'thresholdHours',
   '--max-actions': 'maxActions',
   '--strike-limit': 'strikeLimit',
   '--strike-window-hours': 'strikeWindowHours',
 }
-const LIST_FLAGS = { '--status': 'statuses', '--exclude': 'exclude' }
+const LIST_FLAGS = {
+  '--status': 'statuses',
+  '--exclude': 'exclude',
+  '--observe': 'observeStatuses',
+}
 
 // Throws rather than exiting, so the parser is testable. Only value-taking flags
 // consume the next argv entry — a boolean flag that swallows its successor
@@ -137,9 +186,12 @@ export function parseArgs(argv) {
   const opts = {
     thresholdHours: DEFAULTS.thresholdHours,
     statuses: ['in_progress'],
+    observeStatuses: [...OBSERVE_STATUSES],
     json: false,
     act: false,
     exitZero: false,
+    noSelfClose: false,
+    noObserve: false,
     maxActions: DEFAULTS.maxActions,
     strikeLimit: DEFAULTS.strikeLimit,
     strikeWindowHours: DEFAULTS.strikeWindowHours,
@@ -174,6 +226,11 @@ export function parseArgs(argv) {
     }
   }
   if (opts.statuses.length === 0) throw new Error('--status requires at least one status')
+  if (opts.noObserve) opts.observeStatuses = []
+  // A status cannot be both acted on and observed. The acting scope wins, so
+  // that `--status in_review` stays an explicit, auditable widening of what the
+  // sweep touches rather than something the observation default smuggles in.
+  opts.observeStatuses = opts.observeStatuses.filter((status) => !opts.statuses.includes(status))
   return opts
 }
 
@@ -262,6 +319,34 @@ export function isOwnExecutionIssue(issue, { excludeIds = [], selfRoutineIds = [
   return Boolean(issue.originId) && selfRoutineIds.includes(issue.originId)
 }
 
+// ...but not sweeping itself is not the same as cleaning up after itself. A
+// fire whose run dies leaves its execution issue open forever, and because the
+// sweep excludes its own routine, nothing else will ever find it. Closing the
+// dead predecessors is the other half of `--self-routine-id`.
+//
+// The guards are deliberately conservative: an open status, no live run, and at
+// least OWN_FIRE_GRACE_MS of silence. The currently-running fire is excluded by
+// PAPERCLIP_TASK_ID, which `main` folds into `excludeIds`.
+export function selectDeadOwnFires(issues, opts = {}) {
+  const {
+    excludeIds = [],
+    selfRoutineIds = [],
+    now = Date.now(),
+    graceMs = OWN_FIRE_GRACE_MS,
+  } = opts
+  if (selfRoutineIds.length === 0) return []
+  return issues.filter((issue) => {
+    if (!issue.originId || !selfRoutineIds.includes(issue.originId)) return false
+    if (excludeIds.includes(issue.id) || excludeIds.includes(issue.identifier)) return false
+    if (issue.hiddenAt) return false
+    if (!OPEN_ISSUE_STATUSES.has(issue.status)) return false
+    if (hasLiveRun(issue)) return false
+    const since = idleSince(issue)
+    if (!since || Number.isNaN(since.getTime())) return false
+    return now - since.getTime() >= graceMs
+  })
+}
+
 // Cheap, list-only screen. Everything here comes from the single issues list
 // call, so it costs no extra requests.
 export function isShallowCandidate(issue, allIssues, opts) {
@@ -297,6 +382,120 @@ export function evaluateDeepWakePaths({ detail, interactions, recovery }) {
     pendingInteractions,
     activeRecovery,
     stranded: openBlockers.length === 0 && pendingInteractions.length === 0 && !activeRecovery,
+  }
+}
+
+// Cheap, list-only screen for the two report-only classes. `blocked` gets one
+// extra filter the acting path does not need: the platform already counts
+// unresolved blocker edges on the list row, and an issue with one is blocked on
+// something real, so it never reaches the deep check.
+export function isObservationCandidate(issue, allIssues, opts) {
+  const { observeStatuses = [], cutoff, now = Date.now(), thresholdMs = 0 } = opts
+  if (!observeStatuses.includes(issue.status)) return false
+  if (issue.hiddenAt) return false
+  if (!issue.assigneeAgentId) return false
+  // A human assignee owns the next action. That is a wake path made of a person.
+  if (issue.assigneeUserId) return false
+  if (isOwnExecutionIssue(issue, opts)) return false
+  if (hasLiveMonitor(issue, now, thresholdMs)) return false
+  if (hasLiveRun(issue)) return false
+  if (openChildIds(issue, allIssues).length > 0) return false
+  if (issue.status === 'blocked' && (issue.blockerAttention?.unresolvedBlockerCount ?? 0) > 0) {
+    return false
+  }
+  const since = idleSince(issue)
+  if (!since || Number.isNaN(since.getTime())) return false
+  return since <= cutoff
+}
+
+// `in_review` is a healthy waiting path only while something owns the next
+// action: a typed execution participant, a human, or a pending interaction card.
+//
+// Paperclip computes this verdict itself and publishes it as
+// `reviewAttention.state`. At the PER-199 mid-trial read it already said
+// `stalled` for 15 issues — and nothing acted on any of them, which is why
+// re-deriving it here is worth the lines. The sweep reaches its own verdict from
+// the deep paths and reports the platform's alongside it, so the two can be
+// compared instead of one being trusted.
+//
+// The remedy for this class is explicitly NOT a status bounce. An `in_review`
+// issue bounced to `todo` loses the reviewer framing and tells the assignee to
+// redo work that is already finished. Report only.
+export function classifyReviewWait(issue, { detail, interactions, now, thresholdMs } = {}) {
+  const pendingInteractions = asList(interactions).filter((entry) => entry.status === 'pending')
+  const participant = detail?.executionState?.currentParticipant ?? null
+  const humanOwner = detail?.assigneeUserId ?? issue.assigneeUserId ?? null
+  const attention = detail?.reviewAttention ?? issue.reviewAttention ?? null
+  const { live, stale } = partitionReviewPaths(attention?.paths, now, thresholdMs)
+  const ownPaths = [
+    participant && 'execution participant',
+    humanOwner && 'human assignee',
+    pendingInteractions.length > 0 && `${pendingInteractions.length} pending interaction(s)`,
+  ].filter(Boolean)
+  return {
+    kind: 'in_review_no_reviewer',
+    reviewPaths: [...ownPaths, ...live.map((p) => p.kind)],
+    stalePaths: stale.map((p) => ({ kind: p.kind, responder: p.responder, since: p.since })),
+    platformVerdict: attention?.state ?? null,
+    stalled: ownPaths.length === 0 && live.length === 0,
+  }
+}
+
+// Path kinds a machine is supposed to service promptly. The platform counts one
+// as covering the review the moment it is enqueued and never ages it out, so an
+// `in_review` issue whose only path is a wake queued 21 hours ago reads as
+// `covered` forever. That is the same mistake as reading a terminal `activeRun`
+// as liveness, and the sweep already refuses to make it for monitors.
+//
+// Human-serviced kinds — a pending interaction, an approval, a named user — are
+// never aged out. A person taking two days to answer a card is a slow reviewer,
+// not a stranded issue, and flipping that would destroy a legitimate wait.
+export const PROMPT_REVIEW_PATH_KINDS = new Set(['active_run', 'queued_wake', 'recovery'])
+
+export function partitionReviewPaths(paths, now = Date.now(), thresholdMs = 0) {
+  const live = []
+  const stale = []
+  for (const path of asList(paths)) {
+    if (!PROMPT_REVIEW_PATH_KINDS.has(path?.kind)) {
+      live.push(path)
+      continue
+    }
+    const since = new Date(path?.since ?? NaN).getTime()
+    // Unparseable: assume live and leave it alone, exactly as with monitors.
+    if (!Number.isFinite(since)) live.push(path)
+    else if (now - since <= thresholdMs) live.push(path)
+    else stale.push(path)
+  }
+  return { live, stale }
+}
+
+// `blocked` with no open blocker edge is the recovery-parked case: the watchdog
+// moves an assigned issue with no live run to `blocked` after ~60s, and it then
+// reads as a deliberate decision to every rollup on the board. Nothing shows it,
+// because `blocked` is supposed to mean someone chose this.
+//
+// PER-157 was in exactly this state while holding finished work — PR #85 merged
+// as fd00f81 with 15/15 checks green. An auto-flip is still the wrong remedy:
+// `blocked` with a named unblock owner is a legitimate state, and the sweep
+// cannot tell the two apart from the edge list alone. Detect, report, and say
+// whether an unblock owner was ever named.
+export function classifyBlockedWithoutEdges(issue, { detail } = {}) {
+  const edges = detail?.blockedBy ?? []
+  const openBlockers = edges.filter((edge) => OPEN_ISSUE_STATUSES.has(edge.status))
+  const descriptor = detail?.unblockDescriptor ?? issue.unblockDescriptor ?? null
+  return {
+    kind: 'blocked_no_blocker_edge',
+    edgeCount: edges.length,
+    openBlockerCount: openBlockers.length,
+    // A `done` blocker has already fired `issue_blockers_resolved`; a
+    // `cancelled` one never will. Neither is a wake path, so both read as zero.
+    closedEdgeStatuses: edges
+      .filter((e) => !OPEN_ISSUE_STATUSES.has(e.status))
+      .map((e) => e.status),
+    unblockOwner: descriptor?.owner ?? null,
+    unblockAction: descriptor?.action ?? null,
+    platformVerdict: issue.blockerAttention?.state ?? null,
+    stalled: openBlockers.length === 0,
   }
 }
 
@@ -418,6 +617,48 @@ export function planRemedy(finding, comments, opts, now) {
   }
 }
 
+export function selfCloseBody(fire, now) {
+  return [
+    SWEEP_SELF_CLOSE_MARKER,
+    '## Dead sweep fire closed by its successor',
+    '',
+    `This execution issue was left \`${fire.status}\` with no active run. Its fire died before it could`,
+    'report, almost always with `acpx_turn_failed` — a limit refusal that exits 1 in seconds with empty',
+    'stdout and stderr, before any work happens.',
+    '',
+    'Because the sweep excludes its own routine, nothing else on the board would ever have found this,',
+    'so the detector was manufacturing one permanently-stranded issue per fire — the exact condition it',
+    'exists to detect. Each fire now closes its dead predecessors before it scans.',
+    '',
+    'Nothing was lost: a fire that dies this early has done no work, and the next fire rescans the whole',
+    'board from scratch.',
+    '',
+    `Closed by \`scripts/ops/stranded-issue-sweep.mjs\` at ${new Date(now).toISOString()} — see PER-199.`,
+  ].join('\n')
+}
+
+// Self-close writes the same way the remedy does: one atomic PATCH, and the
+// result is only ever reported from the echoed status. The 500 that PER-199 was
+// asked to reproduce did not reproduce from a bound run — PER-186 and six
+// siblings PATCHed to `done` and read back `done` — so this path is live rather
+// than blocked on a vendor defect.
+export async function closeDeadOwnFires(fires, now, transport) {
+  const results = []
+  for (const fire of fires) {
+    const entry = { id: fire.id, identifier: fire.identifier, status: fire.status }
+    try {
+      const updated = await transport.patch(fire.id, {
+        status: 'done',
+        comment: selfCloseBody(fire, now),
+      })
+      results.push({ ...entry, ...confirmWrite(updated, 'done') })
+    } catch (error) {
+      results.push({ ...entry, ok: false, reason: error.message })
+    }
+  }
+  return results
+}
+
 export async function applyRemedy(finding, opts, now, transport) {
   const comments = await transport.getComments(finding.id).catch(() => null)
   const plan = planRemedy(finding, comments, opts, now)
@@ -479,12 +720,14 @@ async function main() {
   const excludeIds = [...opts.exclude, process.env.PAPERCLIP_TASK_ID].filter(Boolean)
   const screen = {
     statuses: opts.statuses,
+    observeStatuses: opts.observeStatuses,
     cutoff,
     now,
     thresholdMs,
     excludeIds,
     selfRoutineIds: opts.selfRoutineIds,
   }
+  const transport = httpTransport(cfg)
 
   const issues = asList(
     await api(cfg, `/api/companies/${cfg.companyId}/issues?limit=${ISSUE_PAGE_LIMIT}`),
@@ -494,6 +737,11 @@ async function main() {
       `warning: issue list hit the ${ISSUE_PAGE_LIMIT}-row page limit; the sweep may be incomplete\n`,
     )
   }
+
+  // Before scanning, clean up after ourselves — see the self-close note above.
+  const deadOwnFires = opts.noSelfClose ? [] : selectDeadOwnFires(issues, screen)
+  const selfClosed =
+    opts.act && deadOwnFires.length > 0 ? await closeDeadOwnFires(deadOwnFires, now, transport) : []
 
   const shallow = issues.filter((issue) => isShallowCandidate(issue, issues, screen))
   const findings = []
@@ -513,10 +761,37 @@ async function main() {
     })
   }
 
+  // Report-only by construction: observations are computed after the acting
+  // path has already finished, and nothing below ever builds a PATCH from one.
+  const observations = []
+  for (const issue of issues) {
+    if (!isObservationCandidate(issue, issues, screen)) continue
+    const [detail, interactions] = await Promise.all([
+      api(cfg, `/api/issues/${issue.id}`).catch(() => null),
+      api(cfg, `/api/issues/${issue.id}/interactions`).catch(() => null),
+    ])
+    const verdict =
+      issue.status === 'in_review'
+        ? classifyReviewWait(issue, { detail, interactions, now, thresholdMs })
+        : classifyBlockedWithoutEdges(issue, { detail })
+    if (!verdict.stalled) continue
+    const since = idleSince(issue)
+    observations.push({
+      identifier: issue.identifier,
+      id: issue.id,
+      title: issue.title,
+      status: issue.status,
+      priority: issue.priority,
+      assigneeAgentId: issue.assigneeAgentId,
+      idleHours: Number(((now - since.getTime()) / 3600_000).toFixed(1)),
+      ...verdict,
+    })
+  }
+  observations.sort((a, b) => b.idleHours - a.idleHours)
+
   const { selected, deferred } = prioritiseFindings(findings, opts.act ? opts.maxActions : Infinity)
   const acted = []
   if (opts.act) {
-    const transport = httpTransport(cfg)
     for (const finding of selected) {
       try {
         acted.push(await applyRemedy(finding, opts, now, transport))
@@ -536,6 +811,12 @@ async function main() {
     findings: selected,
     deferredOverCap: deferred.map((f) => f.identifier),
     acted: opts.act ? acted : null,
+    // Dead prior fires of our own routine. In report-only mode these are listed
+    // but not closed, so a dry run shows exactly what an acting fire would do.
+    selfCloseCandidates: deadOwnFires.map((f) => f.identifier),
+    selfClosed: opts.act ? selfClosed : null,
+    observeStatuses: opts.observeStatuses,
+    observations,
     mode: opts.act ? 'act' : 'report-only',
   }
 
@@ -565,6 +846,32 @@ async function main() {
       if (deferred.length > 0) {
         process.stdout.write(
           `deferred over the ${opts.maxActions}-action cap: ${report.deferredOverCap.join(', ')}\n`,
+        )
+      }
+    }
+    if (deadOwnFires.length > 0) {
+      const outcome = opts.act
+        ? selfClosed.map((e) => `${e.identifier}${e.ok ? '' : ` FAILED: ${e.reason}`}`).join(', ')
+        : `${report.selfCloseCandidates.join(', ')} (report-only, not closed)`
+      process.stdout.write(`dead prior fires of this routine: ${outcome}\n`)
+    }
+    if (observations.length > 0) {
+      process.stdout.write(
+        `\n${observations.length} issue(s) with no wake path in the report-only classes ` +
+          `[${opts.observeStatuses.join(', ')}] — not acted on:\n`,
+      )
+      for (const o of observations) {
+        const why =
+          o.kind === 'in_review_no_reviewer'
+            ? o.stalePaths.length > 0
+              ? `${o.stalePaths[0].kind} unclaimed since ${o.stalePaths[0].since}` +
+                ` (platform still reads it as ${o.platformVerdict ?? 'n/a'})`
+              : `no reviewer (platform says: ${o.platformVerdict ?? 'n/a'})`
+            : `${o.edgeCount} blocker edge(s), 0 open` +
+              (o.unblockOwner ? ', unblock owner named' : ', no unblock owner')
+        process.stdout.write(
+          `  ${(o.priority ?? '?').padEnd(8)} ${o.identifier.padEnd(8)} ` +
+            `${String(o.idleHours).padStart(6)}h idle  ${o.status.padEnd(10)} ${why}\n`,
         )
       }
     }
