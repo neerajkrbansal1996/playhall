@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check:viewport": "node scripts/check-viewport-overflow.mjs",
     "clean": "rm -rf .next tsconfig.tsbuildinfo"
   },
   "dependencies": {
