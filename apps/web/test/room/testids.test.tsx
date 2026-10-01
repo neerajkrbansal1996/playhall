@@ -163,6 +163,28 @@ describe('seats and presence', () => {
     expect(screen.getByTestId(seatTestId('b'))).toHaveAttribute('data-connected', 'false')
   })
 
+  it('reports an occupied seat as occupied, present or dropped', () => {
+    // The helper's unit test pins `occupied: true` → `data-occupied="true"`.
+    // This pins the thing only a render can see: that `SeatList` actually maps
+    // `occupantName` onto that field. Without it, hard-coding the call site to
+    // `occupied: false` leaves the whole suite green — the key-set pin checks
+    // keys, the helper pins are called directly, and the only rendered
+    // `data-occupied` assertion is on an *empty* seat, where `false` is correct.
+    //
+    // Both assertions read the pair, never presence alone: a dropped player is
+    // `data-occupied="true"` AND `data-connected="false"`, which is the only
+    // selector that does not also match an open seat.
+    render(<SeatList seats={seats} spectatorCount={2} />)
+
+    const present = screen.getByTestId(seatTestId('w'))
+    expect(present).toHaveAttribute('data-occupied', 'true')
+    expect(present).toHaveAttribute('data-connected', 'true')
+
+    const dropped = screen.getByTestId(seatTestId('b'))
+    expect(dropped).toHaveAttribute('data-occupied', 'true')
+    expect(dropped).toHaveAttribute('data-connected', 'false')
+  })
+
   it('reports an empty seat as disconnected and unoccupied', () => {
     render(
       <SeatList
