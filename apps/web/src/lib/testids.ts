@@ -90,27 +90,53 @@ export type TestId = (typeof testIds)[keyof typeof testIds]
  * four-seat game gets working selectors from the same helper with no change
  * here — the same reason settings ids are derived.
  *
- * The element carries `data-connected="true"|"false"` for presence, which is
- * what the disconnect and reconnect scenarios assert against.
+ * The element carries `data-connected="true"|"false"` and
+ * `data-occupied="true"|"false"` for presence, which is what the disconnect and
+ * reconnect scenarios assert against.
  */
 export function seatTestId(seatId: string): string {
   return `seat-${seatId}`
 }
 
+/** The seat state a spec needs in order to read presence unambiguously. */
+export interface SeatTestState {
+  /** Whether the occupant currently has a live connection. */
+  readonly connected: boolean
+  /** Whether anyone is sitting in the seat at all. */
+  readonly occupied: boolean
+}
+
 /**
  * Attributes for a seat, so presence cannot be emitted without the testid.
  *
- * `data-connected` is always written, never omitted-when-false: an absent
- * attribute and a disconnected player would be indistinguishable to a spec, and
- * "never measure a surface without first proving which state it is in" is the
- * contract's standing rule.
+ * All three attributes are emitted or none are, and both booleans are always
+ * written, never omitted-when-false: an absent attribute and a disconnected
+ * player would be indistinguishable to a spec, and "never measure a surface
+ * without first proving which state it is in" is the contract's standing rule.
+ *
+ * Occupancy is in the bundle rather than written inline by each surface because
+ * `data-connected` is only *readable* with it. An empty seat reports
+ * `data-connected="false"`, so `[data-testid="seat-b"][data-connected="false"]`
+ * means both "dropped" and "nobody sat down" unless occupancy is on the same
+ * element. A second seat surface that spread a two-key bundle would compile
+ * clean, pass lint, and silently collapse the disconnect assertion back to that
+ * ambiguity ([PER-195](/PER/issues/PER-195)). The helper's whole job is to be
+ * the thing you cannot get half-right, so the thing that must not be omitted
+ * has to live inside it.
+ *
+ * State arrives as a named object, not a second positional boolean:
+ * `seatTestAttributes('b', false, true)` does not read at a call site and a
+ * swap of two adjacent booleans type-checks. It takes primitives rather than a
+ * component's view model for the same reason seat ids are untyped here — a
+ * surface not built on `SeatView` must still be able to use it.
  */
 export function seatTestAttributes(
   seatId: string,
-  connected: boolean,
+  state: SeatTestState,
 ): Record<`data-${string}`, string> {
   return {
     'data-testid': seatTestId(seatId),
-    'data-connected': connected ? 'true' : 'false',
+    'data-connected': state.connected ? 'true' : 'false',
+    'data-occupied': state.occupied ? 'true' : 'false',
   }
 }

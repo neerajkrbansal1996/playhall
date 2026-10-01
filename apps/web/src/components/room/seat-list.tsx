@@ -38,7 +38,10 @@ export interface SeatListProps {
  * dropped — would make `[data-testid="seat-b"][data-connected="false"]` mean
  * two different things depending on whether anyone had sat down, and the
  * disconnect scenarios assert exactly that selector. `data-occupied`
- * distinguishes the two cases for a spec that needs to.
+ * distinguishes the two cases for a spec that needs to, and it comes out of
+ * `seatTestAttributes` with the other two rather than being written here — a
+ * surface cannot spread the bundle and omit the attribute that makes presence
+ * readable.
  */
 export function SeatList({ seats, spectatorCount, className }: SeatListProps) {
   return (
@@ -52,8 +55,10 @@ export function SeatList({ seats, spectatorCount, className }: SeatListProps) {
         {seats.map((seat) => (
           <li
             key={seat.id}
-            {...seatTestAttributes(seat.id, seat.connected)}
-            data-occupied={seat.occupantName ? 'true' : 'false'}
+            {...seatTestAttributes(seat.id, {
+              connected: seat.connected,
+              occupied: Boolean(seat.occupantName),
+            })}
             className="flex items-center gap-3 rounded-md border bg-card px-3 py-2"
           >
             {/*
