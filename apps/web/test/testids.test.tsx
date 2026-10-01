@@ -70,13 +70,63 @@ describe('the platform testid registry', () => {
   it('always writes data-connected, in both states', () => {
     // Omitting it when false would make "disconnected" and "not rendered yet"
     // indistinguishable to a presence spec.
-    expect(seatTestAttributes('w', true)).toEqual({
+    expect(seatTestAttributes('w', { connected: true, occupied: true })).toEqual({
       'data-testid': 'seat-w',
       'data-connected': 'true',
+      'data-occupied': 'true',
     })
-    expect(seatTestAttributes('b', false)).toEqual({
+    expect(seatTestAttributes('b', { connected: false, occupied: true })).toEqual({
       'data-testid': 'seat-b',
       'data-connected': 'false',
+      'data-occupied': 'true',
+    })
+  })
+
+  it('emits all three seat attributes or none — the bundle is the contract', () => {
+    // A key-set pin, not three attribute assertions. Attribute-by-attribute
+    // checks keep passing when a fourth key is added or a third is dropped,
+    // which is exactly how `data-occupied` came to be written inline by one
+    // call site instead of living here ([PER-195](/PER/issues/PER-195)). A
+    // second seat surface that spreads this bundle must be unable to ship
+    // presence without the occupancy that makes presence readable.
+    expect(
+      Object.keys(seatTestAttributes('w', { connected: true, occupied: true })).sort(),
+    ).toEqual(['data-connected', 'data-occupied', 'data-testid'])
+
+    // A key pin alone survives a helper that returns the key with a constant
+    // value, so read the value on both sides of the boolean here rather than
+    // leaving it to the neighbouring tests. `data-occupied="true"` was asserted
+    // nowhere in the repository before this issue.
+    expect(seatTestAttributes('w', { connected: true, occupied: true })['data-occupied']).toBe(
+      'true',
+    )
+    expect(seatTestAttributes('w', { connected: true, occupied: false })['data-occupied']).toBe(
+      'false',
+    )
+  })
+
+  it('takes occupancy as a named field, not a third positional boolean', () => {
+    // Two adjacent booleans is a swap waiting to happen:
+    // `seatTestAttributes('b', false, true)` reads as nothing at a call site,
+    // and a helper whose whole job is to be the thing you cannot get wrong
+    // should not have an argument order you can get wrong. `tsc --noEmit`
+    // covers `test/**` in this package, so this is a live pin — revert the
+    // signature to positionals and the now-unused @ts-expect-error fails
+    // typecheck.
+    // @ts-expect-error - occupancy is a named field; a third boolean is not the contract.
+    const positional = seatTestAttributes('b', false, true)
+
+    // The runtime value is incidental; the assertion above the line is the pin.
+    expect(positional).toHaveProperty('data-testid', 'seat-b')
+  })
+
+  it('writes data-occupied for an empty seat rather than omitting it', () => {
+    // Same rule as `data-connected`: an absent attribute and a false one are
+    // indistinguishable to a spec, so a free seat has to say so out loud.
+    expect(seatTestAttributes('b', { connected: false, occupied: false })).toEqual({
+      'data-testid': 'seat-b',
+      'data-connected': 'false',
+      'data-occupied': 'false',
     })
   })
 })
