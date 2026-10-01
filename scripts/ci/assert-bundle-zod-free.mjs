@@ -468,12 +468,44 @@ function selfCheckVariants() {
 
   // Group entry points by the lineage directory their code really lives in.
   const lineageSubpaths = new Map()
+  const unresolved = []
   for (const subpath of subpaths) {
     const entry = resolveEntry(zodRoot, zodPkg, subpath)
-    if (!entry) continue
+    if (!entry) {
+      unresolved.push(subpath)
+      continue
+    }
     const dir = lineageDirOf(zodRoot, entry)
     if (!lineageSubpaths.has(dir)) lineageSubpaths.set(dir, [])
     lineageSubpaths.get(dir).push(subpath)
+  }
+
+  // Skipping an unresolvable subpath is the same silent-pass class as a lineage
+  // with no marker, reached through a different door (PER-126 review): the
+  // lineage simply vanishes from the loop below, `uncovered` stays empty, and the
+  // gate prints "fingerprints verified" having checked less than it says.
+  //
+  // `resolveEntry` returns null for a directory target (`"./v5": "./v5"`), for a
+  // condition object with no plain string under `import.default` / `import` /
+  // `default` / `require.default` (`{"module": …, "browser": …}`, or a nested
+  // `{"import": {"browser": …, "node": …}}`), and for a barrel chain over 10 hops.
+  // The nested-browser-condition shape is not exotic — it is what a package ships
+  // the day it adds a browser-conditional build, which is exactly when a new
+  // validator lineage would arrive.
+  //
+  // This is a no-op against zod 3.25.76: all 7 concrete subpaths resolve today.
+  if (unresolved.length > 0) {
+    fail(
+      'Fingerprint self-check failed. zod exports subpath(s) this gate could not resolve to a ' +
+        'runtime file, so their code was never fingerprint-checked at all:\n' +
+        unresolved.map((subpath) => `  ${subpath}`).join('\n') +
+        `\n\nInstalled zod: ${zodPkg.version} at ${rel(zodRoot)}\n\n` +
+        'An unresolvable entry point is a hard failure, not a skip: if it ships a validator ' +
+        'this gate cannot see it, and the self-check would still report "verified". Teach ' +
+        `resolveEntry() in ${rel(selfPath)} the shape zod now uses (it resolves the ESM ` +
+        'condition, because that is what webpack picks for the client graph), then re-run.',
+      'zod fingerprint self-check failed',
+    )
   }
 
   const lineages = []
@@ -533,6 +565,11 @@ function selfCheckVariants() {
  *
  * A barrel is not a code root: `zod`'s own entry and `zod/v4-mini` both just
  * forward elsewhere, so the lineage that owns their code is the one they point at.
+ *
+ * Returns null when the subpath's target is not a plain ESM string, is a
+ * directory, or does not exist. The caller treats that as a hard failure rather
+ * than a skip — an entry point this script cannot read is one it cannot
+ * fingerprint, and "could not check" must never render as "checked".
  */
 function resolveEntry(zodRoot, zodPkg, subpath) {
   const entry = zodPkg.exports[subpath]
