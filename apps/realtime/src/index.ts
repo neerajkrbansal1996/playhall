@@ -1,17 +1,25 @@
 import { createServer, type ServerResponse } from 'node:http'
 import { BRAND, healthHttpStatus, type HealthPayload } from '@playhall/shared'
 import { PLATFORM_CORE_VERSION, platformBuildInfo } from '@playhall/platform-core'
+import { createSystemClock } from './clock'
 import { loadEnv } from './env'
 import { liveness, readiness, type HealthContext } from './health'
 import { attachWsProbe } from './ws-probe'
 
 const env = loadEnv()
 
+/**
+ * The process clock, constructed exactly once. Everything that needs "now" —
+ * the health routes today, every room's `TimerService` from M1.6 — is handed
+ * this instance. See `./clock` for why it is not `Date.now()`.
+ */
+const clock = createSystemClock()
+
 const healthContext: HealthContext = {
   service: '@playhall/realtime',
   version: PLATFORM_CORE_VERSION,
-  startedAtMs: Date.now(),
-  now: () => Date.now(),
+  startedAtMs: clock.now(),
+  now: () => clock.now(),
 }
 
 /**

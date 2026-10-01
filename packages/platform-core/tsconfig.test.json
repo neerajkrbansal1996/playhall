@@ -1,5 +1,5 @@
 {
-  "//": "Type-checks platform-core sources and tests without emitting. Not part of the composite build graph.",
+  "//": "Type-checks platform-core sources, tests and the drift benchmark without emitting. Not part of the composite build graph.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -10,5 +10,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*", "test/**/*", "bench/**/*"]
 }

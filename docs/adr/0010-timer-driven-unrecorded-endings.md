@@ -51,7 +51,7 @@ deadline passed, with **no player action at all** — cannot declare it. The con
 > It does not know what a game is, **does not call `onTimer` itself**, and does not touch
 > Redis. The room runner (M1.6) owns the game module, the match log and persistence.
 
-It already has `createManualClock` + `createManualScheduler` ("the test drives the manual
+It already has `fixedClock` + `createManualScheduler` ("the test drives the manual
 clock and calls `service.poll()`"), a `specs` option that rejects a `set` for an id the
 manifest never declared, and a `TimerExpiry.dueAtMs` documented as "use this as `ctx.now` when
 replaying". Every question [PER-142](/PER/issues/PER-142) asks has a draft answer in that

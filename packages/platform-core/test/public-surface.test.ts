@@ -1,3 +1,4 @@
+import { asMatchId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
 import * as platform from '../src/index.js'
 import { ROOM_CODE_ALPHABET } from '@playhall/shared'
@@ -117,5 +118,45 @@ describe('runtime ports', () => {
     const ids = countingIdSource('room')
     expect([ids.newId(), ids.newId()]).toEqual(['room-1', 'room-2'])
     expect(countingIdSource().newId()).toBe('id-1')
+  })
+})
+
+/**
+ * The package exposes **one** clock port and no implementation that reads the
+ * host. Both halves are load-bearing.
+ *
+ * `src/timers/clock.ts` used to export a second `Clock` — structurally
+ * identical to `runtime.ts`'s, so `tsc` was happy — plus a `createFixedClock`
+ * that was `fixedClock` under another name. The barrel re-exported both, and
+ * because an explicit `export type` shadows an `export *`, one of the two
+ * silently won: a reader could not tell which `Clock` a signature meant, and a
+ * caller could reach an ambient `createSystemClock()` from inside a package
+ * that is not allowed to read ambient time (ADR-0002 §4, now with no
+ * exemption in `eslint.config.mjs`).
+ */
+describe('the clock port', () => {
+  it('ships exactly one clock family, and no ambient implementation', () => {
+    const surface = platform as unknown as Record<string, unknown>
+    for (const name of ['fixedClock', 'tickingClock']) {
+      expect(typeof surface[name]).toBe('function')
+    }
+    // The duplicates. A re-added `createFixedClock` is `fixedClock` twice; a
+    // re-added `createSystemClock` is an ambient clock back inside `packages`.
+    for (const name of ['createSystemClock', 'createManualClock', 'createFixedClock']) {
+      expect(surface).not.toHaveProperty(name)
+    }
+  })
+
+  it('will not build a timer service without being handed a clock', () => {
+    // A compile error first — `TimerServiceOptions.clock` is required — and
+    // this is the runtime half: there is no ambient default left to fall back
+    // to, so a forgotten injection cannot silently give a room its own notion
+    // of now. 2,000 rooms on an instance must share one clock.
+    expect(
+      () =>
+        new platform.TimerService({
+          matchId: asMatchId('m1'),
+        } as unknown as ConstructorParameters<typeof platform.TimerService>[0]),
+    ).toThrow(TypeError)
   })
 })

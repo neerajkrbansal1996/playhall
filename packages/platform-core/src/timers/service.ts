@@ -1,0 +1,1156 @@
+/**
+ * The timer service. Every clock in the platform is one of these; no game ever
+ * implements its own.
+ *
+ * ## Responsibilities
+ *
+ * - Own per-player clocks (increment + delay), per-turn timers, phase timers
+ *   and the match timer for one match.
+ * - Execute the `TimerCommand`s a game returns from `applyAction`. A game
+ *   *asks*; the service *schedules*. That split is what keeps `applyAction`
+ *   pure and replayable.
+ * - Fire expiries outwards so the room runner can call
+ *   `game.onTimer(ctx, state, timerId, seatId)` — flag-fall and turn timeout.
+ * - Produce `timer:sync` frames and a JSON snapshot that survives a restart.
+ *
+ * ## What it deliberately does not do
+ *
+ * It does not know what a game is, does not call `onTimer` itself, and does not
+ * touch Redis. The room runner (M1.6) owns the game module, the match log and
+ * persistence; handing this service any of those would put a game-shaped
+ * dependency into platform-core and make the clock untestable without a
+ * database.
+ */
+
+import type {
+  MatchId,
+  SeatId,
+  TimerCommand,
+  TimerId,
+  TimerKind,
+  TimerSpec,
+  Viewer,
+} from '@playhall/game-sdk'
+import type { Clock } from '../runtime.js'
+import { assertDurationMs, assertEpochMs, assertOptionalDurationMs } from './quantities.js'
+import { type Scheduler, createTimeoutScheduler } from './scheduler.js'
+import {
+  DEFAULT_PLAYER_CLOCK,
+  type PlayerClockConfig,
+  TIMER_HOLD_ORDER,
+  type TimerHold,
+  type TimerRecord,
+  chargeableElapsedMs,
+  createTimerRecord,
+  deadlineMsAt,
+  delayRemainingMsAt,
+  endTurnRecord,
+  expireRecord,
+  isHeld,
+  isRunning,
+  pauseRecord,
+  remainingMsAt,
+  resetRecord,
+  resumeRecord,
+  startRecord,
+  withHolds,
+} from './record.js'
+import {
+  type AnyTimerSnapshot,
+  type TimerSnapshot,
+  type TimerSyncEntry,
+  type TimerSyncMessage,
+  timerSnapshotSchema,
+} from './wire.js'
+
+/** Shape the room runner receives when a timer fires. */
+export interface TimerExpiry {
+  readonly timerId: TimerId
+  readonly seatId: SeatId | null
+  readonly kind: TimerKind
+  /** Server time the timer was *due*. Use this as `ctx.now` when replaying. */
+  readonly dueAtMs: number
+  /** Server time the service actually noticed. */
+  readonly firedAtMs: number
+  /**
+   * `firedAtMs - dueAtMs`. Event-loop jitter, not clock error — the budget was
+   * charged against `dueAtMs`, so a late wake-up never costs a player time. We
+   * surface it so the room runner can log it and we can watch it in production.
+   */
+  readonly latenessMs: number
+}
+
+/** The subset of `TimerView` the SDK hands to a game's UI, built from a record. */
+export interface TimerViewEntry {
+  readonly timerId: string
+  readonly seatId: SeatId | null
+  readonly kind: TimerKind
+  readonly remainingMs: number
+  readonly isRunning: boolean
+}
+
+export interface TimerServiceOptions {
+  readonly matchId: MatchId
+  /**
+   * The server-authoritative clock. **Required**, and deliberately so: a
+   * default would be an ambient clock, and an ambient clock is exactly what
+   * `runtime.ts` exists to keep out of this package (ADR-0002 §4). The real
+   * implementation lives in the composition root, `apps/realtime`; tests pass
+   * `fixedClock`.
+   *
+   * Making it required also makes "I forgot to inject the room's clock" a
+   * compile error rather than a room that quietly runs on its own notion of
+   * now and disagrees with every other room on the instance.
+   */
+  readonly clock: Clock
+  /** Defaults to a `setTimeout` scheduler over `clock`. */
+  readonly scheduler?: Scheduler
+  /**
+   * The manifest's declared timers. When supplied, a `set` for an id the game
+   * never declared is rejected — the same "reject what was not declared" rule
+   * the SDK applies to `onTimer`.
+   */
+  readonly specs?: readonly TimerSpec[]
+  /** Invoked once per expiry, in deadline order. */
+  readonly onExpire?: (expiry: TimerExpiry) => void
+  /**
+   * Invoked when a single mutation's expiry drain hits `MAX_DRAIN_PASSES` — an
+   * `onExpire` handler re-armed an already-due timer more than 32 times. The
+   * records passed here were **force-expired without `onExpire` being called**,
+   * so the game never hears about them. It is a bug signal, not a normal path:
+   * log it loudly. See `#drainDue`.
+   */
+  readonly onDrainExhausted?: (dropped: readonly TimerExpiry[]) => void
+}
+
+/**
+ * Tolerance for an early `setTimeout` wake-up. Node is late far more often, but
+ * it can be a millisecond early, which is why `TimerExpiry.latenessMs` can be
+ * `-1`.
+ */
+const FIRE_TOLERANCE_MS = 1
+
+/**
+ * Cap on how many expiry passes one drain performs. `poll()` delivers a single
+ * pass by design, so the drain loops; the cap is there because an `onExpire`
+ * handler that re-arms an already-due timer on every pass would otherwise spin
+ * forever inside a mutator.
+ *
+ * Hitting it is a bug in the handler, not a load condition. See `#drainDue` for
+ * what happens then and why it is not "leave it to the scheduler".
+ */
+const MAX_DRAIN_PASSES = 32
+
+export class TimerService {
+  readonly matchId: MatchId
+
+  #clock: Clock
+  #scheduler: Scheduler
+  #specs: ReadonlyMap<string, TimerSpec> | null
+  #onExpire: (expiry: TimerExpiry) => void
+  #onDrainExhausted: (dropped: readonly TimerExpiry[]) => void
+  #records = new Map<string, TimerRecord>()
+  #disposed = false
+  /** Guards against an `onExpire` handler that re-enters via `apply`. */
+  #firing = false
+
+  // ------------------------------------------------- game state vs hold scopes
+  //
+  // Two questions decide whether a timer runs, and reading both off one boolean
+  // (`isRunning`) is what produced every defect in the first two reviews:
+  //
+  //   1. does the *game state* want this timer counting down?
+  //   2. is any *hold scope* covering it?
+  //
+  // (1) is `#onMoveSeatId` for a `chess-clock` and "armed and not expired" for
+  // everything else. (2) is the three scopes below. A hold lives where the thing
+  // it describes lives — the room, the seat, the timer id — never on a record,
+  // because a record that was not running when the pause ran would not have been
+  // stamped, and one created afterwards could not have been.
+  //
+  // Every mutator changes one of these and then calls `#reconcile`, which
+  // recomputes runnability for every record and re-anchors or freezes it.
+
+  /** The seat whose `chess-clock` timers may run. Game state; no hold overrides it. */
+  #onMoveSeatId: SeatId | null = null
+  /** Host pause / rematch vote: nothing in the room may run. */
+  #roomHeld = false
+  /** Seats that are absent, by `SeatId`. */
+  #heldSeats = new Set<string>()
+  /** Timer ids a game reducer paused explicitly. */
+  #heldTimers = new Set<string>()
+
+  constructor(options: TimerServiceOptions) {
+    this.matchId = options.matchId
+    // The type says required; this says it at runtime too, because the callers
+    // that matter are at a boundary. The room runner builds these from stored
+    // room state, and an `any` or a hand-rolled options object that drops the
+    // clock would otherwise construct fine and throw on the first *deadline* —
+    // minutes later, inside a timer callback, nowhere near the mistake.
+    //
+    // `== null` and a shape check, not `=== undefined`: stored room state comes
+    // back through `JSON.parse`, which produces `null` and plain objects and
+    // never `undefined`, so the one shape that boundary cannot produce is the
+    // only one a strict-equality check would catch.
+    if (options.clock == null || typeof options.clock.now !== 'function') {
+      throw new TypeError(
+        `TimerService for match ${options.matchId} was built without a usable clock; ` +
+          'pass the process clock (apps/realtime) or a fixedClock in tests',
+      )
+    }
+    this.#clock = options.clock
+    this.#scheduler = options.scheduler ?? createTimeoutScheduler(this.#clock)
+    this.#specs = options.specs ? new Map(options.specs.map((spec) => [spec.id, spec])) : null
+    this.#onExpire = options.onExpire ?? (() => {})
+    this.#onDrainExhausted = options.onDrainExhausted ?? (() => {})
+  }
+
+  get now(): number {
+    return this.#clock.now()
+  }
+
+  // ---------------------------------------------------------------- queries
+
+  get(timerId: TimerId): TimerRecord | undefined {
+    return this.#records.get(timerId)
+  }
+
+  list(): readonly TimerRecord[] {
+    return [...this.#records.values()]
+  }
+
+  /** Remaining budget right now. Zero for an unknown or expired timer. */
+  remainingMs(timerId: TimerId): number {
+    const record = this.#records.get(timerId)
+    return record === undefined ? 0 : remainingMsAt(record, this.#clock.now())
+  }
+
+  /** Unspent `simple` delay right now. Zero unless the clock uses that mode. */
+  delayRemainingMs(timerId: TimerId): number {
+    const record = this.#records.get(timerId)
+    return record === undefined ? 0 : delayRemainingMsAt(record, this.#clock.now())
+  }
+
+  isRunning(timerId: TimerId): boolean {
+    const record = this.#records.get(timerId)
+    return record !== undefined && isRunning(record)
+  }
+
+  /**
+   * True while something outside the game state is holding this timer stopped —
+   * a host pause, a disconnected seat, or a game's own `pause` command. A timer
+   * that is merely not this seat's move is *not* held, and neither is an expired
+   * one: a flag-fall is terminal, so no later resume may revive it.
+   */
+  isHeld(timerId: TimerId): boolean {
+    const record = this.#records.get(timerId)
+    return record !== undefined && isHeld(record)
+  }
+
+  /** The seat whose per-player clock may run, as last set by `switchTurnTo`. */
+  get onMoveSeatId(): SeatId | null {
+    return this.#onMoveSeatId
+  }
+
+  /**
+   * Earliest deadline across all running timers, or null if nothing is armed.
+   * This is the `dueAt` score the room runner writes into its scheduling set.
+   *
+   * Read it **after** the mutating call returns, never before. Every mutator
+   * drains due expiries first, so a whole expiry pass — and the `onExpire`
+   * handlers behind it — can run synchronously inside `apply()` or
+   * `switchTurnTo()`. A value read beforehand is stale by the time you would
+   * store it.
+   */
+  nextDeadlineMs(): number | null {
+    let earliest: number | null = null
+    for (const record of this.#records.values()) {
+      const deadline = deadlineMsAt(record)
+      if (deadline !== null && (earliest === null || deadline < earliest)) earliest = deadline
+    }
+    return earliest
+  }
+
+  // --------------------------------------------------------------- mutation
+
+  /**
+   * Declares a per-player clock. Created stopped: the runner starts it by
+   * calling `switchTurnTo` when the first seat is to move.
+   *
+   * `atMs` is the issuing instant, for the same reason `pause` takes one.
+   */
+  declarePlayerClock(
+    timerId: TimerId,
+    seatId: SeatId,
+    config: Partial<PlayerClockConfig>,
+    atMs?: number,
+  ): TimerRecord {
+    const merged: PlayerClockConfig = { ...DEFAULT_PLAYER_CLOCK, ...config }
+    assertDurationMs('initialMs', merged.initialMs)
+    assertDurationMs('incrementMs', merged.incrementMs)
+    assertDurationMs('delayMs', merged.delayMs)
+    assertOptionalDurationMs('maxMs', merged.maxMs)
+    this.#assertDeclared(timerId)
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#records.set(
+      timerId,
+      createTimerRecord({
+        timerId,
+        seatId,
+        kind: 'chess-clock',
+        durationMs: merged.initialMs,
+        clock: merged,
+      }),
+    )
+    // Declaring a clock for the seat that is already on move starts it, which
+    // is the only sane reading of "this seat is to move and now has a clock".
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+    return this.#records.get(timerId) as TimerRecord
+  }
+
+  /**
+   * Arms a one-shot timer `delayMs` from `issuedAtMs`.
+   *
+   * `issuedAtMs` is the `ctx.now` of the call that produced the command, never
+   * "now" — a game that asks for a 30 s turn timer must get 30 s from the
+   * instant its action was stamped, not 30 s from whenever the service got
+   * round to it. That is the whole reason `TimerCommand.delayMs` is relative.
+   *
+   * A timer armed while a hold covers it is created **stopped with its full
+   * budget** and starts when the hold lifts. A turn timer set during a host
+   * pause must not count down through the pause and hand the game a timeout for
+   * a turn nobody was allowed to take.
+   */
+  set(
+    timerId: TimerId,
+    options: {
+      seatId?: SeatId | null
+      delayMs: number
+      kind?: TimerKind
+      replace?: boolean
+      issuedAtMs?: number
+    },
+  ): TimerRecord {
+    this.#assertDeclared(timerId)
+    assertDurationMs('delayMs', options.delayMs)
+    const issuedAtMs = this.#at(options.issuedAtMs)
+    this.#drainDue(issuedAtMs)
+    const existing = this.#records.get(timerId)
+
+    if (existing !== undefined && options.replace === false && !existing.expired) {
+      return existing
+    }
+
+    this.#records.set(
+      timerId,
+      existing === undefined
+        ? createTimerRecord({
+            timerId,
+            seatId: options.seatId ?? null,
+            kind: options.kind ?? this.#specs?.get(timerId)?.kind ?? 'custom',
+            durationMs: options.delayMs,
+            startedAtMs: issuedAtMs,
+          })
+        : resetRecord(existing, options.delayMs, issuedAtMs, options.seatId),
+    )
+    // A re-arm replaces the timer the reducer paused, so its own hold is stale.
+    // Room and seat scopes are not the reducer's to drop and stay in force.
+    this.#heldTimers.delete(timerId)
+    this.#reconcile(issuedAtMs)
+    this.#afterMutation(issuedAtMs)
+    return this.#records.get(timerId) as TimerRecord
+  }
+
+  /**
+   * Removes a timer.
+   *
+   * Drains first. A record whose deadline has already passed owes the game an
+   * expiry, and deleting it without delivering one is the same live/replay
+   * divergence `#drainDue` exists to close: live the scheduler had already
+   * fired it, in replay nothing polls and the timeout is simply swallowed.
+   *
+   * `atMs` is the issuing instant, for the same reason `pause` takes one.
+   */
+  clear(timerId: TimerId, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#heldTimers.delete(timerId)
+    if (this.#records.delete(timerId)) this.#rearm()
+  }
+
+  /**
+   * A game's explicit `pause`. Takes the `timer` scope, so the matching `resume`
+   * is what lifts it and a *different* scope — a disconnect, a host pause —
+   * still keeps the clock stopped afterwards.
+   *
+   * Scoped to a timer that exists: a pause for an id the match has never seen
+   * is a no-op rather than a hold left lying in wait for a future `set`.
+   */
+  pause(timerId: TimerId, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    if (!this.#records.has(timerId)) return
+    this.#heldTimers.add(timerId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  resume(timerId: TimerId, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    if (!this.#records.has(timerId)) return
+    this.#heldTimers.delete(timerId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Moves the game state: `toSeatId` is now the seat to move. Ends the outgoing
+   * seat's turn (crediting increment and any Bronstein refund) and starts the
+   * incoming seat's clock **if nothing is holding it**. Passing null just ends
+   * the turn — the match is over, or a phase without a mover has begun.
+   *
+   * This is the only correct way to hand the move over: doing it as a separate
+   * `pause` then `resume` loses the increment.
+   *
+   * The outgoing seat is the one `#onMoveSeatId` names, **not** whichever clock
+   * happens to be running. Inferring it from `isRunning` silently forfeits the
+   * increment of a seat whose clock was held (host pause, opponent's turn
+   * arriving during a drop), and starts the incoming seat's clock straight
+   * through a room pause.
+   */
+  switchTurnTo(toSeatId: SeatId | null, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    const fromSeatId = this.#onMoveSeatId
+    if (fromSeatId !== null && fromSeatId !== toSeatId) {
+      for (const [id, record] of this.#records) {
+        if (record.kind !== 'chess-clock' || record.seatId !== fromSeatId) continue
+        this.#records.set(id, endTurnRecord(record, nowMs))
+      }
+    }
+    this.#onMoveSeatId = toSeatId
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Marks one seat absent. Every timer belonging to it stops, unless the
+   * manifest declared `pausesOnDisconnect: false`. A timer with no spec is
+   * treated as pausing — the safe default is the one that cannot take time off
+   * a player who is not there.
+   *
+   * The hold is on the **seat**, for as long as the seat is away. That covers
+   * the clock of a seat that was not on move when it dropped: when the opponent
+   * then moves, `switchTurnTo` finds the seat held and leaves the clock stopped.
+   * A per-record stamp cannot do this, and the resulting game turns on which
+   * millisecond a socket closed relative to a move — which is the opposite of
+   * server-authoritative.
+   */
+  pauseForSeat(seatId: SeatId, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#heldSeats.add(seatId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Marks the seat present again. Its timers resume only if the game state
+   * still wants them running and no other scope covers them — a clock whose
+   * seat is not to move stays stopped, and one the host also paused stays
+   * stopped until the host unpauses too.
+   */
+  resumeForSeat(seatId: SeatId, atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#heldSeats.delete(seatId)
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Freezes the whole room — a host pause, or a room waiting on a rematch vote.
+   * The hold is on the room, so a turn switch or a newly armed timer inside the
+   * pause is covered by it too, and `resumeAll` puts the room back exactly
+   * where the game state says it should be rather than starting every clock.
+   */
+  pauseAll(atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#roomHeld = true
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  resumeAll(atMs?: number): void {
+    const nowMs = this.#at(atMs)
+    this.#drainDue(nowMs)
+    this.#roomHeld = false
+    this.#reconcile(nowMs)
+    this.#afterMutation(nowMs)
+  }
+
+  /**
+   * Executes the timer commands a game returned. `issuedAtMs` must be the
+   * `ctx.now` the game saw.
+   *
+   * The whole batch is validated before any of it runs. A reducer returns its
+   * commands as one unit, so half-applying a batch whose third command is
+   * malformed would leave the room in a state the game never asked for and
+   * cannot reason about — and unlike a rejected batch, that state is on the
+   * match log. Validate-then-execute makes a bad batch a no-op plus a throw.
+   */
+  apply(commands: readonly TimerCommand[], issuedAtMs: number): void {
+    assertEpochMs('issuedAtMs', issuedAtMs)
+    // Both of `set`'s rejections, hoisted. `clear`/`pause`/`resume` assert
+    // nothing, so `set` is the whole pre-pass surface — an undeclared timer id
+    // thrown from inside the execute loop would leave the commands before it
+    // applied, which is exactly the half-batch this contract rules out.
+    for (const command of commands) {
+      if (command.op !== 'set') continue
+      this.#assertDeclared(command.timerId)
+      assertDurationMs(`${command.timerId}.delayMs`, command.delayMs)
+    }
+    this.#drainDue(issuedAtMs)
+    for (const command of commands) {
+      switch (command.op) {
+        case 'set':
+          this.set(command.timerId, {
+            seatId: command.seatId,
+            delayMs: command.delayMs,
+            replace: command.replace,
+            issuedAtMs,
+          })
+          break
+        case 'clear':
+          this.clear(command.timerId, issuedAtMs)
+          break
+        case 'pause':
+          this.pause(command.timerId, issuedAtMs)
+          break
+        case 'resume':
+          this.resume(command.timerId, issuedAtMs)
+          break
+      }
+    }
+  }
+
+  // ----------------------------------------------------------------- firing
+
+  /**
+   * Fires every timer now due. Called by the scheduler; tests call it directly
+   * after advancing a manual clock.
+   *
+   * Expiries are delivered in deadline order so a match timer and a player
+   * clock that expire in the same pass reach the runner in the order they
+   * actually happened.
+   *
+   * `atMs` overrides the instant "now" is taken at. Replay passes the reducer's
+   * `ctx.now` so a replayed expiry gets the same `firedAtMs`/`latenessMs` as the
+   * live one did; live callers omit it and get the wall clock.
+   *
+   * One pass per call, by design — a handler that arms another already-due timer
+   * is picked up on the next call rather than recursing. Drain it in a loop.
+   */
+  poll(atMs?: number): readonly TimerExpiry[] {
+    if (this.#disposed || this.#firing) return []
+    const firedAtMs = this.#at(atMs)
+
+    const due: { record: TimerRecord; dueAtMs: number }[] = []
+    for (const record of this.#records.values()) {
+      const deadline = deadlineMsAt(record)
+      if (deadline === null) continue
+      if (deadline - FIRE_TOLERANCE_MS <= firedAtMs) due.push({ record, dueAtMs: deadline })
+    }
+    if (due.length === 0) {
+      this.#rearm()
+      return []
+    }
+    due.sort((a, b) => a.dueAtMs - b.dueAtMs)
+
+    // Expire everything before invoking a single handler: a handler that calls
+    // back into `apply` must not observe a half-expired set.
+    const expiries: TimerExpiry[] = due.map(({ record, dueAtMs }) => {
+      this.#records.set(record.timerId, expireRecord(record))
+      return {
+        timerId: record.timerId,
+        seatId: record.seatId,
+        kind: record.kind,
+        dueAtMs,
+        firedAtMs,
+        latenessMs: firedAtMs - dueAtMs,
+      }
+    })
+
+    this.#firing = true
+    try {
+      for (const expiry of expiries) this.#onExpire(expiry)
+    } finally {
+      this.#firing = false
+    }
+    this.#rearm()
+    return expiries
+  }
+
+  // ------------------------------------------------------------------- sync
+
+  /**
+   * Builds a `timer:sync` frame.
+   *
+   * Timers are not redacted: a remaining time is not hidden information in any
+   * game we support, and hiding an opponent's clock would break the one thing
+   * every player checks. `viewer` is accepted so the room runner has a single
+   * call shape with the rest of the fan-out, and so a future game that *does*
+   * hide a clock has a place to say so rather than a new code path.
+   */
+  sync(options?: { viewer?: Viewer; replyTo?: string | null; atMs?: number }): TimerSyncMessage {
+    const serverTime = this.#at(options?.atMs)
+    return {
+      type: 'timer:sync',
+      matchId: this.matchId,
+      serverTime,
+      replyTo: options?.replyTo ?? null,
+      timers: this.list().map((record) => toSyncEntry(record, serverTime)),
+    }
+  }
+
+  /** The `TimerView[]` the SDK hands a game's UI. */
+  views(atMs?: number): readonly TimerViewEntry[] {
+    const nowMs = this.#at(atMs)
+    return this.list().map((record) => ({
+      timerId: record.timerId,
+      seatId: record.seatId,
+      kind: record.kind,
+      remainingMs: remainingMsAt(record, nowMs),
+      isRunning: isRunning(record),
+    }))
+  }
+
+  // ------------------------------------------------------------- durability
+
+  /**
+   * JSON-safe state for Redis. Anchors stay absolute so a restart can resume.
+   *
+   * `version: 2` carries the game state and the hold scopes alongside the
+   * records, because neither can be reconstructed from the records alone: a
+   * room pause is invisible on a timer that was not running when it started.
+   * `restore` still reads `version: 1`, so the deploy that introduces this does
+   * not strand a live match.
+   */
+  snapshot(atMs?: number): TimerSnapshot {
+    return {
+      version: 2,
+      matchId: this.matchId,
+      savedAtMs: this.#at(atMs),
+      onMoveSeatId: this.#onMoveSeatId,
+      roomHeld: this.#roomHeld,
+      heldSeats: [...this.#heldSeats],
+      heldTimers: [...this.#heldTimers],
+      // `holds` is copied out of its readonly array: the snapshot is the
+      // JSON-bound shape, and nothing downstream should share an array with a
+      // live record.
+      timers: this.list().map((record) => ({
+        ...record,
+        clock: record.clock,
+        holds: [...record.holds],
+      })),
+    }
+  }
+
+  dispose(): void {
+    this.#disposed = true
+    this.#scheduler.disarm()
+    this.#records.clear()
+  }
+
+  // --------------------------------------------------------------- internal
+
+  /**
+   * Resolves the instant a mutation happens at: the caller's `atMs` when it
+   * supplied one, otherwise the server clock.
+   *
+   * Every public method that accepts an instant goes through here, which is
+   * what makes the validation unskippable. A caller's `atMs` is a game's
+   * `ctx.now` arriving from the room runner, so it is untrusted arithmetic
+   * input to every deadline in the room — see `quantities.ts` for the four ways
+   * a `NaN` here kills a match. An omitted `atMs` needs no check: the clock is
+   * ours.
+   */
+  #at(atMs?: number): number {
+    return atMs === undefined ? this.#clock.now() : assertEpochMs('atMs', atMs)
+  }
+
+  #assertDeclared(timerId: TimerId): void {
+    if (this.#specs !== null && !this.#specs.has(timerId)) {
+      throw new Error(
+        `timer '${timerId}' is not declared in the game manifest; add a TimerSpec for it`,
+      )
+    }
+  }
+
+  /**
+   * Does the scope named by `hold` cover this record?
+   *
+   * The one place each scope says what it owns. A `switch` and not a chain of
+   * `if`s so that adding a `TimerHold` fails to compile until it says what it
+   * covers, rather than silently covering nothing.
+   */
+  #scopeCovers(hold: TimerHold, record: TimerRecord): boolean {
+    switch (hold) {
+      case 'room':
+        return this.#roomHeld
+      case 'seat-disconnect':
+        return (
+          record.seatId !== null &&
+          this.#heldSeats.has(record.seatId) &&
+          // The manifest's opt-out. Absent spec means "pauses": the safe
+          // default cannot take time off a player who is not there.
+          this.#specs?.get(record.timerId)?.pausesOnDisconnect !== false
+        )
+      case 'timer':
+        return this.#heldTimers.has(record.timerId)
+    }
+  }
+
+  /**
+   * Which hold scopes cover this record right now, in `TIMER_HOLD_ORDER` so
+   * that two snapshots of the same state compare equal.
+   *
+   * An expired record is never held. A flag-fall is terminal, so leaving a
+   * scope on it would mean a later `resumeAll` trying to revive a dead clock.
+   */
+  #holdsFor(record: TimerRecord): readonly TimerHold[] {
+    if (record.expired) return NO_HOLDS
+    const holds = TIMER_HOLD_ORDER.filter((hold) => this.#scopeCovers(hold, record))
+    return holds.length === 0 ? NO_HOLDS : holds
+  }
+
+  /**
+   * Does the *game state* want this timer counting down, holds aside?
+   *
+   * A `chess-clock` runs only for the seat to move — that is what makes it a
+   * chess clock, and no hold and no resume may override it. Everything else is
+   * a one-shot: it was armed by `set` and it runs until it fires or is cleared.
+   */
+  #isWanted(record: TimerRecord): boolean {
+    if (record.expired) return false
+    if (record.kind !== 'chess-clock') return true
+    return record.seatId !== null && record.seatId === this.#onMoveSeatId
+  }
+
+  /**
+   * Brings every record back in line with the game state and the hold scopes.
+   *
+   * This is the single place that decides whether a timer runs, and every
+   * mutator ends in it. Runnable iff the game state wants it and no scope
+   * covers it; a record that should be running and is not gets anchored at
+   * `nowMs`, one that should not be and is gets frozen there. Idempotent — a
+   * pass that changes nothing bumps no versions.
+   *
+   * ## Why the linear scan is fine
+   *
+   * A match holds roughly four records: two chess clocks, a turn timer, maybe a
+   * match timer. One `set()` is about six full passes over them (the drain's
+   * `poll` and `rearm`, this, then `#afterMutation`'s `poll` and `rearm`). At the
+   * 2,000-rooms-per-instance target and a generous one action per room per five
+   * seconds that is ~400 mutations/s, so ~10k record visits/s — noise beside the
+   * `zod` parse on the same request. Indexing by deadline would cost more to
+   * maintain than it saves, and the scan is what bought the single decision
+   * point that killed the whole pause/resume defect class.
+   *
+   * Revisit when a game declares timers **per entity rather than per seat** — a
+   * real-time game with a timer per prop is the obvious M6/M7 shape. That is
+   * when records-per-match stops being a handful and this becomes worth
+   * indexing.
+   */
+  #reconcile(nowMs: number): void {
+    for (const [id, record] of this.#records) {
+      const holds = this.#holdsFor(record)
+      let next = withHolds(record, holds)
+      const shouldRun = holds.length === 0 && this.#isWanted(next)
+      if (shouldRun) {
+        if (!isRunning(next)) next = startRecord(next, nowMs)
+      } else if (isRunning(next)) {
+        const chargedMs = chargeableElapsedMs(next, nowMs)
+        next = pauseRecord(next, nowMs)
+        // A record whose budget *this freeze* consumed to zero flagged; it did
+        // not merely stop. Leaving it un-expired makes it unrunnable, invisible
+        // to `deadlineMsAt` and therefore incapable of ever producing a
+        // `TimerExpiry` — `endTurnRecord` carries the same branch for the same
+        // reason, and `docs/timers.md` promises the behaviour.
+        //
+        // Belt to the drain's braces. Every mutator drains at `nowMs` before it
+        // touches a record, so in practice the flag-fall has already been
+        // delivered and `expired` is already true by the time we get here. This
+        // catches the entry point that skipped the drain, and it fails closed:
+        // a flagged clock reads as flagged rather than as a live clock sitting
+        // on 0:00 that nothing can ever fire.
+        //
+        // `chargedMs > 0` is the whole discriminator and it is load-bearing.
+        // Reaching zero *because budget was spent* is a flag-fall. Being armed
+        // at zero is not — `set(id, { delayMs: 0 })` during a host pause
+        // creates a record that has never had the chance to run, and `set`
+        // promises it starts (and then immediately fires) when the hold lifts.
+        // Expiring it here instead would mean the game never hears about it at
+        // all, which is the very bug this branch exists to prevent.
+        //
+        // It must be `chargeableElapsedMs`, not `rawElapsedMs`. Under
+        // `delayMode: 'simple'` the two differ by exactly the delay window, and
+        // a zero-budget clock inside its delay is the one state where
+        // `remainingMsAt(now) === 0` does *not* mean the deadline has passed —
+        // `deadlineMsAt` is `startedAtMs + delayRemainingMs`, still in the
+        // future. Raw elapsed opens the gate there and flags the player up to
+        // `delayMs` early, terminally, without ever telling the game.
+        if (chargedMs > 0 && next.remainingMs <= 0) next = expireRecord(next)
+      }
+      if (next !== record) this.#records.set(id, next)
+    }
+  }
+
+  /**
+   * Delivers every expiry already due at `nowMs` *before* a mutation gets to
+   * observe the records, and again after it.
+   *
+   * This is the determinism fix. Live, the scheduler polls first, so a flag that
+   * fell at +10 s is delivered before the move that lands at +12 s. In replay
+   * nothing polls: the runner drives a fixed clock straight from the match log,
+   * so without this the same seed and the same inputs end in a flag-fall live
+   * and in a position on replay. Rather than leave that as a contract the
+   * service cannot enforce, every mutator drains here and the invariant
+   * becomes: **once a mutator has returned, no record sits at
+   * `remainingMs === 0` without its `TimerExpiry` having been accounted for.**
+   *
+   * ## The bound on that invariant
+   *
+   * "Accounted for" and not "delivered", because of `MAX_DRAIN_PASSES`. Each
+   * pass is one `poll`, and an `onExpire` handler may legitimately arm the next
+   * timer; a handler that arms an *already-due* one every single time would
+   * loop forever. After 32 passes the drain stops looping and force-expires
+   * whatever is still due **without calling `onExpire`**, reporting it through
+   * `onDrainExhausted`.
+   *
+   * It is not "leave the remainder to the scheduler", and the reason is replay
+   * alone. Live there *is* a pickup: the handler re-armed those records, so they
+   * are running with a past deadline, visible to `deadlineMsAt`, and `#rearm`
+   * schedules them — as a `setTimeout(0)` spin, which is its own problem but is
+   * not a lost event. In replay there is no scheduler at all, so on the one path
+   * this invariant was introduced for the record would sit at zero with nothing
+   * that could ever deliver it. Dropping an event loudly beats a clock the game
+   * can never learn about.
+   *
+   * A no-op while firing — we are already inside a pass, and a handler that
+   * mutates must not re-enter one.
+   */
+  #drainDue(nowMs: number): void {
+    if (this.#disposed || this.#firing) return
+    for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
+      if (this.poll(nowMs).length === 0) return
+    }
+    this.#forceExpireDue(nowMs)
+  }
+
+  /** The `MAX_DRAIN_PASSES` escape hatch. See `#drainDue`. */
+  #forceExpireDue(nowMs: number): void {
+    const dropped: TimerExpiry[] = []
+    for (const record of [...this.#records.values()]) {
+      const dueAtMs = deadlineMsAt(record)
+      if (dueAtMs === null || dueAtMs - FIRE_TOLERANCE_MS > nowMs) continue
+      this.#records.set(record.timerId, expireRecord(record))
+      dropped.push({
+        timerId: record.timerId,
+        seatId: record.seatId,
+        kind: record.kind,
+        dueAtMs,
+        firedAtMs: nowMs,
+        latenessMs: nowMs - dueAtMs,
+      })
+    }
+    if (dropped.length === 0) return
+    dropped.sort((a, b) => a.dueAtMs - b.dueAtMs)
+    // Inside `#firing`, exactly as `poll` wraps `onExpire`, and for the same
+    // reason. A handler that mutates would otherwise re-enter `#drainDue`,
+    // spend another 32 passes, and arrive back here — unbounded recursion, and
+    // the stack overflow is an uncaught throw inside a mutator on the
+    // 2,000-rooms-per-instance path, so one buggy game takes the process and
+    // every other match on it. The cap exists to make a runaway handler
+    // terminate; its escape hatch must not reintroduce the runaway.
+    this.#firing = true
+    try {
+      this.#onDrainExhausted(dropped)
+    } finally {
+      this.#firing = false
+    }
+    this.#rearm()
+  }
+
+  /**
+   * After any change that can move a deadline into the past — `switchTurnTo`
+   * onto a seat that already flagged, a `set` with `delayMs: 0` — fire first,
+   * then re-arm. Otherwise a zero-length timer would wait for the next
+   * unrelated event to be noticed.
+   *
+   * `nowMs` is the mutation's instant, not the wall clock. Passing the wall
+   * clock here would measure `latenessMs` against it and break `poll`'s own
+   * promise that a replayed expiry gets the same `firedAtMs`/`latenessMs` as
+   * the live one — on the exact path that promise was written for.
+   */
+  #afterMutation(nowMs?: number): void {
+    this.#drainDue(this.#at(nowMs))
+    this.#rearm()
+  }
+
+  #rearm(): void {
+    if (this.#disposed) return
+    const next = this.nextDeadlineMs()
+    if (next === null) {
+      this.#scheduler.disarm()
+      return
+    }
+    this.#scheduler.arm(next, () => this.poll())
+  }
+
+  /**
+   * Rebuilds a service from a snapshot. This is the restart path.
+   *
+   * Anchors in the snapshot are absolute epoch milliseconds, because a
+   * monotonic counter does not survive a process, let alone a move to another
+   * host. The cost is that the restored clock depends on the wall clock
+   * agreeing across the two processes — so a snapshot stamped *after* the
+   * restoring process's own clock (a backwards wall-clock step) is rejected
+   * rather than trusted.
+   *
+   * The snapshot is parsed, not cast. It comes back out of Redis, which is the
+   * one place a stale-shaped blob can silently become a wrong clock.
+   *
+   * ## Caveat for the room runner: `onExpire` fires before `restore` returns
+   *
+   * A flag may well have fallen while we were dead, and surfacing it on the next
+   * unrelated event would be wrong — so `restore` runs an expiry pass before it
+   * hands the service back. An `onExpire` passed in `options` therefore runs
+   * while `restore` is still on the stack, at which point **the caller has no
+   * service reference yet** and cannot call `sync()` or `nextDeadlineMs()` from
+   * that handler.
+   *
+   * The runner's options are to queue the expiry and process it after `restore`
+   * returns, or to restore with no `onExpire` and drain `poll()` itself
+   * immediately afterwards. The second is the shape the M1.6 runner uses.
+   *
+   * ## Required of the room runner: re-assert the seat to move
+   *
+   * **After `restore` returns, call `switchTurnTo` with the seat the game state
+   * says is on move.** On both snapshot versions, every time.
+   *
+   * `onMoveSeatId` is *game state*, and the game module is its authority; the
+   * snapshot persists it as a cache so a restart does not have to stall, not as
+   * a second source of truth. v2 stores it explicitly and infers nothing, but it
+   * can still be stale relative to a match log the runner replayed further. v1
+   * could not always express it at all and returns `null` when the snapshot is
+   * ambiguous — see `readV1Scopes` — so without this call a restored v1 match
+   * can sit with nobody's clock running.
+   *
+   * Re-asserting it is idempotent: `switchTurnTo` onto the seat already on move
+   * changes nothing and credits no increment.
+   */
+  static restore(snapshot: unknown, options: RestoreTimerServiceOptions): TimerService {
+    const parsed = timerSnapshotSchema.parse(snapshot)
+    const clock = options.clock
+    const service = new TimerService({ ...options, clock, matchId: parsed.matchId as MatchId })
+    const nowMs = clock.now()
+    const chargeDowntime = options.chargeDowntime ?? true
+
+    if (parsed.savedAtMs > nowMs) {
+      throw new Error(
+        `timer snapshot for match ${parsed.matchId} is stamped ${parsed.savedAtMs - nowMs} ms in the future; ` +
+          'refusing to restore against a wall clock that stepped backwards',
+      )
+    }
+
+    // Game state and hold scopes before records, so the reconciliation pass at
+    // the bottom has something to reconcile against.
+    const scopes: TimerScopes =
+      parsed.version === 2
+        ? {
+            onMoveSeatId: parsed.onMoveSeatId as SeatId | null,
+            roomHeld: parsed.roomHeld,
+            heldSeats: new Set(parsed.heldSeats),
+            heldTimers: new Set(parsed.heldTimers),
+          }
+        : readV1Scopes(parsed)
+    service.#onMoveSeatId = scopes.onMoveSeatId
+    service.#roomHeld = scopes.roomHeld
+    service.#heldSeats = scopes.heldSeats
+    service.#heldTimers = scopes.heldTimers
+
+    for (const timer of parsed.timers) {
+      const record: TimerRecord = {
+        ...timer,
+        timerId: timer.timerId as TimerId,
+        seatId: timer.seatId as SeatId | null,
+      }
+      // A crash keeps the original anchor: from the players' point of view the
+      // clock never stopped, so the downtime is theirs. A planned drain commits
+      // what was spent up to the snapshot and re-anchors to now, which is the
+      // only way to *not* charge it — simply moving the anchor forward without
+      // committing would hand back everything played since the clock started.
+      //
+      // The `isRunning` guard is load-bearing. On a stopped record `pauseRecord`
+      // is a no-op and the `resumeRecord` behind it would *start* the timer, so
+      // without the guard a planned drain — which is the deploy path — un-pauses
+      // every paused clock in every live room. A stopped timer has nothing to
+      // re-anchor: its budget is already committed and absolute.
+      const reanchor = !chargeDowntime && isRunning(record)
+      service.#records.set(
+        timer.timerId,
+        reanchor ? resumeRecord(pauseRecord(record, parsed.savedAtMs), nowMs) : record,
+      )
+    }
+
+    // Drain *before* reconciling, which is the order every live mutator uses
+    // and for the same reason. A flag may well have fallen while we were dead,
+    // and at this point the record that flagged is still anchored and running,
+    // so `deadlineMsAt` can see it and `poll` can deliver the expiry.
+    //
+    // Reconciling first loses it. `#reconcile` freezes a record a hold now
+    // covers, and freezing a record whose budget ran out during the downtime
+    // commits `remainingMs: 0`; `deadlineMsAt` returns null for a stopped
+    // record, so the drain that followed had nothing left to find. The match
+    // then resumed with a player on 0:00 whose clock could never run out and a
+    // game module that was never told they flagged — exactly the invariant
+    // `endTurnRecord` documents and `docs/timers.md` promises.
+    //
+    // The hold case the ordering has to respect still works: the drain fires
+    // the expiry, `expireRecord` makes the record terminal, and the reconcile
+    // behind it leaves an expired record alone.
+    service.#drainDue(nowMs)
+    service.#reconcile(nowMs)
+    // Anything the reconcile itself made due — a zero-length timer that only
+    // became runnable now because the snapshot's holds lifted — plus the re-arm.
+    service.#afterMutation(nowMs)
+    return service
+  }
+}
+
+/** Canonical empty holds, shared so `withHolds` can compare by identity fast. */
+const NO_HOLDS: readonly TimerHold[] = []
+
+/**
+ * Recovers the hold scopes and the seat to move from a pre-scope snapshot.
+ *
+ * A v1 snapshot only knows which records were stamped, so this reads the scopes
+ * back out of the stamps. It recovers exactly what the old build could express
+ * and no more — which is the correct reading, because a hold the old build
+ * never took is a hold that was not in force.
+ *
+ * ## The seat to move is inferred narrowly, and otherwise fails closed
+ *
+ * A v1 snapshot genuinely cannot always identify the mover, so this does not
+ * try to. Guessing is the worse failure: v1's `applyHold` stamped any record
+ * that was running **or already held**, so a non-mover's clock that was already
+ * held from its own disconnect accumulated the `room` hold too when the host
+ * paused. "First held clock wins" therefore resolved to whichever seat was
+ * *declared* first, and under the normal white-first declaration order that
+ * misreads the common case — Black to move, White disconnected, host pauses,
+ * server restarts mid-deploy — as White on move. White's clock then burns on
+ * Black's turn and can flag there. The server would be asserting a clock the
+ * game state contradicts, which is the opposite of server-authoritative.
+ *
+ * Two narrow cases are accepted, and both must be unambiguous:
+ *
+ * 1. Exactly one non-expired chess clock is **running**. It names the mover
+ *    outright. More than one means v1 was already charging two players (the
+ *    pass-1 `resumeForSeat` defect did exactly that), so the snapshot is
+ *    corrupt and we stop rather than pick a victim.
+ * 2. Nothing is running and exactly one non-expired chess clock is held by
+ *    **`room` alone**. A non-mover's clock can only still be held because it
+ *    carried a non-`room` hold through the turn switch, so `['room']` on its
+ *    own does identify the clock that was running when the room froze.
+ *
+ * Anything else yields `null`: nobody's clock runs until someone says whose
+ * turn it is. Losing a turn's worth of clock start is recoverable; charging the
+ * wrong player is not.
+ *
+ * This is safe to fail closed on because `restore` requires the room runner to
+ * re-assert `switchTurnTo` from game state — the authority for whose turn it is
+ * has always been the game module, never the clock. With that in place a `null`
+ * here is a non-event.
+ */
+function readV1Scopes(parsed: Extract<AnyTimerSnapshot, { version: 1 }>): TimerScopes {
+  const scopes: TimerScopes = {
+    onMoveSeatId: null,
+    roomHeld: false,
+    heldSeats: new Set<string>(),
+    heldTimers: new Set<string>(),
+  }
+  const running: SeatId[] = []
+  const roomHeldAlone: SeatId[] = []
+  for (const timer of parsed.timers) {
+    if (timer.holds.includes('room')) scopes.roomHeld = true
+    if (timer.holds.includes('seat-disconnect') && timer.seatId !== null) {
+      scopes.heldSeats.add(timer.seatId)
+    }
+    if (timer.holds.includes('timer')) scopes.heldTimers.add(timer.timerId)
+
+    if (timer.kind !== 'chess-clock' || timer.seatId === null || timer.expired) continue
+    if (timer.startedAtMs !== null) running.push(timer.seatId as SeatId)
+    else if (timer.holds.length === 1 && timer.holds[0] === 'room') {
+      roomHeldAlone.push(timer.seatId as SeatId)
+    }
+  }
+  // Rule 2 applies only when *nothing* ran. `onlyMember(running)` returns null
+  // for two different reasons — nothing ran, or several did — and a `??` chain
+  // cannot tell them apart, so it would let the corrupt multi-runner shape that
+  // rule 1 exists to refuse fall through into rule 2 and name a seat whose
+  // clock was demonstrably stopped while two others ran. Unreachable at two
+  // seats; live the moment a game declares chess clocks for three, which
+  // nothing in this service forbids.
+  scopes.onMoveSeatId = running.length > 0 ? onlyMember(running) : onlyMember(roomHeldAlone)
+  return scopes
+}
+
+/** The single element of `seats`, or null when it is empty or ambiguous. */
+function onlyMember(seats: readonly SeatId[]): SeatId | null {
+  return seats.length === 1 ? (seats[0] as SeatId) : null
+}
+
+interface TimerScopes {
+  onMoveSeatId: SeatId | null
+  roomHeld: boolean
+  heldSeats: Set<string>
+  heldTimers: Set<string>
+}
+
+export interface RestoreTimerServiceOptions extends Omit<TimerServiceOptions, 'matchId'> {
+  /**
+   * Charge the wall time the process was down against running timers.
+   *
+   * `true` (the default) is correct for a crash: the players' clocks kept
+   * running from their point of view. `false` is for a planned restart where
+   * the room was drained first and nobody could move.
+   */
+  readonly chargeDowntime?: boolean
+}
+
+/** Free-function alias for `TimerService.restore`. */
+export function restoreTimerService(
+  snapshot: unknown,
+  options: RestoreTimerServiceOptions,
+): TimerService {
+  return TimerService.restore(snapshot, options)
+}
+
+function toSyncEntry(record: TimerRecord, serverTime: number): TimerSyncEntry {
+  const running = isRunning(record)
+  return {
+    timerId: record.timerId,
+    seatId: record.seatId,
+    kind: record.kind,
+    state: record.expired ? 'expired' : running ? 'running' : 'paused',
+    remainingMs: Math.round(remainingMsAt(record, serverTime)),
+    deadlineAtMs: running ? Math.round(deadlineMsAt(record) ?? 0) : null,
+    delayRemainingMs: Math.round(delayRemainingMsAt(record, serverTime)),
+    version: record.version,
+  }
+}
