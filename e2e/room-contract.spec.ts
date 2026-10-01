@@ -223,8 +223,9 @@ test('a clean pasted code is accepted as-is', async ({ page }) => {
  * Marked `test.fail()`, not skipped: skipping hides it, while an expected
  * failure keeps the defect executing on every run and makes Playwright report an
  * error the moment it starts passing — which is the signal that the fix landed.
- * Filed against Frontend Engineer; see the PER-28 thread. Remove the annotation
- * with the fix, in the same commit.
+ *
+ * Tracked as [PER-197](/PER/issues/PER-197) (Frontend Engineer). **Remove this
+ * annotation in the same commit as the fix**, so the test starts guarding it.
  */
 test('a pasted code with a separator is normalised', async ({ page }) => {
   test.fail()
