@@ -123,6 +123,17 @@ const GENERATED_REGISTRY = '^apps/[^/]+/src/games\\.generated\\.ts$'
 const ANY_GAME_DIR = '^games/((?:_examples/)?[^/]+)/'
 
 /**
+ * Any app package, capturing the app directory — the `apps/` counterpart of ANY_GAME_DIR, so
+ * `no-app-to-app` can exempt an app importing *itself* via `$1`.
+ *
+ * Flat, with no `_examples` analogue: `apps/` holds composition roots, not a nested layout.
+ * `([^/]+)` cannot over-exempt a sibling whose name merely starts with the importer's, because the
+ * `/` in `^apps/$1/` is part of the pattern: from `apps/web`, `$1` is `web` and `^apps/web/` does
+ * not match `apps/web-admin/src/x.ts` — the next character there is `-`, not `/`.
+ */
+const ANY_APP_DIR = '^apps/([^/]+)/'
+
+/**
  * The server framework. ADR-0001 §4 (rev 4) adopts Colyseus for `apps/realtime` by board
  * decision; ADR-0002 §2 keeps it out of `games/**`. That pairing is the whole point: the
  * platform may pick a framework, a game may never learn which one was picked.
@@ -283,6 +294,27 @@ module.exports = {
       // imports an app — and an overlap costs nothing but a second line of CI output.
       from: { path: '^packages/' },
       to: { path: APP_TARGETS },
+    },
+    {
+      name: 'no-app-to-app',
+      severity: 'error',
+      comment:
+        'The same inversion no-package-to-app forbids, between two composition roots. apps/web ' +
+        'and apps/realtime both import platform-core, so an edge between them closes a cycle ' +
+        'through the package they share, and it makes neither app deployable on its own: the web ' +
+        'build would pull in the server and the server build would pull in Next.js. This is the ' +
+        'more tempting of the two mistakes, because the thing being reached for is usually ' +
+        'plausible — a wire-protocol type or a room-code helper that happens to live in the ' +
+        'realtime server. Plausible is the tell: a value both apps need is a shared value, so ' +
+        'move it down into packages/shared or a package and let both apps import it. Two apps ' +
+        'never talk in-process anyway; they talk over the wire.',
+      // `$1` exempts the app's own directory (dependency-cruiser group matching, not a regex
+      // backreference), so an intra-app import stays legal — `apps/web` is full of them. Like
+      // `no-game-to-game` it does not exempt the app's own *package name*: an app importing itself
+      // by bare specifier routes its own files through node_modules and is a cycle waiting to
+      // happen, so flagging it is correct.
+      from: { path: ANY_APP_DIR },
+      to: { path: APP_TARGETS, pathNot: '^apps/$1/' },
     },
     {
       name: 'no-sdk-to-platform',

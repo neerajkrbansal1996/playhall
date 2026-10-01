@@ -17,6 +17,22 @@ export const SETTINGS = { seats: 2 }
 export const games = {
   'fx-b': () => import('@scope/fx-b'),
 }
+=== file: apps/web/src/a.ts ===
+// `no-app-to-app`'s exemption, exercised: an app importing its own file. This belongs in the
+// positive control and nowhere else, because it is the only assertion that can tell a correct rule
+// from one that forbids everything — `APP_TARGETS`' path alternation matches `apps/web/src/b.ts`
+// just as readily as `apps/realtime/src/index.ts`, so the rule's whole precision lives in the
+// `pathNot: '^apps/$1/'` group match, and a negative fixture is green either way.
+//
+// It is not a hypothetical shape. `apps/web` is almost entirely intra-app imports, so dropping the
+// `pathNot` would redden `pnpm boundaries` on the real tree — but no fixture in this directory
+// would notice, and the mini repo has no intra-app edge of its own. Measured: with `pathNot`
+// removed, this control is the one and only fixture that fails (PER-257).
+import { B } from './b'
+
+export const A = `a:${B}`
+=== file: apps/web/src/b.ts ===
+export const B = 'b'
 === file: packages/platform-core/src/identity/guest-token.ts ===
 // The one exception `no-platform-core-node-builtins` carries, at its exact path, doing the exact
 // thing it is exempted for. It belongs in the positive control rather than in a negative fixture

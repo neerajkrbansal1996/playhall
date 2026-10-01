@@ -1,0 +1,19 @@
+# expect: no-app-to-app
+# why: one app importing another by package name, resolved through the workspace link
+=== file: apps/web/src/index.ts ===
+// The resolved half of the rule (ADR-0002 §2.1 alternation 1): `@scope/realtime` links through
+// node_modules, so the module's path in the graph is `apps/realtime/src/index.ts` and the
+// path-based alternation can see it.
+//
+// Written from `apps/web` towards `apps/realtime` because that is the direction the mistake
+// actually goes: the web shell wants something the server already has. The reverse direction is
+// forbidden by the same rule — `from` is `^apps/([^/]+)/`, not a single app — so it needs no
+// fixture of its own; neither app is named in the pattern.
+//
+// No other error rule can account for a failure here. `no-package-to-app` starts at `^packages/`,
+// and `no-platform-to-game`'s `from` does include `^apps/` but its `to` is `^games/`. The exempted
+// intra-app edge is proven separately, in the positive control: a negative fixture asserts the rule
+// fired somewhere, which is silent about whether the exemption held.
+import { boot } from '@scope/realtime'
+
+export default boot
