@@ -286,6 +286,80 @@ describe('ws probe — rejected frames', () => {
     expect(error.reason.length).toBeLessThan(160)
   })
 
+  it('quotes a key name through a fixed alphabet, not verbatim', async () => {
+    // The cap above bounds how *much* of a key comes back. This bounds *what*:
+    // exact equality, because the point is that no byte of the key reaches the
+    // wire unless the alphabet admits it. Everything else becomes `?`.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, 'evil key!': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected evil?key?')
+  })
+
+  it('does not let a key name carry a control character or an escape sequence', async () => {
+    // The reason reaches only this socket today, so there is no sink to inject
+    // into — which is exactly why nothing stops a newline from surviving. The
+    // next sink to be handed this string (a log line, a terminal, a CI
+    // annotation) inherits the decision, so make it here: a forged log prefix
+    // and an ANSI colour run both have to come back inert.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        'x\n[realtime] FATAL forged': 1,
+        'y\u001b[31mRED\u001b[0m': 1,
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    // eslint-disable-next-line no-control-regex -- the point of the assertion
+    expect(error.reason).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(error.reason).not.toContain('[realtime]')
+    expect(error.reason).not.toContain('[31m')
+    // Still diagnostic: the caller can tell which keys to remove.
+    expect(error.reason).toContain('x??realtime?')
+    expect(error.reason).toContain('y??31mRED')
+  })
+
+  it('bounds a multi-byte key in bytes, not only in characters', async () => {
+    // `MAX_REPORTED_KEY_CHARS` is a character cap, and a character is up to four
+    // bytes — 3 keys x 32 astral characters is ~384 bytes of reason from a frame
+    // that fits the 1 KiB inbound cap. The alphabet runs first, so each surviving
+    // character is one ASCII byte and the character cap is a byte cap too. It
+    // also means no half of a surrogate pair can be clipped onto the wire.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    const astral = '\u{1f4a5}'.repeat(40)
+    ws.send(
+      JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, [astral]: 1, [`${astral}2`]: 1 }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).not.toMatch(/[\ud800-\udfff]/)
+    expect(Buffer.byteLength(error.reason, 'utf8')).toBeLessThan(160)
+  })
+
+  it('names an empty key rather than trailing off', async () => {
+    // `{"": 1}` is legal JSON. Quoting it contributes nothing, so without a
+    // stand-in the reason reads `unexpected ` and the caller cannot tell an
+    // empty key from a bug in the server's error path.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, '': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected (empty)')
+  })
+
   it('rejects a binary frame instead of guessing at a codec', async () => {
     // The binary path belongs to the real-time codec in M6. This probe must not
     // prejudice it by accepting one shape of bytes today.

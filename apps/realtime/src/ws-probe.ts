@@ -277,10 +277,11 @@ function parseFrame(data: RawData): ParseResult {
     // no path (the object as a whole is wrong), so naming the rejected keys is
     // the only way the caller learns what to remove — and those key names *are*
     // caller-supplied. `maxFrameBytes` alone bounds them loosely enough to echo
-    // ~1 KiB back, so they are capped here instead: at most
-    // `MAX_REPORTED_KEYS`, each clipped to `MAX_REPORTED_KEY_CHARS`. Keeping
-    // this invariant literally true matters more than the diagnostic detail —
-    // it is the invariant M1.6 inherits, and there fan-out exists.
+    // ~1 KiB back, so they are bounded here instead — in *amount* by
+    // `MAX_REPORTED_KEYS` / `MAX_REPORTED_KEY_CHARS`, and in *alphabet* by
+    // `quoteKey`. Keeping this invariant literally true matters more than the
+    // diagnostic detail — it is the invariant M1.6 inherits, and there fan-out
+    // exists.
     const detail = parsed.error.issues
       .map((issue) =>
         issue.code === 'unrecognized_keys'
@@ -297,14 +298,49 @@ function parseFrame(data: RawData): ParseResult {
 const MAX_REPORTED_KEYS = 3
 const MAX_REPORTED_KEY_CHARS = 32
 
+/**
+ * Everything a quoted key may *not* contribute. An allowlist rather than a
+ * blocklist of known-bad characters: the set of characters that are inert in
+ * every sink a reason string can reach is not knowable from here, but the set a
+ * legitimate protocol field name needs is — identifier characters, and the two
+ * separators (`.`, `:`) a nested path can carry.
+ */
+const UNQUOTABLE_KEY_CHAR = /[^A-Za-z0-9_.:-]/g
+
+/**
+ * `{"": 1}` is legal JSON, and quoting that key contributes nothing — the reason
+ * would read `unexpected ` and trail off. Name it instead.
+ */
+const EMPTY_KEY = '(empty)'
+
 function summariseKeys(keys: readonly string[]): string {
-  const shown = keys
-    .slice(0, MAX_REPORTED_KEYS)
-    .map((key) =>
-      key.length > MAX_REPORTED_KEY_CHARS ? `${key.slice(0, MAX_REPORTED_KEY_CHARS)}…` : key,
-    )
+  const shown = keys.slice(0, MAX_REPORTED_KEYS).map(quoteKey)
   const hidden = keys.length - shown.length
   return hidden > 0 ? `${shown.join(', ')} (+${hidden} more)` : shown.join(', ')
+}
+
+/**
+ * Renders one caller-supplied key name as something safe to put on the wire.
+ *
+ * The count/length caps above bound how *much* comes back; they say nothing
+ * about *what*. A 32-character slice of a caller's key still carries a newline,
+ * a `\r`, or an ANSI escape introducer verbatim, and that is a property of the
+ * sink, not of this file: today the reason reaches only the socket that sent the
+ * frame, so there is nothing to inject into, but the next sink to be given this
+ * string — a structured log line, a terminal, a CI annotation, an HTML error
+ * panel — gets to be wrong about it. Shaping the string at the source is the
+ * only place that choice does not have to be re-made per sink.
+ *
+ * The alphabet is applied **before** the length clip, so `MAX_REPORTED_KEY_CHARS`
+ * is a cap on bytes as well as on characters: every surviving character is one
+ * ASCII byte, where 32 characters of a multi-byte key would have been up to 128.
+ * It also means the clip cannot bisect a surrogate pair and strand half of one
+ * in a JSON string.
+ */
+function quoteKey(key: string): string {
+  const safe = key.replace(UNQUOTABLE_KEY_CHAR, '?')
+  if (safe.length === 0) return EMPTY_KEY
+  return safe.length > MAX_REPORTED_KEY_CHARS ? `${safe.slice(0, MAX_REPORTED_KEY_CHARS)}…` : safe
 }
 
 /**
