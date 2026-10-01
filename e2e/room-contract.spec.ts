@@ -304,6 +304,45 @@ test('a bulk-inserted over-long code is capped, not just normalised', async ({ p
 })
 
 /**
+ * The 7th canonical keystroke on an already-full field — the one path React does
+ * not re-render for.
+ *
+ * Every other case here moves the state, so React rewrites the DOM node the
+ * ordinary way and nothing subtle is being exercised. This one does not:
+ * `normalizeRoomCode('ABC2345').slice(0, 6)` returns `ABC234`, which is what
+ * state already holds, so React bails out of rendering entirely and only
+ * react-dom's `restoreControlledState` pulls the input element back to six
+ * characters.
+ *
+ * It needs its own case because the fix is what made it reachable. Under
+ * `maxLength` the DOM could never hold a seventh character in the first place,
+ * so the bail-out never had anything to undo; removing the attribute moves that
+ * correctness onto a react-dom implementation detail. If that restore ever stops
+ * covering us, this is the only test that would notice — the field would show
+ * `ABC2345` while `data-value` still read `ABC234`, which is precisely the
+ * "visible value and request disagree" failure `JoinByCodeForm` exists to
+ * prevent. Asserting both is the point; either alone would pass.
+ *
+ * The dropped character is deliberately silent, which is the behaviour as
+ * specified today — a real code is always six. That silence is separately
+ * tracked as [PER-214](/PER/issues/PER-214); if it is ever announced, this test
+ * gains an assertion rather than losing one.
+ */
+test('a 7th canonical keystroke on a full field is dropped without desyncing', async ({ page }) => {
+  const input = page.getByTestId(testIds.joinCodeInput)
+
+  await input.fill(PREVIEW_CODE)
+  await expect(input).toHaveValue(PREVIEW_CODE)
+
+  // Typed, not filled: `fill()` replaces the value in one operation and would
+  // never produce the already-at-the-cap transition this is about.
+  await input.pressSequentially('5')
+
+  await expect(input).toHaveValue(PREVIEW_CODE)
+  await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
+})
+
+/**
  * A short code is rejected with an announced message, and submit stays enabled.
  *
  * The accessibility claim is the substance here, not the rejection: a disabled
