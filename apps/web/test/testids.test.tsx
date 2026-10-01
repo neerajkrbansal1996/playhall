@@ -92,6 +92,17 @@ describe('the platform testid registry', () => {
     expect(
       Object.keys(seatTestAttributes('w', { connected: true, occupied: true })).sort(),
     ).toEqual(['data-connected', 'data-occupied', 'data-testid'])
+
+    // A key pin alone survives a helper that returns the key with a constant
+    // value, so read the value on both sides of the boolean here rather than
+    // leaving it to the neighbouring tests. `data-occupied="true"` was asserted
+    // nowhere in the repository before this issue.
+    expect(seatTestAttributes('w', { connected: true, occupied: true })['data-occupied']).toBe(
+      'true',
+    )
+    expect(seatTestAttributes('w', { connected: true, occupied: false })['data-occupied']).toBe(
+      'false',
+    )
   })
 
   it('takes occupancy as a named field, not a third positional boolean', () => {
