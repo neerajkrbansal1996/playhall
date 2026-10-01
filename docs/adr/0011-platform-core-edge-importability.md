@@ -370,7 +370,7 @@ only form that actually enforces the invariant rather than approximating it. Tha
 
 ## Alternatives considered
 
-### 1. Async WebCrypto everywhere — **rejected, on reversibility, not on speed**
+### 1. Async WebCrypto everywhere — **rejected: it does not deliver edge-importability, and it is the least reversible option. Not rejected on speed.**
 
 Make `crypto.subtle.sign`/`verify` the implementation. `signGuestToken`/`verifyGuestToken` become
 `Promise`-returning; `issue()` and `authenticate()` follow.
