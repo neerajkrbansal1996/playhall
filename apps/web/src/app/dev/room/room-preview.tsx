@@ -65,16 +65,40 @@ export function RoomPreview() {
 
       <hr className="border-border" />
 
+      {/*
+        Harness-only hooks, literal strings rather than entries in
+        `@/lib/testids`: that registry is the *platform* contract, and a toggle
+        that exists only in a preview route must not look like a surface the
+        real `/r/[code]` is expected to expose. Same convention as
+        `toggle-server-error` in the create-lobby preview.
+
+        They exist because `e2e/lib/viewports.ts` requires every route state to
+        be reached by a CSS selector that is not user-visible copy — a click
+        keyed on "Drop Black" silently stops matching the day the label is
+        reworded, and the suite then measures the default state N times while
+        staying green.
+      */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={() => setDisconnected((v) => !v)}>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="toggle-black-presence"
+          onClick={() => setDisconnected((v) => !v)}
+        >
           {disconnected ? 'Reconnect Black' : 'Drop Black'}
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setSpectators((n) => (n === 0 ? 2 : 0))}>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="toggle-spectators"
+          onClick={() => setSpectators((n) => (n === 0 ? 2 : 0))}
+        >
           {spectators === 0 ? 'Add spectators' : 'Clear spectators'}
         </Button>
         <Button
           variant="outline"
           size="sm"
+          data-testid="toggle-join-error"
           onClick={() => setJoinError((e) => (e ? undefined : 'That room has expired.'))}
         >
           {joinError ? 'Clear join error' : 'Show join error'}

@@ -38,10 +38,28 @@ measures. Revisit when a spec measures something it would actually split on.
 ## The server
 
 `playwright.config.ts` owns a `webServer` that runs a **production** `next build`
-and `next start` on port 3947 (`E2E_PORT` to change it), with
-`NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1`. `next dev` is not used: it injects the dev
-overlay and compiles on first request, neither of which ships, and both of which
-change layout timing.
+and `next start` on port 3947 (`E2E_PORT` to change it). `next dev` is not used:
+it injects the dev overlay and compiles on first request, neither of which ships,
+and both of which change layout timing.
+
+### Preview flags
+
+The `/dev/*` harness routes are each behind a `NEXT_PUBLIC_*` flag and 404
+without it. `PREVIEW_FLAGS` in the config sets them all —
+`NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1` for `/dev/settings-form` and
+`NEXT_PUBLIC_ROOM_PREVIEW=1` for `/dev/room` — and applies them to the **build**
+as well as the serve, because `NEXT_PUBLIC_*` is read at build time.
+
+A missing flag does not fail loudly: the route 404s and the spec reports
+"locator resolved to 0 elements", which reads like a selector bug and sends the
+next person to the wrong file. `/dev/room` shipped unreachable for exactly this
+reason — `NEXT_PUBLIC_ROOM_PREVIEW` appeared nowhere but the page that tested
+it, so the harness route built for this suite could not be reached by it. **When
+a new `/dev/*` harness lands, add its flag to `PREVIEW_FLAGS` in the same
+commit**, and have the spec assert the navigation returned 200 so the
+switched-off case names itself.
+
+### Port collisions — use `E2E_PORT`, never `E2E_REUSE_SERVER`
 
 `reuseExistingServer` is **off** by default — opt in with `E2E_REUSE_SERVER=1`.
 This is not the usual `!process.env.CI`, and the reason is a real failure: a
@@ -50,6 +68,27 @@ while serving a build of a _different branch_. That cost a debugging pass on thi
 suite's own first run, which reported six green viewports and four missing
 `data-testid`s. A suite whose subject is "what does the current tree render" must
 not silently measure another tree.
+
+That default has a consequence worth stating, because this repo is routinely
+checked out into many sibling worktrees at once. When another session already
+holds the port, Playwright aborts with:
+
+```
+Error: http://127.0.0.1:3947/api/health is already used, make sure that nothing
+is running on the port/url or set reuseExistingServer:true in config.webServer.
+```
+
+**Do not take that advice.** Setting `reuseExistingServer:true` is precisely the
+bug the default exists to prevent: the suite would go green against whatever
+branch the other session built. Do not kill the other server either — it belongs
+to a run that is still using it. Take your own port instead:
+
+```bash
+E2E_PORT=3971 pnpm test:e2e
+```
+
+Pick a port and check it is free (`lsof -nP -iTCP:<port> -sTCP:LISTEN`) rather
+than assuming.
 
 ## Spec 1 — horizontal overflow
 

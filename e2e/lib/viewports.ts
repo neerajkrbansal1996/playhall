@@ -121,4 +121,52 @@ export const ROUTES: readonly Route[] = [
       },
     ],
   },
+  {
+    name: 'room-preview',
+    /**
+     * The room, seats, presence and join-by-code surfaces, behind
+     * `NEXT_PUBLIC_ROOM_PREVIEW=1` (set by the `webServer` command).
+     *
+     * These are the surfaces every M2 chess E2E scenario passes through before
+     * it reaches a board, so they are measured from their first commit rather
+     * than when [PER-20](/PER/issues/PER-20) lands the real `/r/[code]`.
+     */
+    path: '/dev/room',
+    states: [
+      /**
+       * The preview mounts with Black **dropped** (`disconnected` initialises
+       * `true`), so the default state is the mid-reconnect one. Pinning
+       * `data-connected="false"` here rather than just `[data-testid="seat-b"]`
+       * is deliberate: it proves presence is being emitted as the attribute the
+       * disconnect scenarios assert on, and it fails if the initial state is
+       * ever flipped to the happy path — at which point the state below would
+       * silently become a no-op click.
+       */
+      { name: 'default', proof: '[data-testid="seat-b"][data-connected="false"]' },
+      // Presence restored. The seat row swaps icon, word and attribute.
+      {
+        name: 'black-reconnected',
+        click: '[data-testid="toggle-black-presence"]',
+        proof: '[data-testid="seat-b"][data-connected="true"]',
+      },
+      // An empty room: the spectator row re-renders with a different count, and
+      // `0 spectators` is the longest of the three strings it can hold.
+      {
+        name: 'no-spectators',
+        click: '[data-testid="toggle-spectators"]',
+        proof: '[data-testid="spectator-count"][data-count="0"]',
+      },
+      /**
+       * A rejected join. Adds an icon + message row under the input, the same
+       * shape as the create-lobby `server-error` state and for the same reason:
+       * it is the row most likely to push the field past the right edge at
+       * 320px.
+       */
+      {
+        name: 'join-error',
+        click: '[data-testid="toggle-join-error"]',
+        proof: '[data-testid="join-code-input"][aria-invalid="true"]',
+      },
+    ],
+  },
 ]
