@@ -65,6 +65,10 @@ export interface TurnBasedGameServer<
   /**
    * Validated by the platform before the game sees an action. Keep it tight —
    * this is the outer wall against a modified client.
+   *
+   * "Tight" includes *not* declaring a field you will ignore. Every optional
+   * key here is a second wire spelling waiting to happen; see the
+   * accepted ⊆ offered rule on `getLegalActions`.
    */
   readonly actionSchema: z.ZodType<TAction>
 
@@ -119,9 +123,34 @@ export interface TurnBasedGameServer<
   getViewFor(state: TState, viewer: Viewer): TView
 
   /**
-   * Optional. Powers move hints, bot seats and the conformance fuzzer. When
-   * present it must agree with `validateAction`: every returned action
-   * validates, and the testkit checks that.
+   * Optional. Powers move hints, bot seats and the conformance fuzzer.
+   *
+   * When present it must agree with `validateAction` **in both directions**:
+   *
+   *   - *offered ⊆ accepted* — every action returned here validates;
+   *   - *accepted ⊆ offered* — every action `validateAction` accepts for
+   *     `seatId` at `state` is **byte-identical** to one returned here, after
+   *     both have been through `actionSchema`.
+   *
+   * The second direction is the one games get wrong, so it is worth stating
+   * plainly: **one move has exactly one wire spelling.** If two distinct
+   * payloads both validate and both play the same move, the extra spelling is
+   * a bug even though nothing visibly breaks. A field your engine tolerates
+   * and then ignores is the usual cause — a `promotion` letter on a move that
+   * cannot promote, a `target` on an action that has no target, a flag that
+   * only means something in another phase. `actionSchema` lets it through,
+   * the rules layer drops it, and you now have a second spelling that
+   * `getLegalActions` never lists.
+   *
+   * That is not a cosmetic disagreement. Move hints and bot seats drive off
+   * this list, replays and the match log key off the action as sent, and the
+   * conformance suite uses it to generate playouts — so a spelling it cannot
+   * enumerate is a spelling nothing tests. Reject the tolerated field in
+   * `validateAction`; do not widen `getLegalActions` to enumerate both.
+   *
+   * Only the game knows its own canonical spelling, so the platform cannot
+   * enforce this for you. The testkit checks what it can — see ADR-0012 for
+   * what it covers and what it provably does not.
    */
   getLegalActions?(state: TState, seatId: SeatId): readonly TAction[]
 
