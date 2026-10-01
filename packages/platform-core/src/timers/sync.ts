@@ -15,7 +15,8 @@
  *    `serverClock - clientClock`.
  * 3. Remaining time for a running timer is then
  *    `deadlineAtMs - (clientNow + offset)` — an absolute deadline minus an
- *    absolute now. Nothing counts down locally, so nothing accumulates error.
+ *    absolute now. Nothing counts down locally, so no *countdown* error
+ *    accumulates. Clock *rate* error still does; see below.
  *
  * ## Why the minimum-round-trip filter
  *
@@ -25,6 +26,35 @@
  * least contaminated one: a sample cannot be faster than the true path, so the
  * minimum is the closest to symmetric. We keep a small window of samples and
  * use the best one rather than averaging in the bad ones.
+ *
+ * ## The cost of that filter: a stale anchor
+ *
+ * Picking the minimum means the offset in use can be anchored to a sample much
+ * older than the newest one. A clean early sample keeps winning against jittery
+ * later ones, and the comparison below is a strict `<`, so under a constant path
+ * the *oldest* sample in the window wins outright. With `SAMPLE_WINDOW` at 8 and
+ * a 4 s keepalive that is an anchor up to ~28 s old, and packet loss widens it
+ * further by spacing the samples out.
+ *
+ * Client clock rate error accrues uncorrected across that staleness, which
+ * bounds it rather than removing it: 200 ppm x 28 s is 5.6 ms against a 100 ms
+ * budget. That is the NTP trade working as designed — a stale-but-clean anchor
+ * beats a fresh-but-queued one — and `test/free-run-budget.test.ts` pins the
+ * arithmetic, including the tie-break, so changing `<` here will fail a test
+ * that tells you which number to update.
+ *
+ * ## Why the keepalive is a correctness requirement, not a nicety
+ *
+ * Immunity to countdown error is not immunity to clock rate error. The client's
+ * drifting `clientNow` sits inside `deadlineAtMs - (clientNow + offset)`, so a
+ * fast crystal passes into the rendered number at 1:1, undamped, until a fresh
+ * sample replaces the offset. Free-run error is `15 + (ppm / 1000) x t_seconds`
+ * ms, which spends the whole 100 ms budget in ~28 min on a typical 50 ppm
+ * handset, ~14 min on a cheap or hot one and ~7 min at 200 ppm. **A classical
+ * chess game is longer than its clock-sync budget**, so a client that syncs on
+ * join and then stops is wrong by the endgame — on correct, unchanged server
+ * state. Measured in [PER-258](/PER/issues/PER-258). Keep the re-sync when the
+ * socket is wired; the 4 s interval and the 8-deep window are load-bearing.
  *
  * The client clock must be monotonic. A phone that corrects its wall clock
  * mid-match would otherwise jump every timer at once, so the browser shell
