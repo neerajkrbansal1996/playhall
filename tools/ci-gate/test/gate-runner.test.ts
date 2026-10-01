@@ -23,6 +23,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..', '..', '..')
 const realGate = join(repoRoot, 'scripts', 'ci', 'gate.mjs')
+// The registry moved out of `gate.mjs` with PER-236 so the aggregate job could
+// re-derive the PENDING state it was throwing away. `gate.mjs` imports it, so the
+// scratch repo needs both files.
+const realRegistry = join(repoRoot, 'scripts', 'ci', 'gates.mjs')
 
 const tmpRoots: string[] = []
 
@@ -38,6 +42,7 @@ function scratchRepo(scripts: Record<string, string>): string {
   tmpRoots.push(root)
   mkdirSync(join(root, 'scripts', 'ci'), { recursive: true })
   copyFileSync(realGate, join(root, 'scripts', 'ci', 'gate.mjs'))
+  copyFileSync(realRegistry, join(root, 'scripts', 'ci', 'gates.mjs'))
   writeFileSync(
     join(root, 'package.json'),
     `${JSON.stringify({ name: 'scratch', private: true, scripts }, null, 2)}\n`,
@@ -174,15 +179,22 @@ describe('a live gate whose script exists', () => {
 })
 
 describe('the registry and the workflow do not drift', () => {
-  const gateSource = readFileSync(realGate, 'utf8')
+  const registrySource = readFileSync(realRegistry, 'utf8')
   const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8')
 
-  /** The keys of the GATES object literal in gate.mjs, read from source. */
+  /** The keys of the GATES object literal in gates.mjs, read from source. */
   const registryGates = (() => {
-    const block = /const GATES = \{\n(.*?)\n\}\n/s.exec(gateSource)?.[1]
-    if (!block) throw new Error('could not locate the GATES registry in scripts/ci/gate.mjs')
+    const block = /export const GATES = \{\n(.*?)\n\}\n/s.exec(registrySource)?.[1]
+    if (!block) throw new Error('could not locate the GATES registry in scripts/ci/gates.mjs')
     return [...block.matchAll(/^ {2}([a-z][\w:-]*):/gm)].map((m) => m[1])
   })()
+
+  it('is declared in exactly one place', () => {
+    // PER-236's fix depends on this: the aggregate job re-derives each gate's
+    // state from this registry, so a second copy anywhere would be a second
+    // opinion about what a green check means.
+    expect(readFileSync(realGate, 'utf8')).not.toMatch(/const GATES = \{/)
+  })
 
   const needs = (() => {
     const block = /ci-gate:.*?needs:\s*\[(.*?)\]/s.exec(workflow)?.[1]
