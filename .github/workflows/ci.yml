@@ -391,51 +391,62 @@ jobs:
       # ADR-0004 Decision 2: make "green CI" observable in the PR itself. With
       # no required checks, a reviewer has to *choose* to look — so the result
       # goes where the review already is, not in the Actions tab.
-      - name: Post the gate table on the PR
+      #
+      # The body is rendered by `scripts/ci/gate-report.mjs` rather than inline
+      # here (PER-236). The inline version was a near-copy of the table in
+      # `assert-gates.mjs` and drifted from it in the way that mattered: both read
+      # `needs.<job>.result` alone, which is `success` for a gate that ran and for
+      # a PENDING placeholder that exited 0 without running anything, so
+      # `coverage` rendered `✅ pass` under "All gates passed." One module now
+      # renders both, and it recovers the PENDING state by re-deriving it from
+      # this checkout's `package.json` — the same SHA every gate job read.
+      #
+      # `continue-on-error` on both halves, for the same reason the old single
+      # step had it: reporting must never be what decides the build. `Assert
+      # every gate passed` below is the verdict, and it reads the same module.
+      - name: Render the gate table
         if: always() && github.event_name == 'pull_request'
+        id: gate-table
+        continue-on-error: true
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+          GATE_FULL_SHA: ${{ github.sha }}
+          GATE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/gate-comment.md"
+          # The comment heading wants the short SHA; Actions expressions cannot slice.
+          GATE_SHA="${GATE_FULL_SHA:0:7}" node scripts/ci/gate-report.mjs --format=pr > "$body"
+          cat "$body"
+
+          # The marker is read back off the rendered body rather than repeated
+          # here. It is what the next step matches on to update its own comment
+          # instead of posting a new one, so a copy in this file that drifted from
+          # `COMMENT_MARKER` in gate-report.mjs would silently start appending a
+          # fresh table to every PR on every run. Renderer emits it first line.
+          marker=$(head -n 1 "$body")
+          case "$marker" in
+            '<!--'*'-->') ;;
+            *) echo "::error::gate-report.mjs did not emit a marker first; got: $marker" && exit 1 ;;
+          esac
+          echo "marker=$marker" >> "$GITHUB_OUTPUT"
+
+      # Guarded on `outcome`, not `conclusion`: under `continue-on-error` the
+      # render step's `conclusion` is always `success`, so only `outcome`
+      # distinguishes a rendered body from a file that was never written. Without
+      # it, a failed render would post the previous run's leftover file or crash
+      # on a missing one.
+      - name: Post the gate table on the PR
+        if: always() && github.event_name == 'pull_request' && steps.gate-table.outcome == 'success'
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GATE_RESULTS: ${{ toJSON(needs) }}
+          GATE_MARKER: ${{ steps.gate-table.outputs.marker }}
         with:
           script: |
-            const marker = '<!-- playhall-ci-gate -->'
-            const needs = JSON.parse(process.env.GATE_RESULTS)
-            const skipAllowed = new Set(['pr-hygiene'])
-
-            const icon = { success: 'pass', failure: 'FAIL', cancelled: 'cancelled', skipped: 'skipped' }
-            const rows = Object.entries(needs)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([job, info]) => {
-                const result = info?.result ?? 'unknown'
-                const ok = result === 'success' || (result === 'skipped' && skipAllowed.has(job))
-                return `| \`${job}\` | ${ok ? '✅' : '❌'} ${icon[result] ?? result} |`
-              })
-
-            const failing = Object.entries(needs).filter(([job, info]) => {
-              const result = info?.result ?? 'unknown'
-              return !(result === 'success' || (result === 'skipped' && skipAllowed.has(job)))
-            })
-
-            const runUrl =
-              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
-              `/actions/runs/${context.runId}`
-
-            const body = [
-              marker,
-              `### CI gates — \`${context.sha.slice(0, 7)}\``,
-              '',
-              '| gate | result |',
-              '| --- | --- |',
-              ...rows,
-              '',
-              failing.length === 0
-                ? 'All gates passed.'
-                : `**${failing.length} gate(s) not passing.** Merging this PR is a visible choice, ` +
-                  'not a blocked one — `main` has no required checks (ADR-0004).',
-              '',
-              `[Full run](${runUrl}) · a gate marked \`skipped\` other than \`pr-hygiene\` counts as a failure.`,
-            ].join('\n')
+            const { readFileSync } = require('node:fs')
+            const marker = process.env.GATE_MARKER
+            const body = readFileSync(`${process.env.RUNNER_TEMP}/gate-comment.md`, 'utf8')
 
             const existing = await github.paginate(github.rest.issues.listComments, {
               ...context.repo,
