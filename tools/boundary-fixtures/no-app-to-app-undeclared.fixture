@@ -1,0 +1,17 @@
+# expect: no-app-to-app
+# why: the same reach for a sibling app written without declaring it, where the import never resolves and only the bare specifier is left in the graph
+# unlink: realtime
+=== file: apps/web/src/index.ts ===
+// The unresolved half (ADR-0002 §2.1 alternation 2), and the state the author is in while writing
+// it: nothing declares `@scope/realtime`, so pnpm links nothing, the import resolves to nothing,
+// and dependency-cruiser keeps the bare specifier as the module's path. A rule matching only the
+// resolved path above is **green** here — the violation downgrades to a `not-to-unresolvable`
+// warning and the gate exits 0 — and loud only once someone has deliberately run `pnpm add`.
+//
+// Undeclared is the likelier state for this edge than it is for a package->app one. Both apps are
+// already in the workspace and an editor will offer the specifier from the root link, so the import
+// gets written and the manifest never does; and `no-illegal-declared-dep` does not cover apps, so
+// nothing else in the suite would notice the manifest either way.
+import { boot } from '@scope/realtime'
+
+export default boot
