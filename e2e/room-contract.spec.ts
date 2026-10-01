@@ -178,11 +178,21 @@ function joinAlert(page: Page) {
  * one. Splitting is not a detail — `[id="${attr}"]` against the raw attribute
  * matches nothing at all once a second id appears, which is a silent miss
  * rather than a failure if the assertion is only `toBeVisible`.
+ *
+ * The expected count is an argument rather than a separate `toHaveLength` at
+ * the call site, so asserting the count and narrowing the result are one fact.
+ * Under `noUncheckedIndexedAccess` a `readonly string[]` indexes as
+ * `string | undefined`, and a `toHaveLength` in the spec does not narrow it —
+ * returning a fixed-length tuple is what lets `ids[0]` be a `string`.
  */
-async function describedByIds(input: Locator): Promise<readonly string[]> {
+async function describedByIds(input: Locator, expected: 1): Promise<readonly [string]>
+async function describedByIds(input: Locator, expected: 2): Promise<readonly [string, string]>
+async function describedByIds(input: Locator, expected: number): Promise<readonly string[]> {
   const attr = await input.getAttribute('aria-describedby')
   expect(attr, 'aria-describedby on the join input').toBeTruthy()
-  return (attr ?? '').split(/\s+/).filter((id) => id.length > 0)
+  const ids = (attr ?? '').split(/\s+/).filter((id) => id.length > 0)
+  expect(ids, `aria-describedby names ${expected} id(s)`).toHaveLength(expected)
+  return ids
 }
 
 /**
@@ -381,7 +391,9 @@ test('a short code is rejected accessibly, with submit still enabled', async ({ 
   // The hint describes the field before anything has gone wrong, and keeps
   // describing it afterwards — so `aria-describedby` is a *list*, and reading
   // it as a single id silently stops resolving the moment a message appears.
-  expect(await describedByIds(input), 'resting description is the hint alone').toHaveLength(1)
+  // Resting, that list is the hint alone.
+  const [restingId] = await describedByIds(input, 1)
+  await expect(byId(page, restingId)).toHaveText(/Codes never use/)
 
   await input.fill('ABC')
   // Nothing may be announced before the player has actually pressed join.
@@ -396,10 +408,9 @@ test('a short code is rejected accessibly, with submit still enabled', async ({ 
   // The wiring, not just the presence: `aria-describedby` must name the element
   // that is actually showing the message, and must still name the hint — in
   // that order, matching `fieldIds()` in the settings form.
-  const ids = await describedByIds(input)
-  expect(ids, 'hint and message are both named').toHaveLength(2)
-  await expect(byId(page, ids[0])).toHaveText(/Codes never use/)
-  await expect(byId(page, ids[1])).toHaveText(await joinAlert(page).innerText())
+  const [hintRef, messageRef] = await describedByIds(input, 2)
+  await expect(byId(page, hintRef)).toHaveText(/Codes never use/)
+  await expect(byId(page, messageRef)).toHaveText(await joinAlert(page).innerText())
 })
 
 /**
