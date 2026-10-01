@@ -19,7 +19,10 @@ import { cn } from './cn'
  * - **Ligatures off.** `font-variant-ligatures: none` is a guard for the name the board
  *   has not picked yet: today's candidates have no ligating pair, so nothing about this
  *   line is visible until the rename the component exists for. That is exactly why it is
- *   written now rather than when a surprising glyph pair shows up in a screenshot.
+ *   written now rather than when a surprising glyph pair shows up in a screenshot. `none`
+ *   is required rather than `normal`, which keeps the common ligatures the font enables by
+ *   default — the distinction the whole guard rests on:
+ *   @see https://developer.mozilla.org/en-US/docs/Web/CSS/font-variant-ligatures
  * - **Not a link.** In a game screen's app bar a stray tap must not leave the match, so
  *   the component never renders an anchor. A caller that genuinely wants navigation —
  *   the landing header, the footer — wraps it in its own `Link`.
