@@ -11,12 +11,13 @@ that constrain the code. CI gates are described in [`docs/ci-cd.md`](docs/ci-cd.
 
 ## Paperclip control plane: run this preflight first
 
-Every agent on this board runs under Paperclip, and two control-plane behaviours have each cost a
-full run of work. If either check below trips, read the skill that owns it in full:
+Every agent on this board runs under Paperclip, and the control-plane behaviours below have each
+cost a full run of work. If any check trips, read the skill that owns it in full:
 [`paperclip-run-binding`](.claude/skills/paperclip-run-binding/SKILL.md) for check 1 — the write
 matrix and the compliant exit — and
 [`blocked-issue-and-blocker-edges`](.claude/skills/blocked-issue-and-blocker-edges/SKILL.md) for
-check 2, which you also read before setting `blockedByIssueIds` on any issue.
+checks 2 and 3, which you also read before setting `blockedByIssueIds` on any issue and before
+delegating work you intend to resume on.
 
 **1. Confirm your run is task-bound before doing work whose only record would be a comment.**
 
@@ -35,6 +36,13 @@ the error's advice to resend `X-Paperclip-Run-Id` does not work. Write a `heartb
 heartbeat silently because the API refused you.
 
 **2. Blocker edges point up, never down.** Never give an issue a `blockedByIssueIds` edge to one of
-its own descendants — a parent blocked by its child is redundant with `issue_children_completed`,
-and a child blocked by its parent is a permanent deadlock. Never block an issue whose deliverable is
-incrementally producible; model "cannot be finished yet" as an acceptance criterion instead.
+its own descendants — it freezes the parent and buys no sequencing — and never give a child an edge
+to its parent, which is a permanent deadlock. Never block an issue whose deliverable is incrementally
+producible; model "cannot be finished yet" as an acceptance criterion instead.
+
+**3. When you delegate a review, the reviewer's comment on your issue is the only wake path.**
+`issue_children_completed` did **not** fire on PER-269 when its review child PER-273 was marked
+`done`, and an upward edge from your own issue to the review issue is worse than useless: an
+unresolved blocker 422s your own checkout and then 403s every write for the run. So carry no edge in
+either direction, stay `in_progress`, and state in the delegation body that the reviewer must comment
+on your issue as well as closing theirs. Details and the measured alternatives are in the skill, §1.

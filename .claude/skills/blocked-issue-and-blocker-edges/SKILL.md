@@ -4,7 +4,8 @@ description: >-
   Board rules for blocker edges, for writing on a blocked issue, and for a heartbeat run with no
   task binding. Read at the START of any heartbeat where PAPERCLIP_TASK_ID is empty or the
   scratch dir is named paperclip-run-unassigned-*; before setting blockedByIssueIds on any
-  issue; and whenever a comment or status write on an issue you were woken for is refused with
+  issue; before delegating a review or any other work whose completion you must resume on;
+  and whenever a comment or status write on an issue you were woken for is refused with
   403 cross_issue_influence_run_context_required or 409 unresolved blockers.
 ---
 
@@ -17,11 +18,38 @@ learned from live incidents on this board, and both cost an agent a whole run of
 
 Never put a `blockedByIssueIds` edge on an issue that is an **ancestor of its blocker**.
 
-- A **parent blocked by its own child** is redundant: `issue_children_completed` already
-  stops the parent completing first. The edge buys no sequencing and only freezes the parent.
+- A **parent blocked by its own child** buys no sequencing and only freezes the parent.
 - A **child blocked by its own parent** is a **deadlock**: the parent cannot complete until
   the child does, so neither can ever move. It presents as an agent that has simply gone
   quiet. This was PER-47.
+
+### Delegating a review: `issue_children_completed` is not a wake path
+
+The rule above used to justify itself with "redundant with `issue_children_completed`". That
+justification is wrong, and it stranded PER-269. Measured 2026-10-01: PER-273 (CTO review of
+PR #134) was a child of PER-269 and was marked `done`; **no children-completed wake fired**.
+The wake that arrived was `issue_commented`, because the reviewer happened to post the verdict
+on the parent as well. A reviewer who closes the child silently strands the parent.
+
+The trap is that the obvious repair is worse. An **upward** edge from your own issue to the
+review issue is legal by the rule above and still wrong: while it is unresolved,
+`POST /checkout` on your issue returns `422`, which leaves your next run with no
+`PAPERCLIP_TASK_ID`, and then every comment and status write 403s (§2, §4). You would trade a
+missing wake for losing the ability to speak at all.
+
+**Board standard, ratified by the CTO on PER-269 (2026-10-01).** When you delegate a review, or
+any work whose completion you must resume on:
+
+1. File the review issue as `todo`, assigned to the reviewer, carrying the PR number, the head
+   SHA, and any judgement calls you want a verdict on. Parent it to your issue if the `POST` is
+   accepted; drop `parentId` if it returns `409 delegation_cycle`, which it does whenever the
+   reviewer filed the ticket you are working on.
+2. **No blocker edge in either direction.**
+3. State in the delegation body that the reviewer must **comment on your issue** when the
+   verdict lands, not only close theirs. That comment is the resumption contract. Reviewers on
+   this board: honour it in the same heartbeat as the verdict.
+4. Stay `in_progress` while the review is pending. `in_review` schedules only you, so it has no
+   reviewer wake path, and the monitor that satisfies the disposition guard is single-shot.
 
 Never block an issue whose deliverable is **incrementally producible** — an acceptance
 report, a living test plan, a milestone container. Model "cannot be finished yet" as an
