@@ -535,6 +535,89 @@ describe('planPerturbations', () => {
     expect(plan.fields[0]?.value).toBe('q')
   })
 
+  /**
+   * The four zod v3 wrappers that do not store their inner schema under
+   * `_def.innerType`. The CTO measured on `3.25.76` that each of them blinded
+   * the first cut of this introspector, and `.superRefine()` checking
+   * `from !== to` is the single most ordinary thing to put on an action schema.
+   * A gap here would make ADR-0012's declared fallback routine rather than
+   * exceptional — one of the ADR's own named revisit triggers — for no better
+   * reason than four `_def` key names.
+   */
+  describe('wrappers that do not store their inner schema under innerType', () => {
+    const chess = z.discriminatedUnion('type', [
+      z
+        .object({
+          type: z.literal('move'),
+          move: z
+            .object({
+              from: z.string(),
+              to: z.string(),
+              promotion: z.enum(['q', 'r', 'b', 'n']).optional(),
+            })
+            .strict(),
+        })
+        .strict(),
+      z.object({ type: z.literal('resign') }).strict(),
+    ])
+    const flat = z.object({ type: z.literal('play'), face: z.enum(['up', 'down']).optional() })
+
+    it.each([
+      // `_def.schema`. A cross-field check is the motivating case.
+      [
+        'refine',
+        chess.refine((action) => action.type !== 'move' || action.move.from !== 'd' + '4'),
+      ],
+      ['superRefine', chess.superRefine(() => undefined)],
+      // `_def.schema` again, and the output type differs from the input — which
+      // is exactly why collecting off the *input* side is the correct read.
+      ['transform', chess.transform((action) => ({ wrapped: action }))],
+      ['brand', chess.brand<'ChessAction'>()],
+      // `_def.in`.
+      ['pipe', chess.pipe(z.any())],
+    ])('reads through .%s() on a discriminated union', (_label, schema) => {
+      const plan = planPerturbations(schema, undefined)
+      expect(plan.schemaReadable).toBe(true)
+      expect(plan.gaps).toEqual([])
+      expect(pathsOf(plan)).toEqual(['move.promotion'])
+      expect(plan.fields[0]?.value).toBe('q')
+    })
+
+    it.each([
+      ['refine', flat.refine(() => true)],
+      ['brand', flat.brand<'Action'>()],
+      // `_def.innerType` is present on ZodCatch, but its typeName has to be
+      // listed for the walk to follow it.
+      ['catch', flat.catch({ type: 'play' as const })],
+      ['pipe', flat.pipe(z.any())],
+    ])('reads through .%s() on a flat object', (_label, schema) => {
+      const plan = planPerturbations(schema, undefined)
+      expect(plan.schemaReadable).toBe(true)
+      expect(plan.gaps).toEqual([])
+      expect(pathsOf(plan)).toEqual(['face'])
+    })
+
+    it('finds an optional field that is itself behind one of them', () => {
+      // `ZodEffects(ZodOptional(ZodString))`: omissibility is not on the
+      // outermost node, so reading only the outside would call this required
+      // and then find nothing inside it.
+      const plan = planPerturbations(
+        z.object({
+          type: z.literal('play'),
+          note: z
+            .string()
+            .optional()
+            .refine(() => true),
+        }),
+        undefined,
+      )
+      expect(plan.gaps).toEqual([])
+      expect(plan.fields).toEqual([
+        { path: 'note', segments: ['note'], value: 'atrium-probe', source: 'actionSchema' },
+      ])
+    })
+  })
+
   it('contributes a key declared by several union members exactly once', () => {
     const plan = planPerturbations(
       z.discriminatedUnion('type', [
@@ -568,26 +651,58 @@ describe('planPerturbations', () => {
     expect(plan.gaps).toEqual([{ subject: "optional field 'meta'", reason: 'ZodRecord' }])
   })
 
-  it('names a union variant that is not an object', () => {
+  /**
+   * The two halves of "is this variant a gap?". The distinction is
+   * load-bearing: the loud note is the only enforcement mechanism ADR-0012
+   * decision 3 has, and a note that cries gap on a fully covered schema is how
+   * that channel gets tuned out. `z.union([z.object({…}), z.literal('resign')])`
+   * is an ordinary action schema, and chess is one refactor away from being it.
+   */
+  it('treats a variant that declares no keys as covered, not as a gap', () => {
     const plan = planPerturbations(
-      z.union([z.object({ type: z.literal('a'), note: z.string().optional() }), z.string()]),
+      z.union([
+        z.object({ type: z.literal('move'), promotion: z.string().optional() }),
+        z.literal('resign'),
+      ]),
+      undefined,
+    )
+    expect(plan.schemaReadable).toBe(true)
+    expect(pathsOf(plan)).toEqual(['promotion'])
+    // There is nothing to declare for `z.literal('resign')`: it has no keys by
+    // construction, so telling the author to declare one is a false alarm.
+    expect(plan.gaps).toEqual([])
+  })
+
+  it('reports a union of nothing but keyless variants as covered with nothing to do', () => {
+    const plan = planPerturbations(z.union([z.literal('resign'), z.literal('draw')]), undefined)
+    expect(plan.schemaReadable).toBe(true)
+    expect(plan.fields).toEqual([])
+    expect(plan.gaps).toEqual([])
+  })
+
+  it('names a union variant it cannot classify at all', () => {
+    const plan = planPerturbations(
+      z.union([
+        z.object({ type: z.literal('a'), note: z.string().optional() }),
+        z.record(z.string()),
+      ]),
       undefined,
     )
     expect(plan.schemaReadable).toBe(true)
     expect(pathsOf(plan)).toEqual(['note'])
-    expect(plan.gaps).toEqual([{ subject: 'a variant of actionSchema', reason: 'ZodString' }])
+    expect(plan.gaps).toEqual([{ subject: 'a variant of actionSchema', reason: 'ZodRecord' }])
   })
 
   it('names a nested variant it cannot read, by the field it sits under', () => {
     const plan = planPerturbations(
       z.object({
         type: z.literal('move'),
-        move: z.union([z.object({ to: z.string().optional() }), z.string()]),
+        move: z.union([z.object({ to: z.string().optional() }), z.record(z.string())]),
       }),
       undefined,
     )
     expect(pathsOf(plan)).toEqual(['move.to'])
-    expect(plan.gaps).toEqual([{ subject: "a variant of the field 'move'", reason: 'ZodString' }])
+    expect(plan.gaps).toEqual([{ subject: "a variant of the field 'move'", reason: 'ZodRecord' }])
   })
 
   it('stops at the nesting bound instead of walking an arbitrary tree', () => {
@@ -620,9 +735,19 @@ describe('planPerturbations', () => {
     expect(planPerturbations(undefined, undefined).gaps).toEqual([
       { subject: 'actionSchema', reason: 'a undefined' },
     ])
-    expect(planPerturbations(z.string(), undefined).gaps).toEqual([
-      { subject: 'actionSchema', reason: 'ZodString' },
+    expect(planPerturbations(z.record(z.string()), undefined).gaps).toEqual([
+      { subject: 'actionSchema', reason: 'ZodRecord' },
     ])
+  })
+
+  it('reports a keyless actionSchema as covered with nothing to do', () => {
+    // Same reading as a keyless union variant, one level up: a game whose
+    // whole action vocabulary is a string has no key to carry a second
+    // spelling, so there is nothing for an author to declare.
+    const plan = planPerturbations(z.string(), undefined)
+    expect(plan.schemaReadable).toBe(true)
+    expect(plan.fields).toEqual([])
+    expect(plan.gaps).toEqual([])
   })
 
   it('ignores a declared perturbation with an empty key', () => {

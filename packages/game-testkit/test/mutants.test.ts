@@ -422,6 +422,36 @@ describe('action rejection', () => {
       expect(noteOf(report, 'perturbation direction covered')).toBeUndefined()
     })
 
+    it('still catches the defect when the schema carries a cross-field refinement', () => {
+      // `.superRefine()` is the single most ordinary thing to put on an action
+      // schema, and zod v3 stores its inner schema under `_def.schema` rather
+      // than `_def.innerType`. If the introspector does not follow it, this
+      // subject reports "cannot read actionSchema" and the planted defect walks.
+      const report = mutateHiddenHand({
+        actionSchema: toleratedField.refine(
+          (action) => action.cardId !== '',
+        ) as unknown as HiddenHandSubject['server']['actionSchema'],
+      })
+      expectCaughtBy(report, 'legal-actions-agree')
+      expect(noteOf(report, 'NOT covered for actionSchema')).toBeUndefined()
+      expect(costLaw(report)).toMatchObject({ fields: 1 })
+    })
+
+    it('does not cry gap over a union variant that has no keys to perturb', () => {
+      // `z.union([z.object({…}), z.literal('resign')])` is an ordinary action
+      // schema. The direction is fully covered here; a note saying otherwise
+      // tells the author to declare a perturbation for a schema that cannot
+      // carry one, and that is how the loud-absence channel gets tuned out.
+      const withKeylessVariant = z.union([toleratedField, z.literal('resign')])
+      const report = mutateHiddenHand({
+        actionSchema: withKeylessVariant as unknown as HiddenHandSubject['server']['actionSchema'],
+      })
+      expect(notesOf(report).filter((note) => note.includes('NOT covered'))).toEqual([])
+      // …and it is covered because it ran, not because it was skipped.
+      expect(noteOf(report, 'perturbation direction covered')).toBeDefined()
+      expect(costLaw(report)).toMatchObject({ fields: 1 })
+    })
+
     /**
      * The loud-absence requirement, which is the condition ADR-0012's approval
      * rests on. A direction that silently generates zero probes and reports a

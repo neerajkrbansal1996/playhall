@@ -35,12 +35,36 @@
  * whichever copy of zod a game resolved.
  */
 
-/** Wrappers that change nothing about which keys an object declares. */
-const TRANSPARENT_WRAPPERS: ReadonlySet<string> = new Set([
-  'ZodOptional',
-  'ZodNullable',
-  'ZodDefault',
-  'ZodReadonly',
+/**
+ * Wrappers that change nothing about which keys the *input* declares, mapped to
+ * the `_def` key holding the schema underneath. zod v3 does not use one name
+ * for this: `.optional()` stores `innerType`, `.refine()` stores `schema`,
+ * `.brand()` stores `type`, `.pipe()` stores `in`.
+ *
+ * `ZodEffects` and `ZodPipeline` are the subtle two, because they can change
+ * the *output* type — `.transform()` and the right-hand side of `.pipe()`. That
+ * is fine here, and deliberately so: perturbation builds its probe *before*
+ * `actionSchema` runs and then re-parses it, and the `listedKeys` comparison
+ * that follows is on the parsed value. So the thing this collector needs is the
+ * set of keys the schema *accepts on the wire*, which is exactly what
+ * `ZodEffects._def.schema` and `ZodPipeline._def.in` describe.
+ *
+ * Added in response to the CTO's review of PER-211: a `.superRefine()` checking
+ * `from !== to`, or a `.brand()` stopping a raw object being passed as an
+ * action, are both ordinary things to put on an action schema. Without these
+ * four the introspector reports "cannot read actionSchema" on them, which would
+ * make the declared fallback routine — a named revisit trigger in ADR-0012 —
+ * for no better reason than four `_def` key names.
+ */
+const TRANSPARENT_WRAPPERS: ReadonlyMap<string, string> = new Map([
+  ['ZodOptional', 'innerType'],
+  ['ZodNullable', 'innerType'],
+  ['ZodDefault', 'innerType'],
+  ['ZodReadonly', 'innerType'],
+  ['ZodCatch', 'innerType'],
+  ['ZodEffects', 'schema'],
+  ['ZodBranded', 'type'],
+  ['ZodPipeline', 'in'],
 ])
 
 /**
@@ -51,6 +75,30 @@ const TRANSPARENT_WRAPPERS: ReadonlySet<string> = new Set([
 const OMISSIBLE_WRAPPERS: ReadonlySet<string> = new Set(['ZodOptional', 'ZodDefault'])
 
 const UNION_TYPES: ReadonlySet<string> = new Set(['ZodUnion', 'ZodDiscriminatedUnion'])
+
+/**
+ * Types that declare no keys *by construction*, so there is nothing in them to
+ * perturb and nothing for an author to declare.
+ *
+ * This set is the difference between "covered, and there was nothing to do" and
+ * "not covered". `z.union([z.object({…}), z.literal('resign')])` is an ordinary
+ * action schema; reporting its `resign` variant as a gap would tell the author
+ * to declare a perturbation for a schema that has no keys to carry one. Only a
+ * node we cannot classify at all is a gap — and that distinction is load-bearing,
+ * because the loud note is the whole enforcement mechanism of ADR-0012's
+ * decision 3 and a note that cries gap on a covered schema is how that channel
+ * gets tuned out.
+ */
+const KEYLESS_TYPES: ReadonlySet<string> = new Set([
+  'ZodLiteral',
+  'ZodString',
+  'ZodNumber',
+  'ZodBoolean',
+  'ZodEnum',
+  'ZodNativeEnum',
+  'ZodNull',
+  'ZodUndefined',
+])
 
 /**
  * How deep into nested objects the collector looks. Two is the number that
@@ -117,19 +165,50 @@ function typeNameOf(node: unknown): string | null {
   return typeof name === 'string' ? name : null
 }
 
+/** The schema one transparent wrapper down, or `null` if this is not one. */
+function innerOf(node: unknown): unknown | null {
+  const name = typeNameOf(node)
+  if (name === null) return null
+  const key = TRANSPARENT_WRAPPERS.get(name)
+  if (key === undefined) return null
+  const inner: unknown = defOf(node)?.[key]
+  return inner === undefined ? null : inner
+}
+
 /** Strips wrappers that leave the underlying shape alone. */
 function unwrap(node: unknown): unknown {
   let current = node
   // Bounded rather than `while (true)`: a schema that somehow wraps itself must
   // not hang the gate.
   for (let depth = 0; depth < 8; depth += 1) {
-    const name = typeNameOf(current)
-    if (name === null || !TRANSPARENT_WRAPPERS.has(name)) return current
-    const inner: unknown = defOf(current)?.['innerType']
-    if (inner === undefined) return current
+    const inner = innerOf(current)
+    if (inner === null) return current
     current = inner
   }
   return current
+}
+
+/**
+ * Whether a field may be omitted from the wire payload — which is what makes it
+ * perturbable, since the game then has to have an opinion about the spelling
+ * that sends it.
+ *
+ * Walks the wrapper chain rather than looking only at the outermost node:
+ * `z.string().optional().refine(…)` is `ZodEffects(ZodOptional(ZodString))`, and
+ * reading only the outside would classify it as required and then silently find
+ * nothing inside it.
+ */
+function isOmissible(node: unknown): boolean {
+  let current = node
+  for (let depth = 0; depth < 8; depth += 1) {
+    const name = typeNameOf(current)
+    if (name === null) return false
+    if (OMISSIBLE_WRAPPERS.has(name)) return true
+    const inner = innerOf(current)
+    if (inner === null) return false
+    current = inner
+  }
+  return false
 }
 
 function shapeOf(node: unknown): Record<string, unknown> | null {
@@ -241,7 +320,8 @@ export function planPerturbations(
 ): PerturbationPlan {
   const fromSchema: PerturbationField[] = []
   const gaps: PerturbationGap[] = []
-  const schemaReadable = collectFields(schema, [], 0, fromSchema, gaps)
+  const readability = collectFields(schema, [], 0, fromSchema, gaps)
+  const schemaReadable = readability !== 'unreadable'
 
   if (!schemaReadable) {
     gaps.push({ subject: 'actionSchema', reason: describe(unwrap(schema)) })
@@ -271,8 +351,17 @@ export function planPerturbations(
 }
 
 /**
- * Walks a schema for optional fields. Returns whether the node was an
- * introspectable object or union — the caller turns `false` into the loud note.
+ * What the collector was able to make of a node.
+ *
+ * `'keyless'` is the one that matters: it is a positive reading, not a failure.
+ * Only `'unreadable'` becomes a loud note, because only `'unreadable'` leaves
+ * the author with something to do.
+ */
+type Readability = 'keys' | 'keyless' | 'unreadable'
+
+/**
+ * Walks a schema for optional fields, returning how well it could read the
+ * node. The caller turns `'unreadable'` into the loud note.
  */
 function collectFields(
   node: unknown,
@@ -280,7 +369,7 @@ function collectFields(
   depth: number,
   out: PerturbationField[],
   gaps: PerturbationGap[],
-): boolean {
+): Readability {
   const bare = unwrap(node)
 
   const shape = shapeOf(bare)
@@ -288,17 +377,18 @@ function collectFields(
     for (const key of Object.keys(shape)) {
       collectField(shape[key], [...prefix, key], depth, out, gaps)
     }
-    return true
+    return 'keys'
   }
 
   const options = optionsOf(bare)
   if (options !== null) {
-    let readable = false
+    let readability: Readability = 'unreadable'
     for (const option of options) {
-      // A union member that is not itself an object has no keys to perturb.
-      // Say so rather than silently narrowing the corpus to the other members.
-      if (collectFields(option, prefix, depth, out, gaps)) readable = true
-      else {
+      const member = collectFields(option, prefix, depth, out, gaps)
+      if (member === 'unreadable') {
+        // Only a member we cannot classify at all. A `z.literal('resign')`
+        // variant is covered with nothing to do, and saying otherwise would
+        // send the author looking for a perturbation that cannot exist.
         gaps.push({
           subject:
             prefix.length === 0
@@ -306,12 +396,15 @@ function collectFields(
               : `a variant of the field '${prefix.join('.')}'`,
           reason: describe(unwrap(option)),
         })
+        continue
       }
+      if (member === 'keys' || readability === 'unreadable') readability = member
     }
-    return readable
+    return readability
   }
 
-  return false
+  const name = typeNameOf(bare)
+  return name !== null && KEYLESS_TYPES.has(name) ? 'keyless' : 'unreadable'
 }
 
 function collectField(
@@ -322,9 +415,8 @@ function collectField(
   gaps: PerturbationGap[],
 ): void {
   const path = segments.join('.')
-  const name = typeNameOf(field)
 
-  if (name !== null && OMISSIBLE_WRAPPERS.has(name)) {
+  if (isOmissible(field)) {
     const sampled = sampleValue(field)
     if (sampled.ok) {
       out.push({ path, segments, value: sampled.value, source: 'actionSchema' })
