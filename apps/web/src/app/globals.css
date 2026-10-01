@@ -10,6 +10,30 @@
 */
 @source '../../../../packages/ui/src';
 
+/*
+  Tests are not a source of production styles ([PER-231](/PER/issues/PER-231)).
+
+  Automatic detection scans every text file under the app root, which included
+  `apps/web/test`, and the extractor reads candidates out of *any* text: it does not care
+  whether it found one in a string literal, a comment, or a sentence of English. That cut
+  both ways and both ways were bugs.
+
+  Dead rules shipped, generated from class names that only ever appeared inside prose in a
+  code comment. Worse, a unit test asserting a class name kept that class alive in the
+  production stylesheet — so deleting the `@source` directive above cost the build almost
+  nothing, and the components in `packages/ui` were styled correctly for a reason that had
+  nothing to do with the package being registered. That made the directive unguardable.
+
+  Excluding the tests is what makes production CSS a function of production sources, and
+  it is what gives `pnpm check:ui-source` probes whose absence is a real regression.
+
+  Note for whoever edits this file next: this stylesheet is itself one of the files
+  Tailwind scans, so a utility named in a comment here is a utility this app generates.
+  That is why the paragraphs above describe the failure without quoting any class name —
+  doing so would hand `check:ui-source` its own evidence and retire the probe.
+*/
+@source not '../../test';
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
