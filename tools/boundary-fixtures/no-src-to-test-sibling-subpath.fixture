@@ -1,0 +1,24 @@
+# expect: no-src-to-test
+# why: the same violation across packages, where the only way to name a sibling's test tree is a subpath the exports map never resolves, so a repo-path-only rule could not fire at all
+=== file: packages/ui/src/index.ts ===
+// A sibling package's test tree cannot be reached by relative path, so this is the form the
+// violation actually takes: a subpath specifier. Every package's `exports` map publishes its
+// root and at most a named entrypoint, so `<scope>/platform-core/test/...` resolves to nothing
+// and dependency-cruiser keeps the bare specifier as the module path. With only the
+// `^packages/[^/]+/test/` alternation the rule would see no edge here — it would be reported as
+// a `not-to-unresolvable` warning and CI would stay green on a cross-package leak.
+//
+// `packages/ui` is the importer rather than `packages/game-sdk` on purpose: an SDK -> platform
+// edge is already forbidden by `no-sdk-to-platform`, so that pairing would prove which of two
+// rules fired and not this one. Nothing forbids `ui` -> `platform-core`, so the only reason this
+// fixture goes red is the test tree.
+import { realSystemClock } from '@scope/platform-core/test/fixtures/real-clock.js'
+
+export const cn = (...parts: string[]): string => parts.join(' ')
+export const startedAtMs = realSystemClock().now()
+=== file: packages/platform-core/test/fixtures/real-clock.ts ===
+// Present so the target is a real file rather than a typo: the import still does not resolve,
+// because the exports map — not the filesystem — is what refuses the subpath.
+export function realSystemClock(): { now: () => number } {
+  return { now: () => Date.now() }
+}

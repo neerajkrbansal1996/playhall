@@ -71,6 +71,31 @@
   import of a server contract, say) is **not** decided here and is a CTO ruling, not a `pathNot`
   added later. Implemented on [PER-251](/PER/issues/PER-251); the stale comment was corrected on
   [PER-241](/PER/issues/PER-241).
+- **Amended:** 2026-10-01 (rev 2.5) — **§2 gains one rule**, `no-src-to-test`, forbidding any
+  shipped tree (`packages/`, `apps/`, `games/`) from importing a `test/` tree. Provenance: ruled as
+  N6 of the CTO's pass-6 verdict on
+  [PR #17](https://github.com/neerajkrbansal1996/playhall/pull/17). That PR keeps a real monotonic
+  clock in `packages/platform-core/test/fixtures/real-clock.ts` — a drift measurement against a
+  fake clock measures nothing — legal there because `test/` is outside the §4 determinism scope
+  **by construction** rather than by exemption ([PER-224](/PER/issues/PER-224), ruling edge 3). That
+  argument only holds while nothing in `src` can reach it, and the fixture's own doc comment
+  asserted a rule the repo did not have. `tsc -b` does reject such an import on `rootDir`, but
+  incidentally, as a consequence of a compiler setting rather than a stated boundary — and this ADR
+  exists because boundaries here are gated, not conventional.
+  The `from` side covers all three trees rather than `packages/` alone, which is what makes this a
+  general boundary and therefore this ADR's subject rather than a consequence of the PR #17 clock
+  ruling. Two of those quadrants are reachable by no other rule: `apps/*/src -> apps/*/test` is
+  named by nothing else in the config, and `games/*/src -> games/*/test` is structurally invisible
+  to `no-game-to-game`, whose `pathNot` exempts a game's own directory by design.
+  `apps/realtime/src` is the load-bearing one — it is the production path that composes
+  `platform-core`, so omitting it would have left real-clock.ts's corrected comment false in the
+  same edit that fixed the other half of it. Measured: widening the `from` side changes the real
+  cruise not at all (0 errors, 255 modules / 777 dependencies, identical to the previous baseline),
+  so it gates a shape that does not exist today rather than grandfathering one that does. Four
+  fixtures, one per resolution form and per newly covered tree. The directory name `test/` is
+  hard-coded and accurate for all seven trees in the workspace; a package introducing `__tests__/`
+  or `tests/` escapes silently, and widening the regex for that is a future ADR line rather than a
+  change made in passing. Implemented on [PER-241](/PER/issues/PER-241).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -171,19 +196,20 @@ Two consequences that are easy to get wrong, so they are written down:
 All rules are `severity: error`. Every rule carries a `comment` that states _why_, because the
 CI output is where an engineer meets this rule for the first time.
 
-| Rule name                 | From                                 | To (forbidden)                                                                                                       | Why                                                                                                                                      |
-| ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `no-game-to-platform`     | `^games/`                            | every package under `^packages/` **except** `game-sdk`; `game-testkit` is legal from game **test paths** only (§2.5) | A game talks to the platform **only** through `game-sdk`.                                                                                |
-| `no-game-to-app`          | `^games/`                            | `^apps/`                                                                                                             | A game may not reach into the web shell or the server.                                                                                   |
-| `no-game-to-game`         | `^games/((?:_examples/)?[^/]+)/`     | `^games/` **except** `^games/$1/` (see note)                                                                         | Games are independent plugins. Chess is not a special case.                                                                              |
-| `no-package-to-app`       | `^packages/`                         | `^apps/`                                                                                                             | An app is a composition root, not a library. The reverse edge inverts the dependency and is a cycle waiting to happen. Added in rev 2.4. |
-| `no-testkit-to-platform`  | `^packages/game-testkit/`            | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/`                                                        | The testkit is reachable from games (§2.5), so it must not be a tunnel to the internals games may not reach. Added in rev 2.2.           |
-| `no-platform-to-game`     | `^(packages\|apps)/`                 | `^games/`                                                                                                            | The platform never imports a game. Exception in §3.                                                                                      |
-| `no-sdk-to-platform`      | `^packages/game-sdk/`                | `^packages/(platform-core\|netcode\|ui\|game-testkit)`, `^apps/`, `^games/`                                          | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable.                        |
-| `no-game-node-builtins`   | `^games/`                            | `core` (`node:*`, `fs`, `net`, `crypto`, …)                                                                          | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                                            |
-| `no-illegal-declared-dep` | `games/*/package.json`               | any `@playhall/*` except `@playhall/game-sdk`; plus `@playhall/game-testkit` in `devDependencies` **only** (§2.5)    | A declared dependency is as much a violation as an import.                                                                               |
-| `no-game-to-colyseus`     | `^games/` and `games/*/package.json` | `colyseus`, `colyseus.js`, `@colyseus/*`                                                                             | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2; renamed in rev 3.       |
-| `no-circular`             | any                                  | itself (cycle)                                                                                                       | Cycles make version pinning and incremental build unreliable.                                                                            |
+| Rule name                 | From                                                   | To (forbidden)                                                                                                       | Why                                                                                                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no-game-to-platform`     | `^games/`                                              | every package under `^packages/` **except** `game-sdk`; `game-testkit` is legal from game **test paths** only (§2.5) | A game talks to the platform **only** through `game-sdk`.                                                                                                                                                                                                   |
+| `no-game-to-app`          | `^games/`                                              | `^apps/`                                                                                                             | A game may not reach into the web shell or the server.                                                                                                                                                                                                      |
+| `no-game-to-game`         | `^games/((?:_examples/)?[^/]+)/`                       | `^games/` **except** `^games/$1/` (see note)                                                                         | Games are independent plugins. Chess is not a special case.                                                                                                                                                                                                 |
+| `no-package-to-app`       | `^packages/`                                           | `^apps/`                                                                                                             | An app is a composition root, not a library. The reverse edge inverts the dependency and is a cycle waiting to happen. Added in rev 2.4.                                                                                                                    |
+| `no-src-to-test`          | `^(?:packages\|apps\|games)/(?:_examples/)?[^/]+/src/` | the matching `test/` tree, three alternations per §2.1                                                               | Shipped code may not import a test tree: `test/` is outside every package's `rootDir`, so the import is green here and absent from the published build — and a test-only escape hatch is only honest while nothing in `src` can reach it. Added in rev 2.5. |
+| `no-testkit-to-platform`  | `^packages/game-testkit/`                              | `^packages/(platform-core\|netcode\|ui)`, `^apps/`, `^games/`                                                        | The testkit is reachable from games (§2.5), so it must not be a tunnel to the internals games may not reach. Added in rev 2.2.                                                                                                                              |
+| `no-platform-to-game`     | `^(packages\|apps)/`                                   | `^games/`                                                                                                            | The platform never imports a game. Exception in §3.                                                                                                                                                                                                         |
+| `no-sdk-to-platform`      | `^packages/game-sdk/`                                  | `^packages/(platform-core\|netcode\|ui\|game-testkit)`, `^apps/`, `^games/`                                          | The SDK is a contract, not a client of the platform. It must stay dependency-light and independently publishable.                                                                                                                                           |
+| `no-game-node-builtins`   | `^games/`                                              | `core` (`node:*`, `fs`, `net`, `crypto`, …)                                                                          | Game modules are **pure**: no I/O. This is what makes replay and reproducible tests possible.                                                                                                                                                               |
+| `no-illegal-declared-dep` | `games/*/package.json`                                 | any `@playhall/*` except `@playhall/game-sdk`; plus `@playhall/game-testkit` in `devDependencies` **only** (§2.5)    | A declared dependency is as much a violation as an import.                                                                                                                                                                                                  |
+| `no-game-to-colyseus`     | `^games/` and `games/*/package.json`                   | `colyseus`, `colyseus.js`, `@colyseus/*`                                                                             | A game must not depend on the platform's choice of netcode framework. ADR-0001 §4.2 condition 2. Added in rev 2; renamed in rev 3.                                                                                                                          |
+| `no-circular`             | any                                                    | itself (cycle)                                                                                                       | Cycles make version pinning and incremental build unreliable.                                                                                                                                                                                               |
 
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
 is not a boundary violation and failing the build on it trains people to ignore the tool.
@@ -199,11 +225,11 @@ duplicated denial costs a line of CI output; a narrowed one costs the invariant.
 the contract is allowed to lead the config. But a reader must be able to tell which rows are live
 **without** grepping, because not being able to is the exact defect rev 3 exists to fix. Every
 `severity: error` rule in `.dependency-cruiser.cjs` must appear in exactly one line below, and
-every row above must too. As of rev 2.4:
+every row above must too. As of rev 2.5:
 
 - **Live, and in this table** — `no-game-to-platform`, `no-game-to-app`, `no-game-to-game`,
-  `no-package-to-app`, `no-platform-to-game`, `no-sdk-to-platform`, `no-game-node-builtins`,
-  `no-game-to-colyseus`,
+  `no-package-to-app`, `no-src-to-test`, `no-platform-to-game`, `no-sdk-to-platform`,
+  `no-game-node-builtins`, `no-game-to-colyseus`,
   `no-circular` are dependency-cruiser rules. `no-illegal-declared-dep`, and the manifest half of
   `no-game-to-colyseus`, are in `tools/boundaries/check-declared-deps.mjs` — equally normative
   (§1).
@@ -620,6 +646,30 @@ paths, filenames recorded so each is greppable against the committed proof:
    `@playhall/realtime` there; they count `..`s to the repo root. It shares alternation 1 with
    fixture 1 and exists anyway, because the regression it guards is a `pathNot` exempting `test/`,
    which no other fixture would catch. → `no-package-to-app-test-tree.fixture`
+
+**Rev 2.5: `no-src-to-test`'s four fixtures, by form and by tree.** The generalisation above is
+about violation _paths_; this rule adds a second axis. Two resolution forms behave differently, and
+the widened `from` side brings in two trees that no other rule covers, so a fixture is owed per
+form **and** per newly covered tree:
+
+1. **Same package, resolved** — `packages/platform-core/src` imports `../test/fixtures/real-clock.js`.
+   The common case and the one the rule is named for. → `no-src-to-test.fixture`
+2. **Cross-package, unresolved subpath** — a sibling's `test/` tree can only be named as a subpath
+   specifier, and every `exports` map publishes the root only, so it resolves to nothing. Measured:
+   with that alternation removed, this fixture's violation degrades to a `not-to-unresolvable`
+   **warning** and the gate exits 0 — §2.1's failure mode on this rule. The importer is
+   `packages/ui` rather than `game-sdk` because `no-sdk-to-platform` would fire first and the
+   suite's precision assertion would fail. → `no-src-to-test-sibling-subpath.fixture`
+3. **An app's `src/`, by relative path** — `apps/realtime/src` importing `packages/platform-core/test/…`.
+   It shares alternation 1 with fixture 1 and exists anyway, because it is the quadrant whose
+   absence made real-clock.ts's doc comment false: `apps/realtime` is the production path that
+   composes `platform-core`, and before rev 2.5 this edge cruised with no rule at all.
+   → `no-src-to-test-app-src.fixture`
+4. **A game's own `test/` tree** — `games/*/src` importing `games/*/test/…`. Owed because
+   `no-game-to-game`'s `pathNot: '^games/$1/'` exempts a game's own directory by design, which
+   makes this quadrant structurally invisible to every other rule in the config. A regression that
+   narrowed this rule's `from` side back to `^packages/` would be caught by nothing else.
+   → `no-src-to-test-game-own-tree.fixture`
 
 **Rev 2.2: a carve-out needs a _positive_ fixture too.** Every fixture obligation above is
 negative — prove the rule fires. §2.5 introduces the first rule with a legal case sitting next to

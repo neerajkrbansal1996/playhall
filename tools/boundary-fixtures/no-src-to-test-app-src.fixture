@@ -1,0 +1,34 @@
+# expect: no-src-to-test
+# why: an app's src reaches a package's test tree — the production path that actually composes platform-core, and the quadrant no other rule in the file names
+=== file: apps/realtime/src/index.ts ===
+// `apps/realtime` is shipped code by any reading, and it is the specific production path that
+// composes platform-core — so this is the edge that decides whether the claim in
+// `packages/platform-core/test/fixtures/real-clock.ts` is true. That comment says keeping the
+// real clock in `test/` means no production path can reach it. With the rule's `from` side
+// written as `^packages/[^/]+/src/`, this import cruised with `rules: []` — not a warning, not a
+// near-miss, no rule at all — and the comment was asserting a boundary nothing gated. That is
+// the same defect (N6 of the pass-6 verdict on PR #17) that `no-src-to-test` was opened to fix,
+// reappearing one directory over.
+//
+// Nothing else covers it: `no-package-to-app` points the other way (`^packages/` -> apps), and
+// no rule has `^apps/` on its `from` side at all.
+import { brandKey } from '@scope/platform-core'
+
+import { realSystemClock } from '../../../packages/platform-core/test/fixtures/real-clock.js'
+
+export const boot = (): string => brandKey
+export const startedAtMs = realSystemClock().now()
+=== file: packages/platform-core/test/fixtures/real-clock.ts ===
+// Stands in for the committed fixture of the same path. Deliberately ambient: that is the whole
+// reason it may not live in `src/`, and the whole reason no shipped tree may import it.
+export interface Clock {
+  now: () => number
+}
+
+export function realSystemClock(): Clock {
+  const wallOriginMs = Date.now()
+  const monoOriginMs = performance.now()
+  return {
+    now: () => Math.round(wallOriginMs + (performance.now() - monoOriginMs)),
+  }
+}
