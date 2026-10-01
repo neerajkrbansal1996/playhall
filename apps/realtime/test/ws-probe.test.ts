@@ -2,9 +2,11 @@ import { createServer, type Server } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
+import { z } from 'zod'
 import {
   attachWsProbe,
   DEFAULT_PROBE_LIMITS,
+  shapeRejection,
   WS_PROBE_PATH,
   type AttachedProbe,
 } from '../src/ws-probe'
@@ -286,6 +288,29 @@ describe('ws probe — rejected frames', () => {
     expect(error.reason.length).toBeLessThan(160)
   })
 
+  it('does not elide anything a real ping rejection can produce', async () => {
+    // The issue cap is set to the reachable maximum for `PingFrame` — one issue
+    // per field, plus the single `.strict()` arm — so it must never fire on a
+    // real frame. It was measured as a no-op when it landed; this keeps it one.
+    //
+    // The sibling test in the record-schema block below pins the cap from the
+    // other side, and neither direction catches what this one does: lowering the
+    // cap bounds the echo *harder*, so it looks like a safer number while
+    // silently eliding diagnostics the caller needs to fix its frame. Worst case
+    // for this schema is all three fields wrong plus an extra, and all four have
+    // to survive.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'x', nonce: 1, clientSentAtMs: 'y', extra: 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe(
+      'frame is not a valid ping: t, nonce, clientSentAtMs, unexpected extra',
+    )
+    expect(error.reason).not.toContain('more)')
+  })
+
   it('quotes a key name through a fixed alphabet, not verbatim', async () => {
     // The cap above bounds how *much* of a key comes back. This bounds *what*:
     // exact equality, because the point is that no byte of the key reaches the
@@ -433,6 +458,58 @@ describe('ws probe — rejected frames', () => {
 
     ws.send(JSON.stringify({ t: 'ping', nonce: '', clientSentAtMs: 0 }))
     expect((await nextMessage(ws)) as { reason: string }).toMatchObject({ t: 'error' })
+  })
+})
+
+describe('ws probe — reason shaping for the schemas it does not have yet', () => {
+  /**
+   * `shapeRejection` is what M1.6's transport adapter inherits, and two of its
+   * bounds are unreachable through `PingFrame`: three fields plus `.strict()`
+   * cannot exceed the issue cap, and no `PingFrame` path segment is
+   * caller-supplied. So a socket-driven test passes with either bound deleted —
+   * the guard would ship unpinned, which is the exact failure mode this PR
+   * exists to remove. These drive the helper directly against the construct that
+   * does reach them.
+   *
+   * `z.record()` is that construct (with `z.object().catchall()`, its only peer).
+   * An array index arrives as a *number* segment, so `z.array()` renders `xs.1`
+   * and cannot carry a sender's bytes at all.
+   */
+  const Recordish = z.object({ meta: z.record(z.string(), z.number()) }).strict()
+
+  function reasonFor(value: unknown): string {
+    const result = Recordish.safeParse(value)
+    if (result.success) throw new Error('fixture was supposed to be rejected')
+    return shapeRejection(result.error)
+  }
+
+  it('caps the issue list, not only the key list inside one issue', async () => {
+    // `MAX_REPORTED_KEYS` bounds the keys named by a single `unrecognized_keys`
+    // issue. It says nothing about how many issues there are, and a record emits
+    // one per bad entry — so without an issue cap the sender picks the length of
+    // the reason. Quoting does not help: `?` substitution is length-preserving,
+    // so the alphabet fix leaves this untouched.
+    const entries = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`k${index}`, 'not a number']),
+    )
+
+    const reason = reasonFor({ meta: entries })
+
+    expect(reason).toBe('meta.k0, meta.k1, meta.k2, meta.k3 (+16 more)')
+  })
+
+  it('quotes a caller-supplied path segment, so a record cannot smuggle a newline', async () => {
+    // The `unrecognized_keys` arm is hardened because it is the one `PingFrame`
+    // can reach. One line below it, `invalid_type` renders `issue.path` — and a
+    // record puts the sender's own key there, which reverts the whole fix for
+    // any schema that has one. QA's exact marker, through the other arm.
+    const reason = reasonFor({ meta: { 'x\n[realtime] FATAL forged': 'not a number' } })
+
+    // eslint-disable-next-line no-control-regex -- the point of the assertion
+    expect(reason).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(reason).not.toContain('[realtime]')
+    // Still diagnostic, and `.` stays structural because quoting is per segment.
+    expect(reason).toBe('meta.x??realtime??FATAL?forged')
   })
 })
 
