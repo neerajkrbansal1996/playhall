@@ -1,0 +1,34 @@
+# expect: no-src-to-test
+# why: a src module reaches a test-only fixture, which type-checks and runs green here and is absent from the published build
+=== file: packages/platform-core/src/index.ts ===
+// The realistic shape of this violation, and the one the rule is named for. `test/fixtures/`
+// holds the real monotonic clock the drift harness needs — a drift measurement against a fake
+// clock measures nothing — and it is legal there because `test/` is outside the determinism
+// rule's `packages/**/src/**` scope. Then someone in `src` needs a clock, finds one already
+// written, and imports it. That single edge is what turns a deliberate test-only escape hatch
+// into ambient time in shipped code.
+//
+// Nothing else in this suite goes red for it. `tsc -b` does reject it on `rootDir`, which is a
+// real backstop — but an incidental one: it fires for "outside rootDir", not for "a boundary was
+// crossed", and the fixture's own doc comment claims a rule that would have to exist for the
+// claim to be true.
+import { BRAND_KEY } from '@scope/shared'
+
+import { realSystemClock } from '../test/fixtures/real-clock.js'
+
+export const brandKey = BRAND_KEY
+export const startedAtMs = realSystemClock().now()
+=== file: packages/platform-core/test/fixtures/real-clock.ts ===
+// Stands in for the committed fixture of the same path. Deliberately ambient: that is the whole
+// reason it may not live in `src/`.
+export interface Clock {
+  now: () => number
+}
+
+export function realSystemClock(): Clock {
+  const wallOriginMs = Date.now()
+  const monoOriginMs = performance.now()
+  return {
+    now: () => Math.round(wallOriginMs + (performance.now() - monoOriginMs)),
+  }
+}

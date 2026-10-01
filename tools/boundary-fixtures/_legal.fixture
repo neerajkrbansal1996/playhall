@@ -39,3 +39,13 @@ import { BRAND_KEY } from '@scope/shared'
 
 export const brandKey = BRAND_KEY
 export * from './identity/guest-token.js'
+=== file: packages/platform-core/test/fixtures/real-clock.ts ===
+// The legal direction of `no-src-to-test`, which forbids `src -> test` and must leave
+// `test -> src` alone. In the control rather than left to the real cruise because the rule is
+// one regex pair away from being symmetric, and a symmetric version would still pass every
+// negative fixture — it fires, just in both directions. The real repo would also go red (54
+// test modules import src), but a gate's own suite should not need the rest of the workspace to
+// notice that its rule is inverted.
+import { brandKey } from '../../src/index.js'
+
+export const stamped = (): string => `${brandKey}@${Date.now()}`

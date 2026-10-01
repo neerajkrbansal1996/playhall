@@ -24,7 +24,15 @@
  * So the drift measurement — which is meaningless against a fake clock, since
  * the number being measured is divergence between two real clocks over five
  * minutes — brings its own. Keeping it in `test/fixtures` means no production
- * path can reach it: a `src` module that imported this would fail the build.
+ * path can reach it, and that is a gated claim rather than a convention: the
+ * `no-src-to-test` rule in `.dependency-cruiser.cjs` (ADR-0002 §2, rev 2.5)
+ * makes any `src -> test/` import a `pnpm boundaries` error from every shipped
+ * tree in the workspace — `packages/`, `apps/` and `games/` alike, so
+ * `apps/realtime/src`, the one production path that actually composes this
+ * package, is covered and not just the sibling-package case. Proven by
+ * `tools/boundary-fixtures/no-src-to-test.fixture` and its three siblings.
+ * `tsc -b` would also reject the import on `rootDir`, but that is incidental to
+ * a compiler setting and says nothing about determinism.
  *
  * If this and the production clock ever disagree, `apps/realtime` is the
  * contract and this is the stale copy.

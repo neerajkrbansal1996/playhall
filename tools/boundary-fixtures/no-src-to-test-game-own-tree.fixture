@@ -1,0 +1,26 @@
+# expect: no-src-to-test
+# why: a game's src reaches its own test tree, the quadrant no-game-to-game deliberately exempts and therefore the only rule that can ever catch it
+=== file: games/fx-a/src/index.ts ===
+// A game importing its *own* test tree is structurally invisible to every other rule here.
+// `no-game-to-game` is the one whose target would otherwise cover `games/fx-a/test/`, and its
+// `pathNot: '^games/$1/'` exempts the game's own directory by design — correctly, because that
+// rule is about reaching a *neighbour*. So the exemption that makes `no-game-to-game` right is
+// exactly what leaves this edge ungated, and it will stay ungated unless this rule's `from`
+// side names `^games/`.
+//
+// Worth gating for the same two reasons as the package case: `test/` is outside the game's
+// `rootDir` so the import is absent from any build the game ships, and a game's test helpers
+// are precisely where `Date.now()` and fixed boards live — the things ADR-0002 §4 keeps out of
+// game logic. An edge from `src` re-admits them through the back door.
+import type { GameId } from '@scope/game-sdk'
+
+import { fixedSeed } from '../test/helpers.js'
+
+export const id = 'fx-a' as GameId
+export const seed = fixedSeed()
+=== file: games/fx-a/test/helpers.ts ===
+// A game's test helper: ambient and fixed-value on purpose, which is fine in `test/` and is the
+// reason `src/` may not reach it.
+export function fixedSeed(): number {
+  return Math.floor(Date.now() / 1000)
+}

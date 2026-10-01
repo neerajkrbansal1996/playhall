@@ -182,6 +182,41 @@ const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
 const PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS =
   '^packages/platform-core/src/identity/guest-token\\.ts$'
 
+/**
+ * Every test tree in the workspace — the code that is *not* part of what a workspace package
+ * ships. All seven live under `<tree>/<pkg>/test/`: the four in `packages/`, `apps/realtime`,
+ * `apps/web` and `games/chess`.
+ *
+ * Three alternations, the same shape and for the same reason as `packageTargets` above: which
+ * form the edge takes in the graph depends only on how the import was written.
+ *   - `^(packages|apps|games)/<pkg>/test/` — resolved. This is what a same-package relative
+ *     import (`../test/fixtures/real-clock.js`) becomes, and it is the common case. The
+ *     `_examples` prefix is optional for the same reason `ANY_GAME_DIR` carries it. The
+ *     alternation is non-capturing because this rule has no `pathNot`: unlike `no-game-to-game`
+ *     there is no `$1` group match to feed, and a capturing group here would imply a contract
+ *     that does not exist.
+ *   - `^@scope/<pkg>/test/` — unresolved. A *sibling* package's test tree can only be named as
+ *     a subpath specifier, and every package's `exports` map publishes its root plus at most a
+ *     named entrypoint, so that subpath resolves to nothing. dependency-cruiser then keeps the
+ *     bare specifier as the module path, and a rule written against repo paths alone would see
+ *     no edge at all — reported as a `not-to-unresolvable` *warning*, with CI green. Same hole
+ *     `no-game-to-shared-internals` had before its subpath alternation. This alternation needs
+ *     no widening for apps or games: every workspace package is `@playhall/*`, both apps and
+ *     chess included, which is why the apps subpath probe degraded to a warning rather than
+ *     disappearing (PER-253 verdict, N1).
+ *   - `node_modules/@scope/<pkg>/test/` — resolved through an installed copy rather than the
+ *     workspace link.
+ *
+ * The directory name `test/` is hard-coded. That is accurate for all seven trees today; a
+ * package introducing `__tests__/` or `tests/` would escape silently. Widening this on spec is
+ * an ADR line, not a regex stretched in passing (PER-253 verdict, closing note).
+ */
+const TEST_TREES = [
+  '^(?:packages|apps|games)/(?:_examples/)?[^/]+/test/',
+  `^${escapeRe(SCOPE)}/[^/]+/test/`,
+  `(^|/)node_modules/${escapeRe(SCOPE)}/[^/]+/test/`,
+]
+
 module.exports = {
   forbidden: [
     {
@@ -350,6 +385,36 @@ module.exports = {
         pathNot: PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS,
       },
       to: { dependencyTypes: ['core'] },
+    },
+    {
+      name: 'no-src-to-test',
+      severity: 'error',
+      comment:
+        'Shipped code may not import a test tree, from any of the three workspace trees. ' +
+        "`test/` is outside every package's `rootDir`, so it is not in the published build at " +
+        'all: the import type-checks and runs green in this repo, then fails to resolve for the ' +
+        'consumer, for a file the repo plainly contains. That alone would make this a rule. The ' +
+        'reason it is *this* rule is that a test-only escape hatch is only honest while nothing ' +
+        'in `src` can reach it. `packages/platform-core/test/fixtures/real-clock.ts` holds a ' +
+        'real monotonic clock on purpose — a drift measurement against a fake clock measures ' +
+        'nothing — and it is legal precisely because it sits outside `packages/**/src/**`, ' +
+        'where the determinism rule (ADR-0002 §4) does not reach: by construction, not by ' +
+        'exemption (PER-224, ruling edge 3). `tsc -b` does reject such an import on `rootDir`, ' +
+        'which is a real backstop, but it is an incidental consequence of a compiler setting — ' +
+        'nothing about `rootDir` states a boundary, and ADR-0002 exists because boundaries here ' +
+        'are gated rather than conventional. The `from` side covers `apps/` and `games/` and ' +
+        'not just `packages/`, because "shipped code" means all three and two of those ' +
+        'quadrants are reachable by no other rule: `apps/*/src -> apps/*/test` is named by ' +
+        'nothing else in this file, and `games/*/src -> games/*/test` is structurally invisible ' +
+        "to `no-game-to-game`, whose `pathNot` exempts the game's own directory by design. " +
+        '`apps/realtime/src` matters most of the three: it is the production path that actually ' +
+        'composes platform-core, so leaving it out would have made the claim in ' +
+        "real-clock.ts's own doc comment false in the same edit that fixed the other half of it " +
+        '(PER-253 verdict, N1). Need a fixture in production code? Then it is not a fixture: it ' +
+        'belongs in `src/`, and if it reaches for ambient time or entropy on the way, it ' +
+        'belongs behind one of the ports in platform-core `runtime.ts` instead.',
+      from: { path: '^(?:packages|apps|games)/(?:_examples/)?[^/]+/src/' },
+      to: { path: TEST_TREES },
     },
     {
       name: 'no-circular',
