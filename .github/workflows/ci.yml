@@ -154,6 +154,28 @@ jobs:
       - uses: ./.github/actions/setup
       - run: node scripts/ci/gate.mjs boundaries
 
+  # Reads the emitted bytes where `boundaries` reads the import graph (PER-231).
+  # `globals.css` registers `packages/ui/src` as a Tailwind source, because v4's
+  # automatic detection starts at `apps/web`'s own root; delete that one line and a
+  # utility only `packages/ui` uses is never generated, so the component ships
+  # unstyled. Nothing else in the pipeline can see it: the DOM is unchanged so `unit`
+  # passes, the import graph is unchanged so `boundaries` passes, and jsdom has no
+  # stylesheet for a test to assert against.
+  #
+  # Its own job because it needs `next build`. Deliberately NOT folded into `e2e`,
+  # whose Playwright webServer also builds `apps/web`: `e2e` is the long pole at
+  # ~2 min and these jobs run in parallel, so a second build costs ~0 wall clock,
+  # and keeping them independent stops a flaky browser test from masking a styling
+  # regression.
+  styles:
+    name: styles
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: node scripts/ci/gate.mjs styles
+
   unit:
     name: unit
     runs-on: ubuntu-latest
@@ -342,6 +364,7 @@ jobs:
         format,
         typecheck,
         boundaries,
+        styles,
         unit,
         coverage,
         testkit,

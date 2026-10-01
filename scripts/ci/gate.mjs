@@ -67,6 +67,15 @@ const GATES = {
   // Went live with no edit here the moment PER-5 added the root `boundaries`
   // script — the PENDING branch keys on the script existing, not on this field.
   boundaries: { script: 'boundaries', pendingOwner: null },
+  // Live from the day it landed, so no pendingOwner. The only gate that reads
+  // CSS (PER-231), and it reads emitted bytes rather than the import graph.
+  // `globals.css` registers `packages/ui/src` as a Tailwind source; without that
+  // line a utility only `packages/ui` uses is never generated and the component
+  // ships unstyled — no build error, no failing type-check, and nothing for a
+  // unit test to catch, because jsdom has no stylesheet to be wrong about. This
+  // asserts those utilities reach the stylesheet the landing page loads. It
+  // builds `apps/web`, which is why it is its own job rather than a `lint` step.
+  styles: { script: 'check:ui-source', pendingOwner: null },
   testkit: {
     script: 'test:testkit',
     pendingOwner: 'PER-17 — game conformance testkit (first consumer: tic-tac-toe)',

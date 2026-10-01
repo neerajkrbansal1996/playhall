@@ -193,7 +193,7 @@ describe('the registry and the workflow do not drift', () => {
       .filter(Boolean)
   })()
 
-  it('found the nine gates', () => {
+  it('found the ten gates', () => {
     expect(registryGates).toEqual([
       'lint',
       'format',
@@ -201,6 +201,11 @@ describe('the registry and the workflow do not drift', () => {
       'unit',
       'coverage',
       'boundaries',
+      // Reads emitted bytes where `boundaries` reads the import graph, and the
+      // only gate that reads CSS (PER-231): `packages/ui` must be a registered
+      // Tailwind source or its components ship unstyled. Listed after
+      // `boundaries` because that is where it sits in the registry.
+      'styles',
       'testkit',
       'integration',
       'e2e',
