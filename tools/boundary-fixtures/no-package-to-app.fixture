@@ -1,0 +1,16 @@
+# expect: no-package-to-app
+# why: a platform package importing an app by package name, resolved through the workspace link
+=== file: packages/netcode/src/index.ts ===
+// The resolved half of the rule (ADR-0002 §2.1 alternation 1): the import links through
+// node_modules, so the module's path in the graph is `apps/realtime/src/index.ts` and a
+// path-based pattern can see it.
+//
+// `netcode` is the importer rather than `game-sdk` on purpose. `no-sdk-to-platform` already
+// forbids game-sdk -> app, so a fixture written from there would fire two error rules and fail
+// the suite's precision assertion without telling anyone which rule it was actually proving.
+// `netcode` is reached by no other error rule and is imported by neither stub app, so a cycle
+// cannot account for the failure either.
+import { boot } from '@scope/realtime'
+
+export const TICK_HZ = 30
+export const start = boot

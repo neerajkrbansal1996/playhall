@@ -1,0 +1,31 @@
+# expect: no-package-to-app
+# why: a package's test reaching into an app for a production implementation it wants to measure against — the third resolution state, a relative path, and the one a test author actually writes
+=== file: packages/platform-core/test/fixtures/real-clock.ts ===
+// The case this rule was opened for. `packages/platform-core/test/fixtures/real-clock.ts` is a
+// real file, and it is a hand-copied duplicate of `apps/realtime/src/clock.ts` precisely because
+// the import below is illegal. Before this rule existed the duplicate's own doc comment claimed
+// `pnpm boundaries` enforced that — and it did not: a probe exactly like this cruised clean
+// (0 errors, 256 modules vs 255, PER-241/PER-251). The comment was the only thing stopping it.
+//
+// Written as a relative path, which is the third form the edge takes and the only one available
+// to a test: an app is not a package a test can name, so nobody writes `@scope/realtime` here.
+// They count the `..`s to the repo root, which resolves, which is why the resolved-path half of
+// the rule is what catches this one.
+import { realSystemClock } from '../../../../apps/realtime/src/clock'
+
+export const clock = realSystemClock()
+=== file: packages/platform-core/test/drift.test.ts ===
+// The fixture above has to be imported by something, or it is an orphan and the edge is not in
+// the graph at all — a fixture whose violating import is unreachable proves nothing.
+import { clock } from './fixtures/real-clock'
+
+export const measured = clock
+=== file: apps/realtime/src/clock.ts ===
+// The production clock, in the composition root because `packages/platform-core/src/**` may not
+// read ambient time (ADR-0002 §4). That constraint is what puts a tempting implementation on the
+// far side of a boundary, which is how this violation gets written in the first place.
+export const realSystemClock = (): { now: () => number } => {
+  const wallOriginMs = Date.now()
+  const monoOriginMs = performance.now()
+  return { now: () => Math.round(wallOriginMs + (performance.now() - monoOriginMs)) }
+}

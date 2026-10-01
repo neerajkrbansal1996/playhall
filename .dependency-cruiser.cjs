@@ -265,6 +265,26 @@ module.exports = {
       to: { path: GAME_TARGETS, dynamic: false },
     },
     {
+      name: 'no-package-to-app',
+      severity: 'error',
+      comment:
+        'An app is a composition root, never a library. A packages/** -> apps/** edge inverts ' +
+        'the dependency: apps/web and apps/realtime both import platform-core, so the import ' +
+        'back is a cycle waiting to happen, and it makes the package unpublishable on its own ' +
+        'because installing it would drag a whole Next.js or server app along. This covers a ' +
+        "package's test/ tree too, which is the case a test author actually writes — reaching " +
+        'for apps/realtime/src/clock.ts from a platform-core test rather than copying it. If a ' +
+        'package needs something an app has, the thing is in the wrong place: move it down into ' +
+        'the package (or packages/shared) and let the app import it, which is the direction that ' +
+        'already works.',
+      // `^packages/` deliberately, not "every package except game-sdk": `no-sdk-to-platform`
+      // below already forbids game-sdk -> app, so that one edge trips two rules. Narrowing this
+      // rule to dodge the overlap would make it stop saying what it is named for — no package
+      // imports an app — and an overlap costs nothing but a second line of CI output.
+      from: { path: '^packages/' },
+      to: { path: APP_TARGETS },
+    },
+    {
       name: 'no-sdk-to-platform',
       severity: 'error',
       comment:

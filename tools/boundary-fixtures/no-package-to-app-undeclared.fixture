@@ -1,0 +1,17 @@
+# expect: no-package-to-app
+# why: the same reach for an app written without declaring it, where the import never resolves and only the bare specifier is left in the graph
+# unlink: realtime
+=== file: packages/netcode/src/index.ts ===
+// The unresolved half (ADR-0002 §2.1 alternation 2), and the state an author is actually in
+// while writing this: nothing declares `@scope/realtime`, so pnpm links nothing, the import
+// resolves to nothing, and dependency-cruiser keeps the bare specifier as the module's path.
+// A pattern matching only the resolved path above is green here and loud on the case that
+// needs a deliberate `pnpm add` first — silent on the likelier violation, which is the one
+// failure mode §2.1 exists to forbid.
+//
+// Declaring an app as a dependency is nobody's intent anyway: the realistic sequence is to
+// write the import, see the editor resolve it off the root link or not at all, and move on.
+import { boot } from '@scope/realtime'
+
+export const TICK_HZ = 30
+export const start = boot
