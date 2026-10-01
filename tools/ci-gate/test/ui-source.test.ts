@@ -44,10 +44,24 @@ const gateSource = readFileSync(gatePath, 'utf8')
 const PROBES = (() => {
   const block = /const PROBES = \[\n([\s\S]*?)\n\]\n/.exec(gateSource)?.[1]
   if (!block) throw new Error('could not locate the PROBES table in the gate script')
-  const utilities = [...block.matchAll(/utility: '([^']+)'/g)].map((m) => m[1])
+  const utilities = [...block.matchAll(/utility: '([^']+)'/g)].flatMap((m) => m[1] ?? [])
   if (utilities.length === 0) throw new Error('the PROBES table lists no utilities')
   return utilities
 })()
+
+/**
+ * A probe made only of word characters and dashes, for the prefix-matching cases below.
+ *
+ * Throws rather than returning `undefined` so that a PROBES table of nothing but bracket
+ * utilities (`[font-variant-ligatures:none]`) fails the suite instead of silently
+ * skipping the two selector-boundary tests — the same fail-closed rule the gate itself
+ * follows for an eroded probe set.
+ */
+function plainProbe(): string {
+  const probe = PROBES.find((u) => /^[a-z0-9-]+$/.test(u))
+  if (!probe) throw new Error('expected at least one plain word-and-dash probe in PROBES')
+  return probe
+}
 
 /** The directive the whole gate exists to defend. */
 const UI_SOURCE = "@source '../../../../packages/ui/src';"
@@ -322,8 +336,7 @@ describe('the styles gate matches a selector, not a substring', () => {
   it('is not satisfied by a longer utility that starts with the probe', () => {
     // `.text-balance` must not be answered by `.text-balance-foo`: a different class, a
     // different declaration, and the hero still unstyled.
-    const probe = PROBES.find((u) => /^[a-z0-9-]+$/.test(u))
-    expect(probe, 'expected at least one plain word-and-dash probe').toBeDefined()
+    const probe = plainProbe()
     const root = buildFakeRepo({ cssUtilities: PROBES })
     write(
       join(root, 'apps', 'web', '.next', 'static', 'css', 'probe.css'),
@@ -339,7 +352,7 @@ describe('the styles gate matches a selector, not a substring', () => {
   it('is not rescued by a longer class name in packages/ui', () => {
     // The mirror image: `wrap-anywhere` appearing only inside `text-wrap-anywhere` is a
     // mention of a different utility and must not count as the package using the probe.
-    const probe = PROBES.find((u) => /^[a-z0-9-]+$/.test(u))!
+    const probe = plainProbe()
     const root = buildFakeRepo({
       uiUtilities: [...PROBES.filter((u) => u !== probe), `prefixed-${probe}-suffixed`],
     })
