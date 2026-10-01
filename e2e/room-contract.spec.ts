@@ -336,6 +336,45 @@ test('a bulk-inserted over-long code is capped, not just normalised', async ({ p
 })
 
 /**
+ * A pasted **invite link** yields the code inside it, in a real browser
+ * ([PER-242](/PER/issues/PER-242)).
+ *
+ * The component-level corpus lives in
+ * `apps/web/test/room/join-code-link-paste.test.tsx` — twenty-odd link shapes,
+ * which is the right place for breadth. This spec carries one row, for the two
+ * things jsdom cannot answer:
+ *
+ * - **The engine.** This is a controlled input whose value is replaced wholesale
+ *   inside `onChange` — a 32-character insertion becomes a 6-character value.
+ *   That is a larger rewrite than any other row in this file, and the file
+ *   already notes that `autoCapitalize="characters"` plus the `uppercase`
+ *   transform diverge between Chromium and WebKit. `data-value` is asserted
+ *   alongside the value for the same reason as every row above.
+ * - **The silence.** Before PER-242 this paste left `HTTPSE` in the field *and*
+ *   announced an overflow. Asserting the alert is absent is what distinguishes
+ *   "extraction ran" from "the cap happened to produce six right characters".
+ *
+ * The host is `example.test`: the product domain is an open board decision, and
+ * the rule reads no host at all — `:` and `/` are run boundaries like any other
+ * non-alphabet character, so there is nothing here to keep in step with the
+ * eventual name.
+ */
+test('a pasted invite link yields just the room code', async ({ page }) => {
+  const input = page.getByTestId(testIds.joinCodeInput)
+
+  await input.fill(`https://example.test/r/${PREVIEW_CODE}`)
+
+  await expect(input).toHaveValue(PREVIEW_CODE)
+  await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
+
+  // Nothing the player needed was dropped, so the field stays quiet and the
+  // description is the hint alone.
+  await expect(joinAlert(page)).toHaveCount(0)
+  await expect(input).not.toHaveAttribute('aria-invalid', 'true')
+  await describedByIds(input, 1)
+})
+
+/**
  * The 7th canonical keystroke on an already-full field — the one path React does
  * not re-render for.
  *

@@ -3,7 +3,12 @@
 import { useId, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 
-import { ROOM_CODE_LENGTH, isValidRoomCode, normalizeRoomCode } from '@playhall/shared'
+import {
+  ROOM_CODE_LENGTH,
+  extractRoomCode,
+  isValidRoomCode,
+  normalizeRoomCode,
+} from '@playhall/shared'
 
 import { Button } from '@/components/ui/button'
 import { testIds } from '@/lib/testids'
@@ -93,10 +98,10 @@ export interface JoinByCodeFormProps {
  * they were sent**, or landed on the friendly not-found page, with nothing
  * connecting either outcome to the character we removed.
  *
- * So `overflowed` announces it, through the same `role="alert"` node and
- * `aria-describedby` wiring the short-code and server messages already use —
- * one message slot, so the two can never stack or contradict each other. Three
- * properties of that choice are load-bearing:
+ * So the `overflowed` paste outcome announces it, through the same
+ * `role="alert"` node and `aria-describedby` wiring the short-code and server
+ * messages already use — one message slot, so the two can never stack or
+ * contradict each other. Three properties of that choice are load-bearing:
  *
  * - It is keyed on the **canonical** length, not the raw one. Seven raw
  *   characters that normalise to six (`ABC-234`) lost nothing, and shouting at
@@ -111,7 +116,83 @@ export interface JoinByCodeFormProps {
  *   `overflowed` implies the value *is* six canonical characters, which
  *   `isValidRoomCode` accepts, it can never coexist with `tooShort`.
  *
- * ## Why none of the three messages restate the length rule
+ * ## Why a pasted invite link yields its code ([PER-242](/PER/issues/PER-242))
+ *
+ * "Normalise, then cap" has one failure mode the announcement above cannot
+ * repair: when the dropped characters are at the **end**, the six that survive
+ * are not the code. `https://example.test/join/ABC234` kept `HTTPSE`, and
+ * `Code: ABC234` kept `CDEABC` — both well-formed codes, so nothing downstream
+ * could tell. The player was told characters were dropped, but not that the ones
+ * kept were wrong, because the field could not know. And the invite link is the
+ * *primary* share artifact: every lobby has a link as well as a code, so "tap
+ * the link text, paste it" is the most likely paste there is.
+ *
+ * So `onChange` tries `extractRoomCode` before the cap. **The rule is: exactly
+ * one _distinct_ run of exactly six alphabet characters, where a run is a
+ * maximal stretch of `ROOM_CODE_ALPHABET` characters after upper-casing.** It
+ * lives in `packages/shared`, next to the alphabet it depends on, where its own
+ * doc comment carries the reasoning. Three consequences are worth having here:
+ *
+ * - **No URL parsing and no host.** `:` and `/` are boundaries like any other
+ *   non-alphabet character, so `https://` is just a five-run. The rule therefore
+ *   hard-codes no domain and survives the open naming decision untouched; it
+ *   also works on a link whose scheme a chat app stripped, which URL parsing
+ *   would not.
+ * - **`ABC2345` is unaffected.** Seven canonical characters are one seven-run,
+ *   not a six-run, so extraction declines and the cap still drops the 7th and
+ *   announces it. That pairing is the whole reason the rule matches *whole runs*
+ *   rather than searching for a six-character substring.
+ * - **A successful extraction is silent.** The overflow note says which six
+ *   survived and asks the player to check the code they were sent; once the
+ *   field shows the code they were *actually* sent, that is a false alarm, and
+ *   it was being raised on `ABC234 join me` — a paste that joins the right room
+ *   — before this. The cap's announcement is unchanged for everything
+ *   extraction declines.
+ *
+ * Silence has a known cost, and it is not smaller everywhere. `Secret code
+ * ABC2345` — a six-letter word of prose beside a *mistyped* code — has exactly
+ * one six-run, so the field now shows `SECRET` and says nothing, where before it
+ * showed `SECRET` and at least said something had been dropped. That family is
+ * pinned rather than papered over, here and in `room-code.ts`, which also
+ * records the two candidate fixes and the measurement that rejects both.
+ *
+ * ## Ambiguity is a different message, not a quieter one ([PER-250](/PER/issues/PER-250))
+ *
+ * Two *different* six-runs in one paste are not guessed at. What the field says
+ * about that is its own string, because the overflow copy's diagnosis is false
+ * here — nothing was "extra", we had two candidates and no way to choose — and
+ * asking the player to check a value we picked is the wrong instruction when
+ * what we need is the one we could not pick. `AMBIGUOUS_MESSAGE` says that
+ * instead, and outranks the overflow note: a paste with two candidates always
+ * overflows too, so without an order the less accurate of the two would win by
+ * position.
+ *
+ * **The value shown is `codes[0]`, not the cap's answer.** This is the one place
+ * the three outcomes do not share a fallback, and the reason is that the cap's
+ * answer here is not even one of the candidates. The shape that motivates it is
+ * an invite link carrying a six-character query value — a `?ref=`, a share
+ * token, a campaign id:
+ *
+ * ```
+ * …/r/ABC234                      -> ABC234  extracted, silent
+ * …/r/ABC234?utm_source=whatsapp  -> ABC234  extracted, silent  (WHATSAPP is an 8-run)
+ * …/r/ABC234?ref=XYZ789           -> ABC234  ambiguous          (cap would say HTTPSE)
+ * …/r/ABC234?s=ABC234             -> ABC234  extracted, silent  (one distinct run)
+ * ```
+ *
+ * Only a *different* six-run in the query reaches the ambiguous row, and there
+ * the cap's `HTTPSE` is scheme noise the player has never seen, while `codes[0]`
+ * is the code in the link's path. Showing a candidate is not choosing one:
+ * `aria-invalid` is true and the message still says there was more than one. It
+ * is the difference between "we think it might be this, check" and a six-letter
+ * value with no relationship to anything that was pasted.
+ *
+ * The same code written *twice* — "here's the link …/join/ABC234 — code is
+ * ABC234", the shape we cause by handing every host both a link and a code — is
+ * not ambiguous at all. The rule counts distinct runs, so that extracts
+ * silently like any other link.
+ *
+ * ## Why none of the four messages restate the length rule
  *
  * The hint says `${ROOM_CODE_LENGTH} characters` two lines above the field, so a
  * message that opens `A room code is 6 characters.` states a rule the player
@@ -123,11 +204,14 @@ export interface JoinByCodeFormProps {
  * - overflow names *which* six survived the cap, the fact that actually
  *   matters, because the field now holds a well-formed code for a possibly
  *   different room;
+ * - ambiguity names the count, because "more than one" is the whole diagnosis
+ *   and the instruction that follows from it is different from every other
+ *   message's: enter one code, do not re-check the one we showed;
  * - an empty field gets an instruction rather than a specification;
  * - a partial code gets its own length, which is the one number the player
  *   cannot read off a `tracking-[0.3em]` six-cell field at a glance.
  *
- * A server `error` still outranks both: an actual join outcome is more
+ * A server `error` still outranks all three: an actual join outcome is more
  * actionable than our note about the input.
  *
  * The submit button is **never disabled for validation**. A disabled control
@@ -150,19 +234,29 @@ const HINT = `${ROOM_CODE_LENGTH} characters. Codes never use O, 0, I, 1 or L.`
 
 const EMPTY_MESSAGE = 'Enter the code from your invite.'
 const OVERFLOW_MESSAGE = `Only the first ${ROOM_CODE_LENGTH} characters were used. Check the code you were sent.`
+const AMBIGUOUS_MESSAGE = `More than one ${ROOM_CODE_LENGTH}-character code in that paste — enter just the one you were sent.`
+
+/**
+ * What the last `onChange` made of the input, beyond the value it produced.
+ * One state rather than two booleans: a paste carrying two candidates also
+ * overflows, and these are two accounts of the same event, so they must not be
+ * able to both be set and race for the one message slot.
+ */
+type PasteOutcome = 'clean' | 'overflowed' | 'ambiguous'
 
 /**
  * The single message the field shows, in authority order: a real join outcome,
- * then a character we dropped, then a code too short to send.
+ * then what we could not do with the paste, then a code too short to send.
  */
 function fieldMessage(
   error: string | undefined,
-  overflowed: boolean,
+  paste: PasteOutcome,
   tooShort: boolean,
   code: string,
 ): string | undefined {
   if (error !== undefined) return error
-  if (overflowed) return OVERFLOW_MESSAGE
+  if (paste === 'ambiguous') return AMBIGUOUS_MESSAGE
+  if (paste === 'overflowed') return OVERFLOW_MESSAGE
   if (!tooShort) return undefined
   if (code.length === 0) return EMPTY_MESSAGE
   return `That code has ${code.length} of ${ROOM_CODE_LENGTH} characters.`
@@ -179,9 +273,9 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
   const [tooShort, setTooShort] = useState(false)
   // Set as it happens, by contrast: a dropped character is already lost, and
   // the field cannot show the player what it removed.
-  const [overflowed, setOverflowed] = useState(false)
+  const [paste, setPaste] = useState<PasteOutcome>('clean')
 
-  const message = fieldMessage(error, overflowed, tooShort, code)
+  const message = fieldMessage(error, paste, tooShort, code)
   // Hint first, then the message, matching `fieldIds()` in
   // `components/settings-form/field-shell.tsx` — one hint/error composition
   // order for the whole platform rather than one per form.
@@ -239,15 +333,37 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
             aria-invalid={message ? true : undefined}
             aria-describedby={describedBy}
             onChange={(event) => {
-              // Normalise first, then cap. A 7th *canonical* character is still
-              // never part of a code, so it is still dropped — but a 7th *raw*
-              // character routinely is one, once a separator is gone, which is
-              // why the overflow flag reads the canonical length and not
-              // `event.target.value.length`.
+              setTooShort(false)
+
+              // Extraction first: an invite link or a chat sentence carrying one
+              // distinct six-run yields that run, and nothing the player needed
+              // was dropped, so there is nothing to announce.
+              const extraction = extractRoomCode(event.target.value)
+              if (extraction.outcome === 'extracted') {
+                setCode(extraction.code)
+                setPaste('clean')
+                return
+              }
+
+              // Two candidates and no way to choose. Show the first *candidate*
+              // rather than falling through to the cap, whose answer on the
+              // shape this exists for — a link with a six-character query value
+              // — is the scheme (`HTTPSE`) and not a candidate at all. See the
+              // ambiguity section in the doc comment above.
+              if (extraction.outcome === 'ambiguous') {
+                setCode(extraction.codes[0])
+                setPaste('ambiguous')
+                return
+              }
+
+              // Otherwise normalise, then cap. A 7th *canonical* character is
+              // still never part of a code, so it is still dropped — but a 7th
+              // *raw* character routinely is one, once a separator is gone,
+              // which is why the overflow flag reads the canonical length and
+              // not `event.target.value.length`.
               const canonical = normalizeRoomCode(event.target.value)
               setCode(canonical.slice(0, ROOM_CODE_LENGTH))
-              setOverflowed(canonical.length > ROOM_CODE_LENGTH)
-              setTooShort(false)
+              setPaste(canonical.length > ROOM_CODE_LENGTH ? 'overflowed' : 'clean')
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
           />
