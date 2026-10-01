@@ -1,0 +1,33 @@
+# expect: no-platform-core-node-builtins
+# why: the one allowed exception must not cover its own directory — a second file under identity/ importing the same builtin is still rejected, or the `pathNot` would be an escape hatch for a folder instead of a file
+=== file: packages/platform-core/src/identity/guest-token.ts ===
+// The single exception the rule carries, at its exact path. It is allowed to import node:crypto
+// because the WebCrypto equivalent of createHmac is crypto.subtle.sign, which is async, and
+// making it async turns signGuestToken/verifyGuestToken async too — a contract change ADR-0011
+// §Alternatives 1 rejected, which is why the exception is permanent rather than pending.
+// `_legal.fixture` proves this file on its own leaves the gate green.
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+export const sign = (input: string, key: string): Buffer => createHmac('sha256', key).update(input).digest()
+export const equal = (a: Buffer, b: Buffer): boolean => a.length === b.length && timingSafeEqual(a, b)
+=== file: packages/platform-core/src/identity/service.ts ===
+// The file this issue actually fixed, restored to its broken form. It sits in the same directory
+// as the exception, which is what makes it the fixture worth having: `pathNot` is a regex, and a
+// pattern written loosely enough to be convenient — `identity/` rather than the `$`-anchored file
+// — would exempt this too and the gate would go quietly green on a live defect.
+//
+// The real service already had an injectable `randomBytes`; only the default was wrong. That is
+// the shape to expect, and the reason the rule's advice is "use the port", not "stop needing
+// entropy".
+import { randomBytes } from 'node:crypto'
+
+import { equal, sign } from './guest-token.js'
+
+export const newGuestId = (): Uint8Array => randomBytes(16)
+export const verify = sign
+export const same = equal
+=== file: packages/platform-core/src/index.ts ===
+import { BRAND_KEY } from '@scope/shared'
+
+export const brandKey = BRAND_KEY
+export * from './identity/service.js'

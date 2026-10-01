@@ -12,10 +12,11 @@ that constrain the code. CI gates are described in [`docs/ci-cd.md`](docs/ci-cd.
 ## Paperclip control plane: run this preflight first
 
 Every agent on this board runs under Paperclip, and two control-plane behaviours have each cost a
-full run of work. Both are written up in the
-[`blocked-issue-and-blocker-edges`](.claude/skills/blocked-issue-and-blocker-edges/SKILL.md) skill.
-Read it before you set `blockedByIssueIds` on any issue, and read it in full if either check below
-trips.
+full run of work. If either check below trips, read the skill that owns it in full:
+[`paperclip-run-binding`](.claude/skills/paperclip-run-binding/SKILL.md) for check 1 — the write
+matrix and the compliant exit — and
+[`blocked-issue-and-blocker-edges`](.claude/skills/blocked-issue-and-blocker-edges/SKILL.md) for
+check 2, which you also read before setting `blockedByIssueIds` on any issue.
 
 **1. Confirm your run is task-bound before doing work whose only record would be a comment.**
 
@@ -23,7 +24,7 @@ trips.
 if [ -z "$PAPERCLIP_TASK_ID" ]; then
   # Every comment and status write in this run will 403, on every issue,
   # including one you check out. Take the document + interaction exit instead.
-  # See .claude/skills/blocked-issue-and-blocker-edges/SKILL.md §4.
+  # See .claude/skills/paperclip-run-binding/SKILL.md §4.
 fi
 ```
 

@@ -82,9 +82,14 @@ export interface JoinByCodeFormProps {
  *   state, whereas a character we threw away is a completed loss, and saying so
  *   late is saying so after the wrong room has already opened.
  * - It does **not** veto the press. Six canonical characters is a well-formed
- *   code and the server owns whether that room exists, so blocking submit would
- *   only strand a player whose code really is those six. The message stays up
- *   across the press as the account of what we dropped.
+ *   code and the server owns whether that room exists. This one is a judgement
+ *   call rather than a forced move: an acknowledge-once veto — clear `overflowed`
+ *   on the refused press, send on the second — would strand nobody either. We
+ *   take the non-vetoing form because the shape this is calibrated against is a
+ *   typo, where the six characters are usually the ones the player meant, and a
+ *   press that visibly does nothing is the phone failure mode the enabled-submit
+ *   rule below exists to avoid. The message stays up across the press as the
+ *   account of what we dropped.
  *
  * A server `error` still outranks it: an actual join outcome is more actionable
  * than our note about the input.
@@ -229,16 +234,24 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
         </div>
 
         {/*
-          `role="alert"` rather than a live region on a permanently-mounted
-          node: the message only ever appears in response to a press or a
-          paste, so an announcement on mount is what we want. Icon plus text,
-          never colour alone — which is also what keeps the two tones apart
-          without relying on destructive-red versus muted-grey: a different
-          icon and a different sentence.
+          The `error` tone takes `role="alert"` rather than a polite live region
+          on a permanently-mounted node. The reason this used to give — the
+          message only ever appears in response to a press — is no longer true:
+          `overflowed` fires while typing. The choice stands on a different one.
+          A polite region queues behind the character echo the field is already
+          producing, so its announcement can land after the player has tapped
+          Join; for a character that is already gone, that is too late to be
+          acted on. Icon plus text, never colour alone — which is also what
+          keeps the two tones apart without relying on destructive-red versus
+          muted-grey: a different icon and a different sentence.
 
-          A note takes `role="status"` instead. It is polite rather than
-          assertive because the player has not been stopped from doing
-          anything — the code is in the field and the button works.
+          The `note` tone takes `role="status"` instead, and the paragraph above
+          is the reason it can: nothing has been thrown away. The code is in the
+          field and the button works, so an announcement that lands after the
+          press is not too late — there is no loss to act on before it. Polite
+          rather than assertive is the honest description of that state, and
+          `aria-invalid` stays unset for the same reason.
+
         */}
         {message ? (
           <p
