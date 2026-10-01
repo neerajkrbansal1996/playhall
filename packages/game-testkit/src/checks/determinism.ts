@@ -169,15 +169,21 @@ export function checkReducerPurity<
     for (const step of sample(run.playout.steps, 4)) {
       const original = stableStringify(step.before)
 
+      // Every probe below gets its own detached copy, including this one. The
+      // driver keeps `step.before` pristine; if the check wrote into it, a
+      // mutating `validateAction` would pollute the baseline that the
+      // `applyAction` assertion reads, and the same mutation would be reported
+      // twice — once against the wrong function.
+      const validateProbe = detachedClone(step.before)
       prep.guard(() => {
         server.validateAction(
           contextAt(run.context, step.sequence),
-          step.before,
+          validateProbe,
           step.seatId,
           step.action,
         )
       })
-      recorder.assert(stableStringify(step.before) === original, () => ({
+      recorder.assert(stableStringify(validateProbe) === original, () => ({
         message: 'validateAction mutated the state it was given',
         where,
       }))

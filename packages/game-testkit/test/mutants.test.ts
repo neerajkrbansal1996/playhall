@@ -238,6 +238,36 @@ describe('determinism', () => {
     expect(failedChecks(report)).toEqual(['reducer-purity'])
   })
 
+  /**
+   * PER-273 review finding: the check's *own* probe was the last leak.
+   *
+   * `checkReducerPurity` handed `step.before` to `validateAction` raw, so an
+   * idempotent `validateAction` mutation wrote the stray key into the record
+   * the driver had just kept pristine — and the `applyAction` assertion two
+   * lines later then compared a clone of that polluted state against a
+   * polluted baseline. The mutation was reported twice: once correctly, and
+   * once as a *false* "applyAction mutated the state it was given".
+   *
+   * Attribution is the whole product of this check. A purity failure that
+   * names the wrong function sends a game author to rewrite a reducer that is
+   * already pure.
+   */
+  it('attributes an idempotent validateAction mutation to validateAction alone', () => {
+    const report = mutateTicTacToe({
+      validateAction: (ctx, state, seatId, action) => {
+        // Same shape as the memoisation mutant above, on the other entry point.
+        ;(state as unknown as Record<string, unknown>).memo = 'analysed'
+        return ticTacToeSubject.server.validateAction(ctx, state, seatId, action)
+      },
+    })
+    expectCaughtBy(report, 'reducer-purity')
+    expect(purityMessages(report)).toContain('validateAction mutated the state it was given')
+    // The sharp half. Before the fix this said 'applyAction mutated the state
+    // it was given instead of returning a new one' as well, because the check
+    // itself had polluted the baseline that assertion reads.
+    expect(purityMessages(report)).not.toContain('applyAction mutated')
+  })
+
   it('catches a non-deterministic getViewFor', () => {
     let calls = 0
     const report = mutateTicTacToe({
