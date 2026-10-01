@@ -124,6 +124,7 @@
 // PAPERCLIP_TASK_ID, when present, is excluded automatically — a sweep must
 // never sweep the issue it is running under.
 
+import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 export const LIVE_RUN_STATUSES = new Set(['running', 'queued', 'starting', 'pending', 'dispatched'])
@@ -880,9 +881,30 @@ async function main() {
   if (findings.length > 0 && !opts.exitZero) process.exitCode = 1
 }
 
-// Only sweep when invoked as the CLI. The predicates above are imported
-// directly by tools/ops-sweep, which must not make a single network call.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Only sweep when invoked as the CLI. The predicates above are imported directly
+// by tools/ops-sweep, which must not make a single network call.
+//
+// `process.argv[1]` is the path as typed, but `import.meta.url` is always the
+// *resolved* path, because Node follows symlinks when it loads a module. So the
+// two differ whenever any component of the invocation path is a symlink — on
+// macOS `/tmp` and `/var` are symlinks into `/private`, which is exactly where a
+// scratch or temp dir lives. Comparing them unresolved makes the guard false,
+// `main()` never runs, and the sweep prints nothing and exits 0.
+//
+// A watchdog that silently no-ops while reporting success is the same failure
+// class this whole script exists to catch, so resolve before comparing.
+export function isCliEntrypoint(moduleUrl, entryPath) {
+  if (!entryPath) return false
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(entryPath)).href
+  } catch {
+    // The entry path does not resolve; treat it as "not the CLI" rather than
+    // crashing an import.
+    return false
+  }
+}
+
+if (isCliEntrypoint(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     process.stderr.write(`stranded-issue-sweep failed: ${error.message}\n`)
     process.exit(2)
