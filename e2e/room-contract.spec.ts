@@ -175,10 +175,11 @@ function joinAlert(page: Page) {
 /**
  * A **typed** code is normalised keystroke by keystroke.
  *
- * This is the path that works, and it is asserted separately from the paste path
- * so the two cannot be confused: normalisation runs in `onChange`, so a typed
- * separator is stripped as it arrives and the value never grows past six
- * characters.
+ * Asserted separately from the bulk-insertion path below because the two are
+ * different code paths through the same handler, and they have already diverged
+ * once: a typed separator is stripped as it arrives, so the value never grew
+ * past six and [PER-197](/PER/issues/PER-197) was invisible here while every
+ * pasted shape was broken.
  *
  * Worth running on both engines: this is a controlled input whose value is
  * rewritten inside `onChange`, and `autoCapitalize="characters"` plus the
@@ -196,7 +197,7 @@ test('a typed code is normalised keystroke by keystroke', async ({ page }) => {
   await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
 })
 
-/** A clean 6-character paste is unaffected — isolates the defect below to separators. */
+/** A clean 6-character paste was never affected — isolates the shapes below to the cap. */
 test('a clean pasted code is accepted as-is', async ({ page }) => {
   const input = page.getByTestId(testIds.joinCodeInput)
 
@@ -207,92 +208,139 @@ test('a clean pasted code is accepted as-is', async ({ page }) => {
 
 /**
  * Bulk-insertion shapes that all carry the canonical code `ABC234` and nothing
- * else, paired with what the field **actually** holds today.
+ * else, paired with what the field used to hold before
+ * [PER-197](/PER/issues/PER-197) was fixed.
  *
- * Every one of these normalises to exactly `ABC234` if normalisation runs before
- * the length cap, so there is no judgement call in any row: the `expected`
- * column is the only defensible answer for all of them, and `actual` is measured,
- * not predicted. `actual` is recorded here so the *severity* is in the file
- * rather than only in an issue comment — the loss is not a uniform one character.
+ * Every one of these normalises to exactly `ABC234` once normalisation runs
+ * before the length cap, so there is no judgement call in any row. `was` is kept
+ * from the red version of this table rather than deleted: it is measured, not
+ * predicted, and it is what makes the failure message name the severity instead
+ * of only the mismatch. The loss was never a uniform one character.
  *
  * Measured identically on Chromium and WebKit, and identically via
  * `locator.fill()` and `keyboard.insertText()` (see the note on `fill` below).
  */
 const PASTE_SHAPES = [
   // The original report: a space between the letter and digit groups.
-  { raw: 'abc 234', actual: 'ABC23' },
+  { raw: 'abc 234', was: 'ABC23' },
   // The hyphen form, the other shape `JoinByCodeForm`'s doc comment promises.
-  { raw: 'ABC-234', actual: 'ABC23' },
+  { raw: 'ABC-234', was: 'ABC23' },
   // A *clean* code with one leading space — no separator anywhere, still broken.
-  { raw: ' abc234', actual: 'ABC23' },
+  { raw: ' abc234', was: 'ABC23' },
   // Double-tap-to-select on iOS and Android routinely grabs the surrounding
   // spaces, so this is a likelier shape than the bare 7-character ones above.
-  { raw: '  abc-234  ', actual: 'ABC' },
+  { raw: '  abc-234  ', was: 'ABC' },
   // Six characters of leading whitespace — an indented or quoted chat line —
-  // consumes the entire cap and the field ends up **empty**.
-  { raw: '      abc234', actual: '' },
+  // consumed the entire cap and left the field **empty**.
+  { raw: '      abc234', was: '' },
 ] as const
 
 /**
- * KNOWN DEFECT — a bulk-inserted code is silently truncated, by one character to all of them.
+ * A bulk-inserted code is normalised, not truncated.
  *
- * `maxLength={ROOM_CODE_LENGTH}` is enforced by the browser on the **raw**
- * inserted string, before React's `onChange` can strip anything. So the field
- * keeps only the canonical characters among the *first six raw* characters, and
- * the damage scales with how much non-canonical text precedes the code rather
- * than being a fixed off-by-one: `abc 234` lands as `ABC23`, `  abc-234  ` as
- * `ABC`, and `      abc234` as the empty string.
+ * This table was born red, as five `test.fail()` cases. It used to be that
+ * `maxLength={ROOM_CODE_LENGTH}` on the input was enforced by the browser on the
+ * **raw** inserted string, before React's `onChange` could strip anything — so
+ * the field kept only the canonical characters among the *first six raw*
+ * characters, and the damage scaled with how much non-canonical text preceded
+ * the code rather than being a fixed off-by-one: `abc 234` landed as `ABC23`,
+ * `  abc-234  ` as `ABC`, and `      abc234` as the empty string. None of it was
+ * announced, so a player saw a plausible-looking short code and the friendly
+ * not-found path, with nothing connecting either to their paste.
  *
- * `JoinByCodeForm`'s own doc comment claims "a player who pastes `abc 234` or
- * `ABC-234` from a chat message watches it become `ABC234`". Both of its
- * examples are seven raw characters, so neither does. The `maxLength` rationale
- * — "a 7th character is never part of a code" — is only true of *canonical*
- * characters; a 7th raw character routinely is, once a space or hyphen is
- * stripped. `packages/platform-core/src/rooms/join.ts` already trims its input;
- * the server is tolerant and the field in front of it is not, which is why this
- * only ever surfaces as a wrong value in the input.
+ * The cap now runs inside `onChange`, after `normalizeRoomCode`. The `maxLength`
+ * rationale — "a 7th character is never part of a code" — was only ever true of
+ * *canonical* characters, and that half still holds: see
+ * `a bulk-inserted over-long code is capped` below, which pins it.
  *
- * None of it is announced, so a player sees a plausible-looking short code and
- * the friendly not-found path, with nothing to connect either to their paste.
- * That breaks **zero friction** and **share-first** on the primary acquisition
- * path: a code copied out of a chat app on a phone.
+ * Keep all five shapes rather than collapsing them into one case. A fix written
+ * against the seven-character examples alone would turn a combined test green
+ * while the leading-whitespace shapes stayed broken, and a later refactor can
+ * reintroduce exactly that asymmetry.
  *
  * ## Why `fill()` is a fair model of a paste
  *
  * `locator.fill()` is not a clipboard operation — no spec in this suite reads or
  * writes the real clipboard, because granting clipboard permission is
  * Chromium-only and would cost the WebKit half of the matrix. It is a fair model
- * anyway, and that was measured rather than assumed: every shape above produces
+ * anyway, and that was measured rather than assumed: every shape above produced
  * a byte-identical result under `page.keyboard.insertText()`, which is the same
  * single-operation insertion path the browser uses for a paste and which honours
  * `maxLength` natively. Both engines agree with each other too. A real
  * clipboard paste remains unverified, and is noted as such in the M2 report.
- *
- * ## Why `test.fail()` and not `skip`
- *
- * Skipping hides it. An expected failure keeps the defect executing on every run
- * and makes Playwright report an error the moment it starts passing — which is
- * the signal that the fix landed. One case per shape, deliberately: a single
- * combined test would go green on a fix that handles the seven-character
- * examples and still leaves the leading-whitespace shapes broken.
- *
- * Tracked as [PER-197](/PER/issues/PER-197) (Frontend Engineer). **Remove these
- * annotations in the same commit as the fix**, so the tests start guarding it.
  */
-for (const { raw, actual } of PASTE_SHAPES) {
+for (const { raw, was } of PASTE_SHAPES) {
   test(`a bulk-inserted ${JSON.stringify(raw)} is normalised to the code`, async ({ page }) => {
-    test.fail()
-
     const input = page.getByTestId(testIds.joinCodeInput)
 
     await input.fill(raw)
 
     await expect(
       input,
-      `${JSON.stringify(raw)} should normalise to ${PREVIEW_CODE}; it currently lands as ${JSON.stringify(actual)}`,
+      `${JSON.stringify(raw)} must normalise to ${PREVIEW_CODE}; before PER-197 it landed as ${JSON.stringify(was)}`,
     ).toHaveValue(PREVIEW_CODE)
+    // The state behind the field, not just the `uppercase`-transformed render: a
+    // CSS transform can make a wrong value look right in a screenshot.
+    await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
   })
 }
+
+/**
+ * The length cap survived the move out of `maxLength`.
+ *
+ * Dropping `maxLength` is half of the PER-197 fix; the other half is
+ * `.slice(0, ROOM_CODE_LENGTH)` in `onChange`, and without this case that half
+ * could be deleted with every test above still green. A 7th *canonical*
+ * character genuinely is never part of a code, so it must still be dropped —
+ * that is the part of the old rationale which was right.
+ */
+test('a bulk-inserted over-long code is capped, not just normalised', async ({ page }) => {
+  const input = page.getByTestId(testIds.joinCodeInput)
+
+  await input.fill('abc234xyz')
+
+  await expect(input).toHaveValue(PREVIEW_CODE)
+  await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
+})
+
+/**
+ * The 7th canonical keystroke on an already-full field — the one path React does
+ * not re-render for.
+ *
+ * Every other case here moves the state, so React rewrites the DOM node the
+ * ordinary way and nothing subtle is being exercised. This one does not:
+ * `normalizeRoomCode('ABC2345').slice(0, 6)` returns `ABC234`, which is what
+ * state already holds, so React bails out of rendering entirely and only
+ * react-dom's `restoreControlledState` pulls the input element back to six
+ * characters.
+ *
+ * It needs its own case because the fix is what made it reachable. Under
+ * `maxLength` the DOM could never hold a seventh character in the first place,
+ * so the bail-out never had anything to undo; removing the attribute moves that
+ * correctness onto a react-dom implementation detail. If that restore ever stops
+ * covering us, this is the only test that would notice — the field would show
+ * `ABC2345` while `data-value` still read `ABC234`, which is precisely the
+ * "visible value and request disagree" failure `JoinByCodeForm` exists to
+ * prevent. Asserting both is the point; either alone would pass.
+ *
+ * The dropped character is deliberately silent, which is the behaviour as
+ * specified today — a real code is always six. That silence is separately
+ * tracked as [PER-214](/PER/issues/PER-214); if it is ever announced, this test
+ * gains an assertion rather than losing one.
+ */
+test('a 7th canonical keystroke on a full field is dropped without desyncing', async ({ page }) => {
+  const input = page.getByTestId(testIds.joinCodeInput)
+
+  await input.fill(PREVIEW_CODE)
+  await expect(input).toHaveValue(PREVIEW_CODE)
+
+  // Typed, not filled: `fill()` replaces the value in one operation and would
+  // never produce the already-at-the-cap transition this is about.
+  await input.pressSequentially('5')
+
+  await expect(input).toHaveValue(PREVIEW_CODE)
+  await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
+})
 
 /**
  * A short code is rejected with an announced message, and submit stays enabled.
