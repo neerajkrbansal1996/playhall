@@ -1,13 +1,29 @@
 /**
- * CTO review probe for PR #17 (PER-59).
+ * Reconnect and restart must not start a clock the game state says is stopped.
  *
- * These tests assert the behaviour I believe is CORRECT, so a failure here is a
- * defect in the timer service, not in the probe. All four fail against 58848b5.
- * Drop into packages/platform-core/test/ and use as the regression suite.
+ * Four invariants, each one a defect the first review pass found. They share a
+ * root cause: a pause used to record nothing about *what it froze*, so a resume
+ * started anything merely stopped — and "is this timer running" was being read
+ * as the answer to "is this seat to move".
+ *
+ *   1. A reconnect starts only the timers that seat's disconnect actually froze.
+ *   2. A drained restart (`chargeDowntime: false`) re-anchors running clocks and
+ *      leaves paused ones paused. This is the deploy path: getting it wrong
+ *      un-pauses every paused clock in every live room.
+ *   3. The client renders a `simple`-delay clock the way the server computes it.
+ *      The deadline has the unspent delay baked in, so the client has to take it
+ *      back out or every clock reads ~`delayMs` too high for the first seconds
+ *      of every turn.
+ *   4. A flag-fall is never swallowed by a turn switch. Live the scheduler polls
+ *      first; in replay nothing does, so the same seed and inputs would end in a
+ *      flag-fall live and a position on replay.
+ *
+ * Origin: CTO review of PR #17, [PER-59](/PER/issues/PER-59) and the fix issue
+ * [PER-70](/PER/issues/PER-70).
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService, restoreTimerService } from '../src/timers/service.js'
 import { TimerSyncTracker } from '../src/timers/sync.js'
@@ -25,8 +41,8 @@ const SPECS: readonly TimerSpec[] = [
   { id: 'clock:black', kind: 'chess-clock', description: 'black', pausesOnDisconnect: true },
 ]
 
-function chess(startMs = 1_000_000): { clock: ManualClock; service: TimerService } {
-  const clock = createManualClock(startMs)
+function chess(startMs = 1_000_000): { clock: MutableClock; service: TimerService } {
+  const clock = fixedClock(startMs)
   const service = new TimerService({
     matchId: MATCH,
     clock,
@@ -65,7 +81,7 @@ describe('BLOCKING 2 — a drained restart must not start clocks that were pause
     const snapshot = JSON.parse(JSON.stringify(service.snapshot())) as unknown
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(clock.now() + 45_000),
+      clock: fixedClock(clock.now() + 45_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
       chargeDowntime: false,
@@ -76,7 +92,7 @@ describe('BLOCKING 2 — a drained restart must not start clocks that were pause
   })
 
   it('restore(chargeDowntime: false) does not un-pause a host-paused room', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -88,7 +104,7 @@ describe('BLOCKING 2 — a drained restart must not start clocks that were pause
     const snapshot = JSON.parse(JSON.stringify(service.snapshot())) as unknown
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(clock.now() + 60_000),
+      clock: fixedClock(clock.now() + 60_000),
       scheduler: createManualScheduler(),
       chargeDowntime: false,
     })
@@ -99,7 +115,7 @@ describe('BLOCKING 2 — a drained restart must not start clocks that were pause
 
 describe('BLOCKING 3 — the client must render a simple-delay clock like the server', () => {
   it('tracker.views() agrees with service.remainingMs() during the delay window', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -115,7 +131,7 @@ describe('BLOCKING 3 — the client must render a simple-delay clock like the se
     clock.advance(1_000) // 2 s of delay still unspent
 
     // Zero-latency, zero-offset client so only the formula is under test.
-    const tracker = new TimerSyncTracker({ clock: createManualClock(clock.now()) })
+    const tracker = new TimerSyncTracker({ clock: fixedClock(clock.now()) })
     tracker.applySync(service.sync(), {
       requestedAtMs: clock.now(),
       receivedAtMs: clock.now(),
@@ -127,7 +143,7 @@ describe('BLOCKING 3 — the client must render a simple-delay clock like the se
 
 describe('CONTRACT — a flag-fall must not be swallowed by the turn switch', () => {
   it('switching away from a seat whose budget is gone still reports an expiry', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const expiries: string[] = []
     const service = new TimerService({
       matchId: MATCH,

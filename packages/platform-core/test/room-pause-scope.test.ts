@@ -1,12 +1,22 @@
 /**
- * CTO re-review probe for PR #17 at 2105adc (PER-76).
+ * A hold is a property of a scope — the room, the seat, the timer id — not a
+ * stamp on whichever records happened to be running when the pause ran.
  *
- * Every test here asserts the behaviour I believe is CORRECT, so a failure is a
- * defect in the timer service, not in the probe. All six fail against 2105adc.
+ * Five invariants from the second review pass, all faces of the same defect:
+ *
+ *   A. A room-wide pause covers a timer created *during* it.
+ *   B. A disconnected seat's clock is not started by the opponent's move.
+ *   C. `switchTurnTo` ends the outgoing seat's turn — and credits its
+ *      increment — whether or not that clock was running.
+ *   D. An expiry drained from inside a mutation is measured at the mutation
+ *      instant, not the wall clock, so a replay reproduces `latenessMs`.
+ *   E. The drain cap cannot silently leave a record at zero un-expired.
+ *
+ * Origin: CTO review pass 2 of PR #17, [PER-76](/PER/issues/PER-76).
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService } from '../src/timers/service.js'
 
@@ -23,8 +33,8 @@ const SPECS: readonly TimerSpec[] = [
   { id: 'clock:black', kind: 'chess-clock', description: 'black', pausesOnDisconnect: true },
 ]
 
-function chess(startMs = 1_000_000): { clock: ManualClock; service: TimerService } {
-  const clock = createManualClock(startMs)
+function chess(startMs = 1_000_000): { clock: MutableClock; service: TimerService } {
+  const clock = fixedClock(startMs)
   const service = new TimerService({
     matchId: MATCH,
     clock,
@@ -56,7 +66,7 @@ describe('A — a room-wide pause must cover the timer that starts during it', (
   })
 
   it('a turn timer armed during a host pause does not count down through it', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -110,7 +120,7 @@ describe('C — switchTurnTo must not lose the increment on a held clock', () =>
 
 describe('D — poll() fired from a mutation must use the mutation instant', () => {
   it('latenessMs is measured against the issued instant, not the wall clock', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const fired: number[] = []
     const service = new TimerService({
       matchId: MATCH,
@@ -133,7 +143,7 @@ describe('D — poll() fired from a mutation must use the mutation instant', () 
 
 describe('E — the drain cap must not silently violate the stated invariant', () => {
   it('a spent budget is never left un-expired after a mutator returns', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     let rearm = 0
     const service = new TimerService({
       matchId: MATCH,

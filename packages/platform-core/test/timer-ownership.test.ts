@@ -1,19 +1,22 @@
 /**
- * CTO review-pass-4 probes for PR #17 at 8e66ffc (PER-108).
+ * A timer's `seatId` is ownership, and a re-arm must carry the game's intent.
  *
- * Two findings, both asserted here as the behaviour I believe is CORRECT, so a
- * failure is a defect in the timer service and not in the probe.
+ *   - `set` threads `options.seatId` on the re-arm branch as well as the create
+ *     branch, so `setTimer(MOVE_TIMER, 30_000, nextSeat)` — the pattern the SDK
+ *     documents — actually moves the timer to the next mover. Keeping the first
+ *     mover's seat forever means every seat-scoped decision about that timer
+ *     points at the wrong player: the mover's own deadline counts down through
+ *     their disconnect, and the non-mover dropping freezes it.
+ *   - `undefined` means "leave ownership alone" on the direct `set` API, so a
+ *     `set` that only extends a deadline cannot disown the timer.
+ *   - The `version: 1` read path refuses a corrupt multi-runner snapshot
+ *     instead of falling through a `??` chain into its second inference rule.
  *
- * 1. BLOCKING — `set()` passed `options.seatId` only on the create branch, so a
- *    re-armed turn timer kept the first mover's seat forever. Every seat-scoped
- *    decision about that timer then pointed at the wrong player.
- * 2. Non-blocking — `readV1Scopes` chained its two inference rules with `??`,
- *    which cannot distinguish "nothing ran" from "several ran", so the corrupt
- *    multi-runner shape rule 1 promises to refuse fell through into rule 2.
+ * Origin: CTO review pass 4 of PR #17, [PER-108](/PER/issues/PER-108).
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId, setTimer } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { createManualClock } from '../src/timers/clock.js'
+import { fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService, restoreTimerService } from '../src/timers/service.js'
 
@@ -30,7 +33,7 @@ const SPECS: readonly TimerSpec[] = [
 ]
 
 function newService(): { service: TimerService; advance: (ms: number) => void } {
-  const clock = createManualClock(1_000_000)
+  const clock = fixedClock(1_000_000)
   const service = new TimerService({
     matchId: MATCH,
     clock,
@@ -223,7 +226,7 @@ describe('the version:1 read must refuse a corrupt snapshot, not fall through', 
         ],
       },
       {
-        clock: createManualClock(2_000_000),
+        clock: fixedClock(2_000_000),
         scheduler: createManualScheduler(),
         specs: SPECS,
       },
@@ -247,7 +250,7 @@ describe('the version:1 read must refuse a corrupt snapshot, not fall through', 
         ],
       },
       {
-        clock: createManualClock(2_000_000),
+        clock: fixedClock(2_000_000),
         scheduler: createManualScheduler(),
         specs: SPECS,
       },

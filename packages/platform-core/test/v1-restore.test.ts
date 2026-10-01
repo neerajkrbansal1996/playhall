@@ -1,12 +1,20 @@
 /**
- * CTO review-pass-3 probe for PR #17 at c8ca7ef (PER-96).
+ * The pre-hold snapshot read path fails closed rather than guessing.
  *
- * Every test here asserts the behaviour I believe is CORRECT, so a failure is a
- * defect in the timer service, not in the probe. All five fail against c8ca7ef.
+ * A `version: 1` snapshot has no scopes; the holds were stamped on records. So
+ * `restore` recovers the scopes from the stamps — and must recover only what
+ * the old build could actually express. Where the stamps are ambiguous (two
+ * running clocks, two seats carrying the same hold) it names nobody, because
+ * naming the wrong mover burns the wrong player's clock for a whole turn.
+ *
+ * Also here: the drain invariant holds for *every* mutator rather than most of
+ * them, and `onDrainExhausted` cannot re-enter the drain it was called from.
+ *
+ * Origin: CTO review pass 3 of PR #17, [PER-96](/PER/issues/PER-96).
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { createManualClock } from '../src/timers/clock.js'
+import { fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { type TimerExpiry, TimerService, restoreTimerService } from '../src/timers/service.js'
 
@@ -84,7 +92,7 @@ const V1_TWO_HELD_CLOCKS = {
 describe('the version:1 read path must not guess the seat to move', () => {
   it('reads the seat to move as the seat v1 actually had on move', () => {
     const restored = restoreTimerService(V1_TWO_HELD_CLOCKS, {
-      clock: createManualClock(2_000_000),
+      clock: fixedClock(2_000_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
     })
@@ -94,7 +102,7 @@ describe('the version:1 read path must not guess the seat to move', () => {
 
   it('never starts the returning seat’s clock on the mover’s turn', () => {
     const restored = restoreTimerService(V1_TWO_HELD_CLOCKS, {
-      clock: createManualClock(2_000_000),
+      clock: fixedClock(2_000_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
     })
@@ -110,7 +118,7 @@ describe('the version:1 read path must not guess the seat to move', () => {
 describe('the drain invariant must hold for every mutator, not most of them', () => {
   it('delivers an expiry that was already due when clear() is called', () => {
     const fired: TimerExpiry[] = []
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -129,7 +137,7 @@ describe('the drain invariant must hold for every mutator, not most of them', ()
 
   it('delivers an expiry that was already due when declarePlayerClock is called', () => {
     const fired: TimerExpiry[] = []
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -147,7 +155,7 @@ describe('the drain invariant must hold for every mutator, not most of them', ()
 
 describe('onDrainExhausted must not be able to re-enter the drain', () => {
   it('survives a handler that mutates from the exhaustion callback', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     let exhausted = 0
     // A buggy game: re-arms an already-due timer on every expiry, and reacts to
     // the exhaustion report by re-arming again. `#firing` guards `onExpire`
