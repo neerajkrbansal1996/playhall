@@ -54,6 +54,7 @@ so per decision rather than downgrading the whole document.
 | [0010](./0010-timer-driven-unrecorded-endings.md)   | Timer-driven unrecorded endings in conformance    | Accepted                                                                                                                                                                 |
 | [0011](./0011-platform-core-edge-importability.md)  | `platform-core` edge-importability per entrypoint | Accepted; the `/edge` entrypoint itself is deferred until the first edge consumer (§Decision part 2)                                                                     |
 | [0012](./0012-accepted-subset-of-offered.md)        | Accepted actions are a subset of offered actions  | Accepted; the real-time `inputCodec` half is owed in M6 (§Decision part 4)                                                                                               |
+| [0013](./0013-match-log-entry-shape.md)             | The match-log entry shape                         | Proposed — CTO review; owns the match log, and supersedes ADR-0001 §6.1's "ordered action log" term                                                                      |
 
 Numbers are reserved as soon as an ADR is assigned, so two people drafting concurrently cannot
 collide on one. A reserved row with no file means someone is writing it.
