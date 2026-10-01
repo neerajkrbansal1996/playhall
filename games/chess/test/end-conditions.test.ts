@@ -48,7 +48,6 @@ describe('checkmate', () => {
         chessReason: 'checkmate',
         description: 'Black wins by checkmate',
         moves: 4,
-        recorded: true,
       },
     })
   })
@@ -129,7 +128,6 @@ describe('threefold repetition', () => {
         chessReason: 'threefold_repetition',
         description: 'Draw by threefold repetition',
         moves: 8,
-        recorded: true,
       },
     })
   })

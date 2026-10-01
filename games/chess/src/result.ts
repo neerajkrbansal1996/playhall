@@ -1,6 +1,8 @@
 import { opponent, type ChessEnding, type Color, type ColorAssignment } from './rules/types.js'
 import {
+  isRecordedResult,
   SCORE,
+  unrecordedStandings,
   type MatchResult,
   type ResultReason,
   type SeatOutcome,
@@ -13,15 +15,34 @@ export type ScoreLine = '1-0' | '0-1' | '1/2-1/2' | '*'
 
 const COLOR_NAME: Record<Color, string> = { w: 'White', b: 'Black' }
 
-interface Verdict {
+interface VerdictBase {
   /** The SDK's coarse reason. The exact chess reason travels in `detail`. */
   readonly reason: ResultReason
-  /** Winning colour, `null` for a draw, `undefined` when nothing is recorded. */
-  readonly winner: Color | null | undefined
   readonly description: string
+}
+
+/** An ending that ranks both seats: someone won, or both drew. */
+interface RankedVerdict extends VerdictBase {
+  /** Winning colour, or `null` for a draw. */
+  readonly winner: Color | null
   /** What the losing seat is recorded as. Differs for a player who walked away. */
   readonly loserOutcome: SeatOutcome
 }
+
+/**
+ * An ending that ranks nobody: the abort arm, and the only one.
+ *
+ * `loserOutcome` is *absent* here rather than set to a value nothing reads. An
+ * abort has no loser, so any value would be dead — and a dead `'loss'` sitting
+ * in the abort arm reads like a decision to record one. Splitting the type
+ * makes the compiler, not a comment, guarantee that no seat outcome can be
+ * derived from a match that did not count (ADR-0006 §1/§2).
+ */
+interface UnrecordedVerdict extends VerdictBase {
+  readonly winner: undefined
+}
+
+type Verdict = RankedVerdict | UnrecordedVerdict
 
 /**
  * Turn an ending into a verdict.
@@ -95,7 +116,6 @@ function verdictOf(ending: ChessEnding): Verdict {
           ending.cause === 'first_move_timeout'
             ? 'Aborted — no first move within 30 seconds'
             : 'Aborted before both players moved',
-        loserOutcome: 'loss',
       }
   }
 }
@@ -123,40 +143,67 @@ function standingsFor(
 }
 
 /**
- * The match result, or `null` while the game is still running.
+ * The result for a finished match.
  *
- * Non-null is the platform's only signal that the match is over, so this must
- * stay `null` for a claimable-but-unclaimed threefold or fifty-move position.
+ * Shared by `getResult` and `scoreLine` so the PGN result token and the
+ * platform's result can never disagree about whether a match counted.
  *
- * An abort returns `reason: 'aborted'` with **empty standings**: the match must
- * not be recorded, and no seat won, lost or drew it. `detail.recorded` says so
- * explicitly for anything reading the match log.
+ * `detail` carries chess's own three keys — `chessReason`, `description` and
+ * `moves` — and nothing else. It notably does **not** carry a `recorded` flag:
+ * per ADR-0006 §2 a game never authors "did this count". That is a platform
+ * fact about a platform record, answered once by `isRecordedResult(result)`,
+ * which the SDK derives from `reason`. The keys here are version-pinned public
+ * surface; see `games/chess/README.md`.
  */
-export function getResult(state: ChessMatchState): MatchResult | null {
-  if (state.ending === null) return null
-
-  const { reason, winner, description, loserOutcome } = verdictOf(state.ending)
-  const aborted = winner === undefined
+function resultOf(state: ChessMatchState, ending: ChessEnding): MatchResult {
+  const verdict = verdictOf(ending)
 
   return {
-    reason,
-    standings: aborted ? [] : standingsFor(state.colors, winner, loserOutcome),
+    reason: verdict.reason,
+    // `winner === undefined` narrows to the abort arm, which carries no
+    // `loserOutcome` to read. Empty standings is the decision ADR-0006 §1
+    // sanctions for a match that did not count, not an oversight: no seat won,
+    // lost or drew it, so there is nothing to rank.
+    standings:
+      verdict.winner === undefined
+        ? unrecordedStandings()
+        : standingsFor(state.colors, verdict.winner, verdict.loserOutcome),
     detail: {
-      chessReason: state.ending.reason,
-      description,
+      chessReason: ending.reason,
+      description: verdict.description,
       moves: state.moves.length,
-      recorded: !aborted,
     },
   }
 }
 
-/** The PGN result token for a match: `*` while unfinished or aborted. */
+/**
+ * The match result, or `null` while the game is still running.
+ *
+ * Non-null is the platform's only signal that the match is over, so this must
+ * stay `null` for a claimable-but-unclaimed threefold or fifty-move position.
+ */
+export function getResult(state: ChessMatchState): MatchResult | null {
+  if (state.ending === null) return null
+  return resultOf(state, state.ending)
+}
+
+/**
+ * The PGN result token for a match: `*` while unfinished or aborted.
+ *
+ * Read off the same `MatchResult` the platform gets, so the PGN header and the
+ * standings cannot disagree. PGN's `*` is literally "no result", which makes it
+ * the token for exactly the matches `isRecordedResult` says did not count —
+ * asking the SDK beats re-testing the abort arm here (ADR-0006 §2).
+ */
 export function scoreLine(state: ChessMatchState): ScoreLine {
   if (state.ending === null) return '*'
-  const { winner } = verdictOf(state.ending)
-  if (winner === undefined) return '*'
-  if (winner === null) return '1/2-1/2'
-  return winner === 'w' ? '1-0' : '0-1'
+
+  const result = resultOf(state, state.ending)
+  if (!isRecordedResult(result)) return '*'
+
+  const winner = result.standings.find((standing) => standing.outcome === 'win')
+  if (winner === undefined) return '1/2-1/2'
+  return winner.seatId === state.colors.w ? '1-0' : '0-1'
 }
 
 /** Short termination phrase for the PGN `Termination` header and the UI banner. */

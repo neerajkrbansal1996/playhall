@@ -65,7 +65,6 @@ describe('timeout', () => {
         chessReason: 'timeout',
         description: 'Black ran out of time',
         moves: 0,
-        recorded: true,
       },
     })
   })
@@ -89,7 +88,6 @@ describe('timeout', () => {
         chessReason: 'timeout_vs_insufficient_material',
         description: 'Black ran out of time, but White cannot checkmate',
         moves: 0,
-        recorded: true,
       },
     })
   })

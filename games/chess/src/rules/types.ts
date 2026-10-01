@@ -31,7 +31,7 @@ export interface MoveInput {
  *
  * `abort` is deliberately in this union even though it records no result: the
  * match still has to reach a terminal state, and the result layer is what turns
- * it into `status: 'no_result'`.
+ * it into `reason: 'aborted'` with `unrecordedStandings()` (ADR-0006 §1).
  */
 export type ChessEnding =
   // --- decided over the board ---
