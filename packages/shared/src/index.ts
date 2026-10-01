@@ -9,6 +9,7 @@ export {
 export {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  extractRoomCode,
   isValidRoomCode,
   normalizeRoomCode,
 } from './room-code'

@@ -3,7 +3,12 @@
 import { useId, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 
-import { ROOM_CODE_LENGTH, isValidRoomCode, normalizeRoomCode } from '@playhall/shared'
+import {
+  ROOM_CODE_LENGTH,
+  extractRoomCode,
+  isValidRoomCode,
+  normalizeRoomCode,
+} from '@playhall/shared'
 
 import { Button } from '@/components/ui/button'
 import { testIds } from '@/lib/testids'
@@ -92,6 +97,43 @@ export interface JoinByCodeFormProps {
  * A server `error` still outranks it: an actual join outcome is more actionable
  * than our note about the input.
  *
+ * ## Why a pasted invite link yields its code ([PER-242](/PER/issues/PER-242))
+ *
+ * "Normalise, then cap" has one failure mode that the announcement above cannot
+ * repair: when the dropped characters are at the **end**, the six that survive
+ * are not the code. `https://example.test/join/ABC234` kept `HTTPSE`, and
+ * `Code: ABC234` kept `CDEABC` — both well-formed codes, so nothing downstream
+ * could tell. The player was told characters were dropped, but not that the ones
+ * kept were wrong, because the field could not know. And the invite link is the
+ * *primary* share artifact: every lobby has a link as well as a code, so "tap
+ * the link text, paste it" is the most likely paste there is.
+ *
+ * So `onChange` tries `extractRoomCode` before the cap. **The rule is: exactly
+ * one run of exactly six alphabet characters, where a run is a maximal stretch
+ * of `ROOM_CODE_ALPHABET` characters after upper-casing.** It lives in
+ * `packages/shared`, next to the alphabet it depends on, where its own doc
+ * comment carries the reasoning. Three consequences are worth having here:
+ *
+ * - **No URL parsing and no host.** `:` and `/` are boundaries like any other
+ *   non-alphabet character, so `https://` is just a five-run. The rule therefore
+ *   hard-codes no domain and survives the open naming decision untouched; it
+ *   also works on a link whose scheme a chat app stripped, which URL parsing
+ *   would not.
+ * - **`ABC2345` is unaffected.** Seven canonical characters are one seven-run,
+ *   not a six-run, so extraction declines and the cap still drops the 7th and
+ *   announces it. That pairing is the whole reason the rule matches *whole runs*
+ *   rather than searching for a six-character substring.
+ * - **A successful extraction is silent.** The overflow note says "extra
+ *   characters were not used — check the code you were sent"; once the field
+ *   shows the code the player was actually sent, that is a false alarm, and it
+ *   was being raised on `ABC234 join me` — a paste that joins the right room —
+ *   before this. The cap's announcement is unchanged for everything extraction
+ *   declines.
+ *
+ * Ambiguity is not guessed at. Two six-runs in one paste return `undefined`, so
+ * the input falls through to the cap and the player is told something was
+ * dropped rather than shown a coin flip.
+ *
  * The submit button is **never disabled for validation**. A disabled control
  * with no explanation is the worst of both worlds on a phone: nothing happens
  * on tap and no assistive technology announces why. Pressing it with a short
@@ -173,15 +215,26 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
             aria-invalid={message ? true : undefined}
             aria-describedby={message ? messageId : undefined}
             onChange={(event) => {
-              // Normalise first, then cap. A 7th *canonical* character is still
-              // never part of a code, so it is still dropped — but a 7th *raw*
-              // character routinely is one, once a separator is gone, which is
-              // why the overflow flag reads the canonical length and not
-              // `event.target.value.length`.
+              setTooShort(false)
+
+              // Extraction first: an invite link or a chat sentence carrying one
+              // six-run yields that run, and nothing was dropped that the player
+              // needed, so there is nothing to announce.
+              const extracted = extractRoomCode(event.target.value)
+              if (extracted !== undefined) {
+                setCode(extracted)
+                setOverflowed(false)
+                return
+              }
+
+              // Otherwise normalise, then cap. A 7th *canonical* character is
+              // still never part of a code, so it is still dropped — but a 7th
+              // *raw* character routinely is one, once a separator is gone,
+              // which is why the overflow flag reads the canonical length and
+              // not `event.target.value.length`.
               const canonical = normalizeRoomCode(event.target.value)
               setCode(canonical.slice(0, ROOM_CODE_LENGTH))
               setOverflowed(canonical.length > ROOM_CODE_LENGTH)
-              setTooShort(false)
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
           />
