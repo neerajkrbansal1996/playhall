@@ -160,6 +160,28 @@ const ZOD_MODULES = '^zod($|/)|(^|/)node_modules/zod/'
 const SDK_PURE_SETTINGS = '^packages/game-sdk/src/settings-form\\.ts$'
 const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
 
+/**
+ * The one file in `packages/platform-core/src/` allowed to reach a Node builtin.
+ *
+ * **Permanent and governed by ADR-0011 §Decision part 4** — not a temporary carve-out expiring on
+ * a follow-up. `guest-token.ts` signs with `node:crypto`'s `createHmac`/`timingSafeEqual`; the
+ * WebCrypto equivalent is `crypto.subtle.sign`, which is async, so swapping it turns
+ * `signGuestToken` / `verifyGuestToken` async and ripples through
+ * `GuestIdentityService.issue()`/`authenticate()`. ADR-0011 §Alternatives 1 rejected that swap, and
+ * leads with the objection that actually settles it: converting this file would not make the
+ * default entrypoint edge-importable either, because `identity/service.ts` sits in the same barrel
+ * subtree and the entrypoint's whole graph is what decides. On the property it is named for the
+ * swap buys nothing, while making `issue()`/`authenticate()` permanently async. Reversibility is
+ * the second reason, not the first. So the import stays and the exception stays with it.
+ *
+ * The exception is a single `$`-anchored path on purpose. The policy the rule enforces — "the list
+ * is short enough to read" — is only defensible while the list is one entry, so a second entry is
+ * never a mechanical fix: it trips ADR-0011's revisit trigger #2 and needs that ADR amended, not
+ * this line extended. Port the capability instead (see the rule's comment below).
+ */
+const PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS =
+  '^packages/platform-core/src/identity/guest-token\\.ts$'
+
 module.exports = {
   forbidden: [
     {
@@ -280,6 +302,33 @@ module.exports = {
         'genuinely need a capability, it belongs behind an SDK-provided ctx facility, decided ' +
         'by ADR.',
       from: { path: '^games/' },
+      to: { dependencyTypes: ['core'] },
+    },
+    {
+      name: 'no-platform-core-node-builtins',
+      severity: 'error',
+      comment:
+        'This rule does not say "platform-core reaches no Node builtin" — ADR-0011 §1 shows we ' +
+        'do not want that (Workers support node:crypto in full) and §3 shows a path denylist ' +
+        'cannot express it. What it says is: every Node builtin in packages/platform-core/src is ' +
+        'in the exception list above, and that list is short enough to read. One entry, named, ' +
+        'governed by an ADR. A new node: import at module top level is load-bearing for a whole ' +
+        'entrypoint, because src/index.ts re-exports every subtree, and nothing else goes red: ' +
+        'the unit tests run on Node, typecheck is clean, and the break surfaces at build time in ' +
+        'a consumer CI does not exercise (ADR-0011 §2 — webpack says UnhandledSchemeError, never ' +
+        '"edge runtime"). That gap is why this is a rule and not a comment. The fix is to take ' +
+        'the capability as a port instead of importing it: the RandomSource / Clock / IdSource ' +
+        'interfaces in runtime.ts exist for exactly this, and webCryptoRandomSource() is the ' +
+        'documented default. If the capability has no WebCrypto equivalent with the same ' +
+        'signature (async vs sync counts as "no equivalent"), do not make the identity API async ' +
+        'to satisfy a bundler: an edge consumer gets @playhall/platform-core/edge, a second ' +
+        'entrypoint whose graph reaches no Node builtin, specified surface-by-surface in ' +
+        'ADR-0011 §Decision part 2 and deliberately not built until a consumer exists. Build ' +
+        'that to spec, or amend ADR-0011 — do not add yourself to the exception above.',
+      from: {
+        path: '^packages/platform-core/src/',
+        pathNot: PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS,
+      },
       to: { dependencyTypes: ['core'] },
     },
     {

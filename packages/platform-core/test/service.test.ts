@@ -338,3 +338,44 @@ describe('clearCookie', () => {
     expect(header).toContain('HttpOnly')
   })
 })
+
+/**
+ * Every other test in this file injects `randomBytes`, which is what makes tokens
+ * byte-reproducible — and also means the *default* was never executed. It was
+ * `node:crypto`'s `randomBytes`; it is now the package's `RandomSource` port, so
+ * the Node-builtin list in `platform-core/src` stays at one named, ADR-governed
+ * entry (PER-162; ADR-0011 §Decision part 4) — not to make the package
+ * edge-importable, which ADR-0011 §3 shows it is not and cannot be.
+ *
+ * That swap is exactly the kind a passing suite can miss. The default is written
+ * as `webCryptoRandomSource().randomBytes`, a method pulled off its object: if it
+ * ever came to depend on `this`, or if the global `crypto` were absent on a
+ * target, `issue()` would throw at the first mint and nothing here would notice.
+ */
+describe('default entropy source', () => {
+  const uninjected = (): GuestIdentityService => createGuestIdentityService({ keyring: KEYRING })
+
+  it('mints a working guest with no randomBytes injected', () => {
+    const { identity, token, setCookie } = issueOrThrow(uninjected(), {
+      now: NOW_MS,
+      requestedName: 'Swift Otter',
+    })
+
+    expect(identity.guestId).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    expect(token.split('.')).toHaveLength(4)
+
+    // Round-trips through verification, so the id the default produced is one the
+    // token schema accepts — not merely a non-empty string.
+    const back = uninjected().authenticate(asRequestCookie(setCookie), NOW_MS)
+    expect(back.ok).toBe(true)
+    if (back.ok) expect(back.value.guestId).toBe(identity.guestId)
+  })
+
+  it('does not repeat a guest id', () => {
+    const service = uninjected()
+    const ids = new Set(
+      Array.from({ length: 64 }, () => issueOrThrow(service, { now: NOW_MS }).identity.guestId),
+    )
+    expect(ids.size).toBe(64)
+  })
+})

@@ -11,8 +11,8 @@
  * what makes "no accounts, no personal data" true rather than aspirational.
  */
 
-import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { type PlayerId, type Result, asPlayerId, err, ok } from '@playhall/game-sdk'
+import { webCryptoRandomSource } from '../runtime.js'
 import { type GuestAvatar, avatarFor } from './avatar.js'
 import {
   type GuestCookieOptions,
@@ -89,7 +89,24 @@ export interface IssuedGuestIdentity {
   readonly setCookie: string
 }
 
-/** Injectable so tests are deterministic. Defaults to `node:crypto`. */
+/**
+ * Injectable so tests are deterministic. Defaults to `webCryptoRandomSource()`
+ * — the package's `RandomSource` port, backed by the global Web Crypto API.
+ *
+ * A port rather than a direct `node:crypto` import — but *not* because this
+ * package is edge-importable. It is not, and ADR-0011 §3 explains why that claim
+ * cannot be made of a package at all: edge-importability is a property of an
+ * entrypoint's module graph, and `src/index.ts` re-exports a subtree that reaches
+ * `node:crypto` through `guest-token.ts`. The default entrypoint targets Node and
+ * Cloudflare Workers, which support `node:crypto` in full (§1).
+ *
+ * The two reasons that do hold: entropy is an ambient capability, and a port is
+ * the right shape for one — it is what makes this file testable without patching
+ * a global. And `no-platform-core-node-builtins` keeps the Node-builtin list in
+ * `platform-core/src` at a single named, ADR-governed entry, which is only worth
+ * anything while the list stays short enough to read. Enforced by that rule, not
+ * by this comment.
+ */
 export type RandomBytes = (size: number) => Uint8Array
 
 export interface GuestIdentityServiceConfig {
@@ -184,7 +201,7 @@ function identityFromClaims(claims: GuestClaims): GuestIdentity {
 export function createGuestIdentityService(
   config: GuestIdentityServiceConfig,
 ): GuestIdentityService {
-  const randomBytes = config.randomBytes ?? ((size: number) => nodeRandomBytes(size))
+  const randomBytes = config.randomBytes ?? webCryptoRandomSource().randomBytes
   const ttlSeconds = config.ttlSeconds ?? GUEST_TOKEN_TTL_SECONDS
   const cookieOptions: GuestCookieOptions = { maxAgeSeconds: ttlSeconds, ...config.cookie }
 
