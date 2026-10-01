@@ -60,15 +60,27 @@ export type {
   RoomSeatSlot,
   RoomStatus,
   RoomVisibility,
+  SeatReservation,
 } from './rooms/types.js'
 export {
+  emptySeat,
   freeSeatIndex,
   isRoomMember,
   isRoomTerminal,
+  occupiedSeats,
   reviseRoom,
   seatIndexOf,
+  seatReady,
   seatedPlayerIds,
 } from './rooms/types.js'
+
+export type {
+  GuardedChange,
+  GuardedMutationResult,
+  RoomWriter,
+  RoomWriterOptions,
+} from './rooms/mutate.js'
+export { CAS_ATTEMPTS, CAS_BACKOFF_MS, createRoomWriter } from './rooms/mutate.js'
 
 export type { RoomLifecycleAction, RoomLifecyclePolicy } from './rooms/lifecycle.js'
 export {
@@ -106,6 +118,98 @@ export {
 
 export type { RoomStore } from './rooms/store.js'
 export { createInMemoryRoomStore } from './rooms/store.js'
+
+/* Seats, teams, host controls, ready checks, start rules, rematch (PER-13). */
+
+export type {
+  LateJoinMode,
+  RematchRotation,
+  SeatingDeclarations,
+  SeatingPolicy,
+  StartMode,
+  TeamMode,
+} from './seats/policy.js'
+export {
+  AUTO_START_COUNTDOWN_MS,
+  LATE_JOIN_MODES,
+  REMATCH_ROTATIONS,
+  START_MODES,
+  seatingPolicyFor,
+  teamIdsFor,
+} from './seats/policy.js'
+
+export {
+  assignTeams,
+  isBalanced,
+  moveToTeam,
+  rotateOccupants,
+  targetTeamSizes,
+  teamSizes,
+} from './seats/teams.js'
+
+export type { HostActionRejection } from './seats/host.js'
+export {
+  HOST_ACTION_REJECTIONS,
+  canCloseLobby,
+  canKick,
+  canTransferHost,
+  hostSuccessionRevision,
+  isHost,
+  resolveAbsentHostTransfer,
+  resolveHostSuccession,
+} from './seats/host.js'
+
+export {
+  assignSeat,
+  clearReady,
+  readyAll,
+  reserveSeatForBot,
+  seatAt,
+  setPlayerReady,
+  swapSeats,
+  vacatePlayer,
+  vacateSeat,
+} from './seats/seating.js'
+
+export type {
+  AutoStartDecision,
+  HostStartResolution,
+  SeatingSnapshot,
+  StartBlockReason,
+} from './seats/start.js'
+export {
+  START_BLOCK_REASONS,
+  evaluateAutoStart,
+  resolveHostStart,
+  seatingSnapshot,
+  startBlockers,
+} from './seats/start.js'
+
+export type { RematchRejection, RematchResolution, RematchTally } from './seats/rematch.js'
+export {
+  REMATCH_REJECTIONS,
+  rematchRevision,
+  resolveRematch,
+  sameSeatsRematchRevision,
+  tallyRematch,
+  withRematchVote,
+  withoutRematchVote,
+} from './seats/rematch.js'
+
+export type { RoomView, SeatView, ViewerKind } from './seats/view.js'
+export { roomViewFor, viewerKindFor } from './seats/view.js'
+
+export type { BotIdentity, BotSeatProvider, BotSlotOutcome, BotSlotRequest } from './seats/bots.js'
+export { BOT_SEAT_PROVIDERS, resolveBotProvider } from './seats/bots.js'
+
+export type {
+  SeatMutationOutcome,
+  SeatMutationResult,
+  SeatRefusal,
+  SeatService,
+  SeatServiceOptions,
+} from './seats/service.js'
+export { createSeatService } from './seats/service.js'
 
 export type {
   CreateRoomFailure,

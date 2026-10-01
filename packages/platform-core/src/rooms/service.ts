@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod'
-import type { JsonValue } from '@playhall/game-sdk'
+import { type GameCatalogEntry, type JsonValue, toCatalogEntry } from '@playhall/game-sdk'
 import type { FeatureFlags } from '../flags.js'
 import type { GameRegistry } from '../registry/registry.js'
 import {
@@ -49,12 +49,23 @@ import {
   publicRoomSummary,
   realtimeJoinTarget,
 } from './realtime-binding.js'
+import { seatingPolicyFor } from '../seats/policy.js'
+import { hostSuccessionRevision } from '../seats/host.js'
+import { assignTeams } from '../seats/teams.js'
+import {
+  type RoomMutationFailure,
+  type RoomMutationResult,
+  type RoomWriter,
+  CAS_ATTEMPTS,
+  CAS_BACKOFF_MS,
+  createRoomWriter,
+} from './mutate.js'
 import type { RoomStore } from './store.js'
 import {
   type Room,
   type RoomCloseReason,
   type RoomRevision,
-  isRoomTerminal,
+  emptySeat,
   reviseRoom,
 } from './types.js'
 
@@ -114,30 +125,11 @@ export interface SweepReport {
   readonly prunedLimiterKeys: number
 }
 
-export type RoomMutationFailure =
-  | { readonly code: 'room_not_found' }
-  /**
-   * The room exists but has closed, so it can no longer be revised. Separate
-   * from `room_not_found` because the room is still readable for the length of
-   * its tombstone window and the caller's correct response differs: tear the
-   * session down and tell the players the room is over, rather than retrying or
-   * reporting a bad link. See `isRoomTerminal`.
-   */
-  | { readonly code: 'room_closed'; readonly closeReason: RoomCloseReason | null }
-  /**
-   * The room is alive and the change is legal, but the compare-and-set retry
-   * budget ran out. Distinct from `room_not_found` because the caller's
-   * correct response is the opposite one: retry, do not conclude the room is
-   * gone. A `finishMatch` that reported contention as "not found" would leave
-   * a room `in_progress` with no `finishedAt` — and `roomDeadlines` arms
-   * nothing for that state, so the room would never be swept and the players
-   * would sit in a match that silently never ended.
-   */
-  | { readonly code: 'contended'; readonly retryAfterMs: number }
-
-export type RoomMutationResult =
-  | { readonly ok: true; readonly room: Room }
-  | { readonly ok: false; readonly error: RoomMutationFailure }
+/**
+ * Re-exported from `rooms/mutate.ts`, which owns the one room writer. They stay
+ * part of this module's surface because every mutating method here returns them.
+ */
+export type { RoomMutationFailure, RoomMutationResult }
 
 export interface RoomServiceOptions {
   readonly store: RoomStore
@@ -153,6 +145,11 @@ export interface RoomServiceOptions {
    */
   readonly lifecycle?: RoomLifecyclePolicy
   readonly limits?: RateLimitPolicies
+  /**
+   * Shared with the seat service in production, so both write through one
+   * compare-and-set loop and one closed-room guard.
+   */
+  readonly writer?: RoomWriter
 }
 
 export interface RoomService {
@@ -182,14 +179,6 @@ export interface RoomService {
   listPublic(limit?: number): Promise<readonly PublicRoomSummary[]>
 }
 
-/**
- * Compare-and-set retry budget. Contention on one room is bounded by its seat
- * count, so a handful of attempts covers a real race; anything beyond that is
- * a failing store, and failing loudly beats spinning.
- */
-const CAS_ATTEMPTS = 4
-const CAS_BACKOFF_MS = 50
-
 export function createRoomService(options: RoomServiceOptions): RoomService {
   const { store, registry, flags, clock, random, ids } = options
   // One policy, taken from the store, because the store is the half that cannot
@@ -207,6 +196,7 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     )
   }
   const limits = options.limits ?? DEFAULT_RATE_LIMITS
+  const writer = options.writer ?? createRoomWriter({ store, clock })
 
   const createLimiter: RateLimiter = createTokenBucketLimiter(limits.roomCreate, clock)
   const joinLimiter: RateLimiter = createTokenBucketLimiter(limits.roomJoin, clock)
@@ -284,11 +274,17 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
       status: 'lobby',
       settings: parsed.data as JsonValue,
       // Seat count is the manifest's, never the request's. A client that could
-      // choose it could start a two-player game with eleven seats.
-      seats: Array.from({ length: manifest.maxPlayers }, (_, index) => ({
-        index,
-        occupantPlayerId: index === 0 ? playerId : null,
-      })),
+      // choose it could start a two-player game with eleven seats. Teams come
+      // from the same place, via `assignTeams`, so a room is never seated
+      // without being teamed.
+      seats: assignTeams(
+        Array.from({ length: manifest.maxPlayers }, (_, index) =>
+          index === 0
+            ? { ...emptySeat(index), occupantPlayerId: playerId, isReady: true }
+            : emptySeat(index),
+        ),
+        seatingPolicyFor(toCatalogEntry(manifest)),
+      ),
       spectatorPlayerIds: [],
       presentPlayerIds: [playerId],
       createdAt: now,
@@ -296,6 +292,9 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
       secondPlayerJoinedAt: null,
       emptySince: null,
       finishedAt: null,
+      startCountdownEndsAt: null,
+      rematchVotes: [],
+      matchesPlayed: 0,
       closedAt: null,
       closeReason: null,
       currentMatchId: null,
@@ -340,9 +339,11 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
       })
       if (outcome.kind === 'rejected') return fail(ip, outcome)
 
-      // Non-null here: `resolveJoin` rejects a null room.
+      // Non-null here: `resolveJoin` rejects a null room, and the entry is
+      // non-null because `resolveJoin` rejects an unresolvable game.
       const previous = room as Room
-      const next = applyJoin(previous, playerId, outcome, clock.now())
+      const entry = registry.entryById(previous.gameId) as GameCatalogEntry
+      const next = applyJoin(previous, playerId, outcome, clock.now(), seatingPolicyFor(entry))
       if (await store.save(previous, next)) {
         failedJoins.recordSuccess(ip)
         return { ok: true, room: next, outcome, realtime: realtimeJoinTarget(next, playerId) }
@@ -365,44 +366,31 @@ export function createRoomService(options: RoomServiceOptions): RoomService {
     return { ok: false, code: outcome.code, terminal: outcome.terminal, retryAfterMs: 0 }
   }
 
-  /**
-   * Read-modify-write with bounded compare-and-set retries.
-   *
-   * Two refusals that every mutation gets for free by going through here:
-   *
-   * - A **closed** room is never revised. The guard is inside the retry loop,
-   *   not before it, because a room can close between attempts — the sweeper
-   *   runs concurrently with every one of these calls.
-   * - Exhausting the retry budget is `contended`, never `room_not_found`. The
-   *   two are opposite instructions to the caller and collapsing them is how a
-   *   live room ends up treated as a dead one.
-   */
+  /** Delegates to the shared writer; see `rooms/mutate.ts` for the guarantees. */
   async function mutate(
     roomId: string,
     change: (room: Room, now: number) => RoomRevision,
   ): Promise<RoomMutationResult> {
-    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
-      const room = await store.get(roomId)
-      if (room === null) return { ok: false, error: { code: 'room_not_found' } }
-      if (isRoomTerminal(room)) {
-        return { ok: false, error: { code: 'room_closed', closeReason: room.closeReason } }
-      }
-      const now = clock.now()
-      const next = reviseRoom(room, change(room, now), now)
-      if (await store.save(room, next)) return { ok: true, room: next }
-    }
-    return { ok: false, error: { code: 'contended', retryAfterMs: CAS_BACKOFF_MS } }
+    return writer.mutate(roomId, change)
   }
 
   async function leave(roomId: string, playerId: string): Promise<RoomMutationResult> {
     return mutate(roomId, (room, now) => {
       const present = room.presentPlayerIds.filter((id) => id !== playerId)
+      // Succession is resolved against the room *as it will be* — presence
+      // already stripped — or the departing host is still listed as present and
+      // the crown never moves. See `resolveAbsentHostTransfer`.
+      const departed: Room = { ...room, presentPlayerIds: present }
       return {
         presentPlayerIds: present,
         // Leaving does not vacate a seat: the seat is held for reconnection.
-        // Freeing it is a host action and belongs to PER-13.
+        // Freeing it is a host action — `kick` — not a consequence of a dropped
+        // connection.
         spectatorPlayerIds: room.spectatorPlayerIds.filter((id) => id !== playerId),
         emptySince: present.length === 0 ? (room.emptySince ?? now) : null,
+        // A lobby whose only Start button belongs to someone on a dead phone
+        // cannot start at all. The crown moves; the seat does not.
+        ...hostSuccessionRevision(departed),
       }
     })
   }

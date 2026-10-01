@@ -10,11 +10,14 @@ import {
   resolveJoin,
 } from '../src/rooms/join.js'
 import { DEFAULT_ROOM_LIFECYCLE, type RoomLifecyclePolicy } from '../src/rooms/lifecycle.js'
+import { seatingPolicyFor } from '../src/seats/policy.js'
 import { seatIndexOf } from '../src/rooms/types.js'
 import { makeGame } from './fixtures/games.js'
 import { T0, makeRoom } from './fixtures/rooms.js'
 
 const spectatable: GameCatalogEntry = toCatalogEntry(makeGame({ slug: 'fixture' }).manifest)
+/** `applyJoin` needs the seating policy so a join re-derives teams. */
+const policy = seatingPolicyFor(spectatable)
 const noSpectators: GameCatalogEntry = toCatalogEntry(
   makeGame({ slug: 'fixture', supportsSpectators: false }).manifest,
 )
@@ -209,7 +212,7 @@ describe('applyJoin', () => {
   it('seats the player, marks them present and clears the empty timer', () => {
     const room = makeRoom({ presentPlayerIds: [], emptySince: T0 + 1000 })
     const outcome = join({ room, playerId: 'guest', game: spectatable, now: NOW })
-    const next = applyJoin(room, 'guest', outcome, NOW)
+    const next = applyJoin(room, 'guest', outcome, NOW, policy)
 
     expect(seatIndexOf(next, 'guest')).toBe(1)
     expect(next.presentPlayerIds).toContain('guest')
@@ -224,6 +227,7 @@ describe('applyJoin', () => {
       'guest',
       join({ room, playerId: 'guest', game: spectatable, now: NOW }),
       NOW,
+      policy,
     )
     expect(next.secondPlayerJoinedAt).toBe(NOW)
   })
@@ -235,6 +239,7 @@ describe('applyJoin', () => {
       'host',
       join({ room: empty, playerId: 'host', game: spectatable, now: NOW }),
       NOW,
+      policy,
     )
     expect(next.secondPlayerJoinedAt).toBeNull()
   })
@@ -246,6 +251,7 @@ describe('applyJoin', () => {
       'third',
       join({ room, playerId: 'third', game: spectatable, now: NOW }),
       NOW,
+      policy,
     )
     expect(next.secondPlayerJoinedAt).toBe(T0 + 5)
   })
@@ -254,15 +260,21 @@ describe('applyJoin', () => {
     const room = makeRoom({ seats: ['host', null], spectatorPlayerIds: ['watcher'] })
     // A spectator resolves to `spectating`; seat promotion is a deliberate
     // host/seat action, so drive `applyJoin` with the seated outcome directly.
-    const next = applyJoin(room, 'watcher', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW)
+    const next = applyJoin(
+      room,
+      'watcher',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(next.spectatorPlayerIds).toEqual([])
     expect(seatIndexOf(next, 'watcher')).toBe(1)
   })
 
   it('adds a spectator once, not twice', () => {
     const room = makeRoom({ seats: ['host', 'guest'], secondPlayerJoinedAt: T0 })
-    const first = applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW)
-    const second = applyJoin(first, 'w', { kind: 'spectating', isRejoin: true }, NOW + 1)
+    const first = applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW, policy)
+    const second = applyJoin(first, 'w', { kind: 'spectating', isRejoin: true }, NOW + 1, policy)
     expect(second.spectatorPlayerIds).toEqual(['w'])
     expect(second.presentPlayerIds.filter((id) => id === 'w')).toHaveLength(1)
   })
@@ -270,31 +282,49 @@ describe('applyJoin', () => {
   it('is a no-op for a rejection', () => {
     const room = makeRoom()
     expect(
-      applyJoin(room, 'p', { kind: 'rejected', code: 'room_full', terminal: false }, NOW),
+      applyJoin(room, 'p', { kind: 'rejected', code: 'room_full', terminal: false }, NOW, policy),
     ).toBe(room)
   })
 
   it('does not mutate the input room', () => {
     const room = makeRoom()
     const snapshot = JSON.stringify(room)
-    applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW)
+    applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
     expect(JSON.stringify(room)).toBe(snapshot)
   })
 
   it('bumps the version on every revision, so the store can tell writes apart', () => {
     const room = makeRoom()
-    const seated = applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW)
+    const seated = applyJoin(
+      room,
+      'guest',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(seated.version).toBe(room.version + 1)
 
     // Same instant, so `updatedAt` cannot distinguish them; the counter must.
-    const spectating = applyJoin(room, 'other', { kind: 'spectating', isRejoin: false }, NOW)
+    const spectating = applyJoin(
+      room,
+      'other',
+      { kind: 'spectating', isRejoin: false },
+      NOW,
+      policy,
+    )
     expect(spectating.updatedAt).toBe(seated.updatedAt)
     expect(spectating.version).toBe(room.version + 1)
   })
 
   it('restarts the rematch window when a seat is taken in a finished room', () => {
     const room = makeRoom({ status: 'finished', finishedAt: T0, seats: ['host', null] })
-    const next = applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW)
+    const next = applyJoin(
+      room,
+      'guest',
+      { kind: 'seated', seatIndex: 1, isRejoin: false },
+      NOW,
+      policy,
+    )
     // Without this, someone seated at minute 14 of the 15-minute window gets
     // sixty seconds to agree to a rematch.
     expect(next.finishedAt).toBe(NOW)
@@ -302,16 +332,20 @@ describe('applyJoin', () => {
 
   it('leaves the rematch window alone for a spectator or a rejoin', () => {
     const room = makeRoom({ status: 'finished', finishedAt: T0, seats: ['host', 'guest'] })
-    expect(applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW).finishedAt).toBe(T0)
     expect(
-      applyJoin(room, 'guest', { kind: 'rejoined', seatIndex: 1, isRejoin: true }, NOW).finishedAt,
+      applyJoin(room, 'w', { kind: 'spectating', isRejoin: false }, NOW, policy).finishedAt,
+    ).toBe(T0)
+    expect(
+      applyJoin(room, 'guest', { kind: 'rejoined', seatIndex: 1, isRejoin: true }, NOW, policy)
+        .finishedAt,
     ).toBe(T0)
   })
 
   it('leaves the rematch window null while a room is still in its lobby', () => {
     const room = makeRoom()
     expect(
-      applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW).finishedAt,
+      applyJoin(room, 'guest', { kind: 'seated', seatIndex: 1, isRejoin: false }, NOW, policy)
+        .finishedAt,
     ).toBeNull()
   })
 })

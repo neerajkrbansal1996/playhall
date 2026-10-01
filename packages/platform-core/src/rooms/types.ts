@@ -7,10 +7,10 @@
  * *id and version*, never a game's rules — core branches on manifest fields,
  * never on a game id.
  *
- * Seats are modelled here only as far as this milestone needs them: a fixed
- * number of slots, each empty or held by a player. Teams, host transfer, kick,
- * swap and ready checks are [PER-13](/PER/issues/PER-13) and will extend this
- * shape rather than replace it.
+ * This file is the *record*. Every rule about who may sit where, who is host,
+ * when a match may start and what a rematch does lives in `seats/` and is a
+ * pure function of a room plus the game's declared `SeatingPolicy`. Nothing
+ * here decides anything.
  */
 
 import type { JsonValue } from '@playhall/game-sdk'
@@ -34,11 +34,58 @@ export type RoomCloseReason =
   /** The host closed it deliberately. */
   | 'host_closed'
 
+/**
+ * What a seat is being held for.
+ *
+ * `bot` is the v1 bot-slot *interface* and nothing more: a host may mark a seat
+ * as a bot seat, the room records it, and `seats/bots.ts` defines the port a
+ * provider would implement. v1 ships no provider, so a room with a bot seat
+ * cannot start — see `unfilledBotSeats` in `seats/start.ts`. Declaring the slot
+ * now is what stops "add bots" from becoming a change to the seat record, the
+ * room service, the protocol and the lobby all at once later.
+ */
+export type SeatReservation = 'bot'
+
 export interface RoomSeatSlot {
   /** Stable 0-based position. Seat 1 in the UI is index 0 here. */
   readonly index: number
   /** Null for a free seat. */
   readonly occupantPlayerId: string | null
+  /**
+   * Null unless the game's manifest declares teams. Assigned by the platform
+   * from `teams`/`teamCount` — never chosen by a game and never by a client
+   * beyond asking to move, which `seats/teams.ts` then re-balances.
+   */
+  readonly teamId: string | null
+  /** Non-null only for a seat held open for a bot. Mutually exclusive with an occupant. */
+  readonly reservedFor: SeatReservation | null
+  /**
+   * The ready flag.
+   *
+   * Seats are ready **on being taken** and a player un-readies to say "not
+   * yet". The default has to be this way round: a fixed-size game auto-starts
+   * when it fills, so opt-in readiness would mean a two-player game where both
+   * players must tap a button that exists only to undo the auto-start they
+   * wanted. Un-ready is therefore the escape hatch, and it cancels an armed
+   * countdown rather than merely annotating the roster.
+   *
+   * Always false for an empty or bot-reserved seat; `seatReady` enforces it.
+   */
+  readonly isReady: boolean
+}
+
+/** A free seat at `index`, optionally pre-assigned to a team. */
+export function emptySeat(index: number, teamId: string | null = null): RoomSeatSlot {
+  return { index, occupantPlayerId: null, teamId, reservedFor: null, isReady: false }
+}
+
+/**
+ * Sets a seat's ready flag, holding the invariant that only an occupied seat
+ * can be ready. Every writer goes through here so "empty but ready" — which
+ * would let a half-full lobby satisfy a ready check — cannot be constructed.
+ */
+export function seatReady(seat: RoomSeatSlot, isReady: boolean): RoomSeatSlot {
+  return { ...seat, isReady: seat.occupantPlayerId === null ? false : isReady }
 }
 
 export interface Room {
@@ -103,6 +150,30 @@ export interface Room {
   /** When the current match finished. Starts the rematch window. */
   readonly finishedAt: number | null
 
+  /**
+   * When the auto-start countdown fires, or null when no countdown is armed.
+   *
+   * A deadline rather than a timer handle, for the same reason the lifecycle
+   * rules are pure functions of `(room, now)`: an in-process `setTimeout` dies
+   * with the process, and a room that survives a restart has to be able to
+   * answer "should this match have started by now?" from Redis alone.
+   */
+  readonly startCountdownEndsAt: number | null
+
+  /**
+   * Players who have asked for a rematch. Player ids, not seat indexes: a
+   * rematch may rotate seats, so an index recorded before the vote resolves
+   * would name a different person by the time it is counted.
+   */
+  readonly rematchVotes: readonly string[]
+
+  /**
+   * How many matches this room has hosted. The rotation offset for the next
+   * one, so "who goes first" advances by exactly one per rematch without any
+   * caller having to remember the history.
+   */
+  readonly matchesPlayed: number
+
   readonly closedAt: number | null
   readonly closeReason: RoomCloseReason | null
 
@@ -136,8 +207,21 @@ export function seatedPlayerIds(room: Room): string[] {
     .filter((playerId): playerId is string => playerId !== null)
 }
 
+export function occupiedSeats(room: Room): RoomSeatSlot[] {
+  return room.seats.filter((seat) => seat.occupantPlayerId !== null)
+}
+
+/**
+ * The lowest-indexed seat a new arrival may take.
+ *
+ * A seat reserved for a bot is *not* free: the host set it aside deliberately,
+ * and letting the next person through the link take it would silently undo a
+ * host decision.
+ */
 export function freeSeatIndex(room: Room): number | null {
-  const seat = room.seats.find((candidate) => candidate.occupantPlayerId === null)
+  const seat = room.seats.find(
+    (candidate) => candidate.occupantPlayerId === null && candidate.reservedFor === null,
+  )
   return seat ? seat.index : null
 }
 
