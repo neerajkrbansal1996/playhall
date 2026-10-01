@@ -1,0 +1,20 @@
+# expect: none
+# tool: declared-deps
+# why: positive control for the declared-dependency gate — the SDK as the one workspace edge, alongside unrestricted third-party registry dependencies
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@scope/game-sdk": "workspace:*",
+    "chess.js": "^1.4.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

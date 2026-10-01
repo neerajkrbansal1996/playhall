@@ -1,0 +1,15 @@
+# expect: no-illegal-declared-dep
+# tool: declared-deps
+# why: a game still declaring the SDK under the scope it was renamed away from — the shape a game branch takes when it is rebased across a rename. pnpm install stops it too, but the gate is what names the manifest line
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@stale-scope/game-sdk": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

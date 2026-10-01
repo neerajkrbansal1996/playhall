@@ -1,0 +1,16 @@
+# expect: no-illegal-declared-dep
+# tool: declared-deps
+# why: the only arm of this rule nothing else in CI covers — a link: straight into platform-core under a name in no scope at all, which installs cleanly and stays invisible to dependency-cruiser until something imports it
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@scope/game-sdk": "workspace:*",
+    "core-utils": "link:../../packages/platform-core",
+    "zod": "^3.24.1"
+  }
+}

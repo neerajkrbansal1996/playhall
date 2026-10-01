@@ -1,0 +1,16 @@
+# expect: no-illegal-declared-dep
+# tool: declared-deps
+# why: the case PER-64 was filed for — a game declaring platform-core under a retired scope. pnpm install does stop this one, but with a resolution error and not the rule name, and it is the same allowlist arm that catches the link: form nothing else sees
+=== file: games/fx-a/package.json ===
+{
+  "name": "@scope/fx-a",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@scope/game-sdk": "workspace:*",
+    "@stale-scope/platform-core": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

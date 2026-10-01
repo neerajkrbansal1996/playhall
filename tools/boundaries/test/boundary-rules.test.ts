@@ -13,9 +13,10 @@
  *      the wrong rule fires for the wrong reason;
  *   3. no *other* error-level rule fired — the rule is precise, not a blanket reject.
  *
- * Plus two suite-level guards: a positive control (the legal shapes stay legal) and a coverage
- * check that no error-level rule exists without a fixture. ADR-0002 §2: "a rule with no fixture
- * is a rule we have not proven works."
+ * Plus suite-level guards: a positive control per checker (the legal shapes stay legal, proved
+ * for each checker separately — a control run through dependency-cruiser says nothing about what
+ * the manifest checker still accepts) and a coverage check that no error-level rule exists
+ * without a fixture. ADR-0002 §2: "a rule with no fixture is a rule we have not proven works."
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -71,7 +72,7 @@ const scope = workspaceScope(repoRoot)
  * appears here *and* in the dependency-cruiser rule set, with a fixture for each half.
  */
 const SCRIPT_ENFORCED_EXPLANATIONS: Record<string, string> = {
-  'no-illegal-declared-dep': `A game package may declare exactly one ${scope} dependency`,
+  'no-illegal-declared-dep': `A game package may declare exactly one workspace dependency`,
   'no-game-to-colyseus': 'The server framework is a platform choice, never a game',
 }
 const SCRIPT_ENFORCED_RULES = Object.keys(SCRIPT_ENFORCED_EXPLANATIONS)
@@ -147,17 +148,34 @@ describe('boundary rule set', () => {
   })
 })
 
-describe('legal dependency shapes', () => {
-  const control = fixtures.find((fixture) => fixture.expectRule === null)
+/**
+ * Every `# expect: none` fixture, not just the first one found. Each checker needs its own
+ * control — a control cruised by dependency-cruiser proves nothing about the legal shapes
+ * `check-declared-deps.mjs` has to keep accepting, and picking a single control would silently
+ * drop whichever one came second in the directory listing.
+ */
+const controls = fixtures.filter((fixture) => fixture.expectRule === null)
 
-  it('is covered by a positive control fixture', () => {
-    expect(control, 'tools/boundary-fixtures needs an "# expect: none" fixture').toBeDefined()
+describe('legal dependency shapes', () => {
+  it('are covered by a positive control fixture for every checker', () => {
+    expect(
+      controls.length,
+      'tools/boundary-fixtures needs an "# expect: none" fixture',
+    ).toBeGreaterThan(0)
+    const tools = new Set(controls.map((fixture) => fixture.tool))
+    const uncovered = [...new Set(fixtures.map((fixture) => fixture.tool))].filter(
+      (tool) => !tools.has(tool),
+    )
+    expect(
+      uncovered,
+      'a checker with no positive control could be rejecting every legal shape and the suite would still pass',
+    ).toEqual([])
   })
 
-  it('pass the gate', () => {
-    const { status, output } = run(control as Fixture)
+  it.each(controls)('pass the gate: $name', (control: Fixture) => {
+    const { status, output } = run(control)
     expect(output).not.toMatch(/^\s*error /m)
-    expect(status, `expected a clean cruise, got:\n${output}`).toBe(0)
+    expect(status, `expected a clean run, got:\n${output}`).toBe(0)
   })
 })
 
