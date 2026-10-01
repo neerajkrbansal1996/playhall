@@ -355,16 +355,27 @@ test('a bulk-inserted over-long code is capped, not just normalised', async ({ p
  * "visible value and request disagree" failure `JoinByCodeForm` exists to
  * prevent. Asserting both is the point; either alone would pass.
  *
- * The dropped character is deliberately silent, which is the behaviour as
- * specified today — a real code is always six. That silence is separately
- * tracked as [PER-214](/PER/issues/PER-214); if it is ever announced, this test
- * gains an assertion rather than losing one.
+ * This case was written while the drop was deliberately silent, and said so —
+ * with the note that if it were ever announced it would gain an assertion rather
+ * than lose one. [PER-214](/PER/issues/PER-214) announced it, so that is what
+ * happened below.
+ *
+ * The assertions are deliberately about the *wiring* and not the wording. The
+ * string is pinned exactly once, in `apps/web/test/room/testids.test.tsx`; a
+ * browser test that has to be edited for a copy change is a test nobody will
+ * keep honest. What must not regress is that something is announced at all, and
+ * that a screen reader can associate it with the field.
  */
 test('a 7th canonical keystroke on a full field is dropped without desyncing', async ({ page }) => {
   const input = page.getByTestId(testIds.joinCodeInput)
 
   await input.fill(PREVIEW_CODE)
   await expect(input).toHaveValue(PREVIEW_CODE)
+  // Six characters is not an overflow, so nothing may be announced yet. Without
+  // this the assertions below would also pass against an alert left over from an
+  // earlier interaction — and the describedby list is the hint alone.
+  await expect(joinAlert(page)).toHaveCount(0)
+  await describedByIds(input, 1)
 
   // Typed, not filled: `fill()` replaces the value in one operation and would
   // never produce the already-at-the-cap transition this is about.
@@ -372,6 +383,20 @@ test('a 7th canonical keystroke on a full field is dropped without desyncing', a
 
   await expect(input).toHaveValue(PREVIEW_CODE)
   await expect(input).toHaveAttribute('data-value', PREVIEW_CODE)
+
+  // The announcement, in a real browser: the bail-out path still reaches the
+  // player. Fires on input here, with no press — the typed-path counterpart of
+  // `apps/web/test/room/join-code-overflow.test.tsx`.
+  await expect(joinAlert(page)).toBeVisible()
+  await expect(input).toHaveAttribute('aria-invalid', 'true')
+
+  // Through `describedByIds`, not the raw attribute: the hint makes this a
+  // two-id list, so `[id="${attr}"]` would match nothing and `toBeVisible`
+  // would never be reached to notice. Hint first, then the message, same order
+  // as the short-code case and as `fieldIds()` in the settings form.
+  const [hintRef, messageRef] = await describedByIds(input, 2)
+  await expect(byId(page, hintRef)).toHaveText(/Codes never use/)
+  await expect(byId(page, messageRef)).toHaveText(await joinAlert(page).innerText())
 })
 
 /**
