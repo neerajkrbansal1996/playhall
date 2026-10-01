@@ -184,7 +184,7 @@ describe('the bundle gate fingerprint self-check fails closed', () => {
     expect(output).toContain('v5/ — reachable as ./v5 — 0 markers')
   })
 
-  // The three shapes below all make `resolveEntry` return null. Before the
+  // The four shapes below all make `resolveEntry` return null. Before the
   // PER-126 review fix each was skipped silently and the gate printed
   // "fingerprints verified" — a validator lineage shipping real code that the
   // scan had never been taught to recognise, with nothing in the log saying so.
@@ -210,6 +210,13 @@ describe('the bundle gate fingerprint self-check fails closed', () => {
         'v5/browser.js': `export const codes = ["${UNSEEN_MARKER}"];\n`,
       },
     ],
+    [
+      // `entry.require` as a bare string never matches `?.require?.default`,
+      // so the CJS-only shape falls through the whole chain.
+      'the entry is CJS-only (a bare require string, no import condition)',
+      { require: './v5/index.cjs' },
+      { 'v5/index.cjs': `exports.codes = ["${UNSEEN_MARKER}"];\n` },
+    ],
   ]
 
   for (const [label, entry, files] of unresolvable) {
@@ -229,6 +236,32 @@ describe('the bundle gate fingerprint self-check fails closed', () => {
     const { status, output } = runGate({
       zodExports: { './v5': { import: { default: './v5/index.js' } } },
       zodFiles: { 'v5/index.js': `export const codes = ["${V4_MARKER}"];\n` },
+    })
+
+    expect(status).toBe(0)
+    expect(output).toContain('PASS — no zod in any guarded client chunk')
+  })
+
+  // A lineage rooted at the package root is scanned at depth 0: `walk(zodRoot)`
+  // would hand the `.` lineage every other lineage's markers, so it could never
+  // be reported uncovered while any of them carried one. Latent against zod
+  // 3.25.76 only because its root entry is a barrel into `v3/` — these two cases
+  // build the root entry zod is not obliged to keep.
+  it('does not let a root lineage inherit another lineage’s markers', () => {
+    const { status, output } = runGate({
+      zodExports: { '.': { import: { default: './root-impl.js' } } },
+      zodFiles: { 'root-impl.js': `export const codes = ["${UNSEEN_MARKER}"];\n` },
+    })
+
+    expect(status).toBe(1)
+    expect(output).toContain('variant(s) whose issue codes are not fingerprinted')
+    expect(output).toContain('./ — reachable as . — 0 markers')
+  })
+
+  it('passes a root lineage that carries a fingerprint of its own', () => {
+    const { status, output } = runGate({
+      zodExports: { '.': { import: { default: './root-impl.js' } } },
+      zodFiles: { 'root-impl.js': `export const codes = ["${V4_MARKER}"];\n` },
     })
 
     expect(status).toBe(0)

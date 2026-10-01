@@ -512,9 +512,23 @@ function selfCheckVariants() {
   const uncovered = []
 
   for (const [dir, dirSubpaths] of [...lineageSubpaths].sort()) {
+    // A lineage rooted at the package root must be scanned at depth 0 only
+    // (PER-126 review). `walk(join(zodRoot, '.'))` is `walk(zodRoot)` — the
+    // *whole* package — so a `.` lineage would inherit `v3/` and `v4/`'s markers
+    // and could never be reported uncovered while any other lineage carries one.
+    // That is the self-check's own silent-pass mode, one level up.
+    //
+    // Latent today only because zod's root entry is a 105-byte barrel that
+    // `resolveEntry` follows into `v3/`, so `.` never forms a lineage — a
+    // structural property zod has no obligation to keep. Under-counting here is
+    // the safe direction: a root entry whose validator lives in an unexported
+    // subdirectory reports 0 markers and fails loudly, rather than passing on
+    // another lineage's strings.
+    //
     // `src/` is zod's shipped TypeScript and `tests/` its own suite. Neither is
     // what a bundler pulls in, so neither counts as evidence a marker is live.
-    const runtimeFiles = walk(join(zodRoot, dir)).filter(
+    const lineageFiles = dir === '.' ? filesDirectlyIn(zodRoot) : walk(join(zodRoot, dir))
+    const runtimeFiles = lineageFiles.filter(
       (file) => /\.(js|cjs|mjs)$/.test(file) && !/[\\/](?:src|tests)[\\/]/.test(file),
     )
 
@@ -646,6 +660,13 @@ function soleReexportTarget(file) {
 function lineageDirOf(zodRoot, file) {
   const segments = relative(zodRoot, file).split(/[\\/]/)
   return segments.length > 1 ? segments[0] : '.'
+}
+
+/** The files sitting directly in `dir`, without descending into subdirectories. */
+function filesDirectlyIn(dir) {
+  return readdirSync(dir)
+    .map((entry) => join(dir, entry))
+    .filter((absolute) => !statSync(absolute).isDirectory())
 }
 
 /** Every file under `dir`, recursively. */
