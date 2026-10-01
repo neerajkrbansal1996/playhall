@@ -34,15 +34,32 @@ const PORT = Number(process.env.E2E_PORT ?? 3947)
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`
 
 /**
- * `NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1` is what makes `/dev/settings-form`
- * resolve instead of 404 — it is the measurement harness for the create-lobby
- * composition, and the widest content this app can currently render. It is a
- * `NEXT_PUBLIC_*` flag read at build time, so it must be set for the build step
- * as well as the server, hence one shell string for both.
+ * The preview flags that make the `/dev/*` measurement harnesses resolve
+ * instead of 404.
+ *
+ * `NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1` gates `/dev/settings-form`, the
+ * create-lobby composition and the widest content this app can currently
+ * render. `NEXT_PUBLIC_ROOM_PREVIEW=1` gates `/dev/room`, the room/seats/join
+ * surfaces ([PER-141](/PER/issues/PER-141)).
+ *
+ * Both are `NEXT_PUBLIC_*` flags read at **build** time, so each must be set
+ * for the build step as well as the server — hence one shared prefix applied to
+ * both halves of the command rather than an env block, which `next build`
+ * in a child `pnpm exec` would not inherit from Playwright's `webServer.env`
+ * for the already-built bundle.
+ *
+ * A missing flag here does not fail loudly: the route 404s, and a spec written
+ * against it fails with a confusing "element not found" rather than "the page
+ * you asked for is switched off". `/dev/room` shipped unreachable for exactly
+ * this reason — `NEXT_PUBLIC_ROOM_PREVIEW` appeared nowhere but the page that
+ * tested it. When a new `/dev/*` harness lands, add its flag here in the same
+ * commit.
  */
+const PREVIEW_FLAGS = 'NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1 NEXT_PUBLIC_ROOM_PREVIEW=1'
+
 const WEB_SERVER_COMMAND =
-  'NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1 pnpm --filter @playhall/web exec next build && ' +
-  `NEXT_PUBLIC_SETTINGS_FORM_PREVIEW=1 pnpm --filter @playhall/web exec next start --port ${PORT}`
+  `${PREVIEW_FLAGS} pnpm --filter @playhall/web exec next build && ` +
+  `${PREVIEW_FLAGS} pnpm --filter @playhall/web exec next start --port ${PORT}`
 
 export default defineConfig({
   testDir: './e2e',
