@@ -233,6 +233,59 @@ describe('ws probe — rejected frames', () => {
     expect(error.reason).not.toContain('script')
   })
 
+  it('never echoes a received value on the unrecognized-key path either', async () => {
+    // The sibling test above only exercises `invalid_type`, where the path is
+    // schema-derived. `unrecognized_keys` is the one branch that quotes
+    // caller-supplied text — key *names* — so it needs its own case or the two
+    // tests disagree about what the invariant is.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        extra: '<script>alert(1)</script>',
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toContain('extra')
+    expect(error.reason).not.toContain('script')
+  })
+
+  it('bounds how much of a caller-supplied key set the error reason quotes', async () => {
+    // Without a cap, `maxFrameBytes` is the only bound, so a ~1 KiB frame of
+    // junk keys comes back as a ~1 KiB error frame. Three keys, 32 chars each.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    const longKey = 'K'.repeat(120)
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        [longKey]: 1,
+        bbb2: 1,
+        ccc3: 1,
+        ddd4: 1,
+        eee5: 1,
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toContain(`${'K'.repeat(32)}…`)
+    expect(error.reason).not.toContain('K'.repeat(33))
+    expect(error.reason).toContain('bbb2')
+    expect(error.reason).toContain('ccc3')
+    expect(error.reason).toContain('(+2 more)')
+    expect(error.reason).not.toContain('ddd4')
+    expect(error.reason).not.toContain('eee5')
+    expect(error.reason.length).toBeLessThan(160)
+  })
+
   it('rejects a binary frame instead of guessing at a codec', async () => {
     // The binary path belongs to the real-time codec in M6. This probe must not
     // prejudice it by accepting one shape of bytes today.
