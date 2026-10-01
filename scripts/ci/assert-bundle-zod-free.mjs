@@ -48,6 +48,20 @@
  * identifiers but never rewrite string contents, so zod's own issue codes
  * survive minification where `ZodError` does not.
  *
+ * ## What this cannot see
+ *
+ * `app-build-manifest.json` lists each page's *initial* client chunks, so a
+ * chunk split out by `next/dynamic` / `React.lazy` / `await import()` is tracked
+ * in `react-loadable-manifest.json` instead and is outside the scan. `apps/web`
+ * has zero such call sites today, so this is unexercised rather than a live hole
+ * — but a lazily-imported zod caller would ship bytes this gate would miss, and
+ * PER-20's real settings form is exactly the thing someone would reach for
+ * `next/dynamic` on. Widen the scan to that manifest if that day comes.
+ *
+ * It also only covers the production webpack build: `next dev` does not
+ * tree-shake, and a move to `--turbopack` emits a different manifest (ADR-0007
+ * revisit triggers).
+ *
  * ## Deliberately not a size budget
  *
  * A byte threshold drifts with every dependency bump and produces noise that
@@ -70,16 +84,28 @@ const manifestPath = join(nextDir, 'app-build-manifest.json')
 /**
  * zod issue codes, used as fingerprints for "the validator is in this chunk".
  *
- * These are string *literals* in zod's own source (`v3/ZodError.js` and
- * `v3/types.js`, both of which any real use of zod pulls in), so a minifier
- * preserves them verbatim. They are also specific enough that app code will
- * never contain them by accident.
+ * These are string *literals* in zod's own source, so a minifier preserves them
+ * verbatim where an identifier like `ZodError` would be renamed. They are also
+ * specific enough that app code will never contain them by accident.
  *
- * Both are self-checked against the installed zod below. A zod upgrade that
- * renames them must fail this gate loudly rather than let it pass on a
- * fingerprint that no longer matches anything.
+ * They span **both** version lineages the installed package ships, because
+ * `zod@3.25.x` is a dual-version package (PER-126 review):
+ *
+ *   - `invalid_union_discriminator`, `invalid_intersection_types` — the v3
+ *     lineage (`v3/ZodError.js`, `v3/types.js`). Both sit inside a single
+ *     `util.arrayToEnum([...])` array literal, which a bundler cannot partially
+ *     shake, so any shipped v3 zod carries both or neither.
+ *   - `invalid_element` — the v4 lineage (`v4/core/errors.js`,
+ *     `v4/core/schemas.js`). v4 renamed the issue codes outright, so **none** of
+ *     the v3 markers appears anywhere in `v4/`.
+ *
+ * Without the v4 marker a module that imports `zod/v4` — zod's own documented
+ * incremental-migration path from a `^3.25` install — would ship a full
+ * validator that this gate cannot see. `selfCheckVariants()` below asserts
+ * coverage per lineage rather than per package, so "zod grew a variant we have
+ * no fingerprint for" is a loud failure instead of a silent pass.
  */
-const ZOD_MARKERS = ['invalid_union_discriminator', 'invalid_intersection_types']
+const ZOD_MARKERS = ['invalid_union_discriminator', 'invalid_intersection_types', 'invalid_element']
 
 /**
  * The routes whose client graph must stay validator-free, keyed by
@@ -96,6 +122,12 @@ const ZOD_MARKERS = ['invalid_union_discriminator', 'invalid_intersection_types'
 const GUARDED_ROUTES = [
   {
     label: 'create-lobby',
+    // TODO(PER-20 / PER-201): `any` expires when the real route lands. Until
+    // then it must stay `any`, because requiring a page that does not exist yet
+    // would make this gate permanently red. The day `/play/[slug]/new` ships,
+    // `any` means a rename of the real route still passes as long as the dev
+    // harness survives — PER-201 is filed, and blocked by PER-20, to flip this
+    // to `all` and drop the harness page.
     pages: ['/play/[slug]/new/page', '/dev/settings-form/page'],
     require: 'any',
   },
@@ -106,9 +138,40 @@ const GUARDED_ROUTES = [
   },
 ]
 
+/**
+ * App Router special files whose own client chunk `app-build-manifest.json`
+ * attributes to an *ancestor* page id rather than repeating it in each page it
+ * wraps (PER-126 review).
+ *
+ * A root `layout.tsx` that goes `use client` emits `app/layout-<hash>.js`, which
+ * the manifest lists under the `/layout` key only — it appears in no guarded page
+ * entry, yet the browser loads it on every guarded route. Scanning the page
+ * entries alone therefore leaves a door open for exactly the regression this gate
+ * exists to catch, and the theme provider / guest-identity context / brand header
+ * are all candidates to walk through it.
+ *
+ * Shared *vendor* chunks are repeated in every page entry, so they were already
+ * covered; this is specifically about a special file's own chunk.
+ */
+const ANCESTOR_SPECIAL_FILES = ['layout', 'template', 'error', 'loading', 'not-found', 'default']
+
 const reuseBuild = process.argv.includes('--reuse-build')
 
 if (reuseBuild) {
+  // The flag exists so a local run can iterate without paying for a rebuild. In
+  // CI it would be a silent correctness hole: pointed at a restored `.next`
+  // cache it scans chunks from a different commit and passes. Nothing passes it
+  // in CI today (`gate.mjs` runs `pnpm check:bundle-zod-free` bare) — this keeps
+  // that true by construction rather than by convention.
+  if (process.env.CI) {
+    fail(
+      '--reuse-build must not be used in CI. It scans whatever is already in ' +
+        `${rel(nextDir)}, which in CI may be a restored cache from another commit — ` +
+        'the gate would then pass on chunks it never built. Drop the flag so the gate ' +
+        'builds the tree under test.',
+      'Bundle gate misconfigured (--reuse-build in CI)',
+    )
+  }
   if (!existsSync(manifestPath)) {
     fail(
       `--reuse-build was passed but ${rel(manifestPath)} does not exist. ` +
@@ -120,11 +183,18 @@ if (reuseBuild) {
   build()
 }
 
-const markerFiles = selfCheckMarkers()
+const selfCheck = selfCheckVariants()
 console.log(
-  `zod fingerprints verified against the installed zod ` +
-    `(${ZOD_MARKERS.map((m) => `"${m}"`).join(', ')}, found in ${markerFiles} runtime file(s)).`,
+  `zod fingerprints verified against the installed zod ${selfCheck.version} ` +
+    `(${rel(selfCheck.root)}), per shipped variant:`,
 )
+for (const lineage of selfCheck.lineages) {
+  console.log(
+    `  ${lineage.subpaths.join(', ')} -> ${lineage.dir}/ : ` +
+      `${lineage.markers.map((m) => `"${m}"`).join(', ')} ` +
+      `(${lineage.files} runtime file(s))`,
+  )
+}
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 const pages = manifest.pages ?? {}
@@ -136,6 +206,35 @@ if (Object.keys(pages).length === 0) {
 /** Every chunk we decided to scan, mapped to the guarded routes that load it. */
 const chunkOwners = new Map()
 const checkedRoutes = []
+/** Ancestor special-file page ids pulled into the scan, for the summary line. */
+const ancestorsScanned = new Set()
+
+/** Adds every `.js` chunk the manifest attributes to `pageId` to the scan set. */
+function collect(pageId, owner) {
+  for (const file of pages[pageId]) {
+    if (!file.endsWith('.js')) continue // stylesheets cannot carry a validator
+    if (!chunkOwners.has(file)) chunkOwners.set(file, new Set())
+    chunkOwners.get(file).add(owner)
+  }
+}
+
+/**
+ * The special-file page ids of every App Router segment that wraps `pageId`.
+ *
+ * `/dev/settings-form/page` -> `/layout`, `/dev/layout`, `/dev/settings-form/layout`,
+ * then the same for `template`, `error`, `loading`, `not-found` and `default`.
+ */
+function ancestorPageIds(pageId) {
+  const segments = pageId.split('/').filter(Boolean)
+  segments.pop() // drop the trailing `page`
+
+  const prefixes = ['']
+  for (const segment of segments) prefixes.push(`${prefixes[prefixes.length - 1]}/${segment}`)
+
+  return prefixes.flatMap((prefix) =>
+    ANCESTOR_SPECIAL_FILES.map((special) => `${prefix}/${special}`),
+  )
+}
 
 for (const route of GUARDED_ROUTES) {
   const present = route.pages.filter((page) => Array.isArray(pages[page]))
@@ -166,12 +265,53 @@ for (const route of GUARDED_ROUTES) {
 
   for (const page of present) {
     checkedRoutes.push(page)
-    for (const file of pages[page]) {
-      if (!file.endsWith('.js')) continue // stylesheets cannot carry a validator
-      if (!chunkOwners.has(file)) chunkOwners.set(file, new Set())
-      chunkOwners.get(file).add(`${route.label} (${page})`)
+    collect(page, `${route.label} (${page})`)
+
+    // Ancestor special files are purely *additive* to the chunk set, so one that
+    // does not exist contributes nothing and needs no presence requirement. The
+    // ids are derived from the page's own segments rather than hard-coded, so a
+    // renamed segment cannot silently drop an ancestor from the scan — which
+    // would re-create this gate's silent-pass mode at a new site.
+    for (const ancestor of ancestorPageIds(page)) {
+      if (!Array.isArray(pages[ancestor])) continue
+      ancestorsScanned.add(ancestor)
+      collect(ancestor, `${route.label} (${page} <- ${ancestor})`)
     }
   }
+}
+
+// App Router cannot build without a root layout, so `/layout` absent from the
+// manifest means the manifest was misread, not that the layout is gone. That
+// earns the same hard failure as a missing guarded page.
+if (!Array.isArray(pages['/layout'])) {
+  fail(
+    `${rel(manifestPath)} has no "/layout" entry.\n` +
+      `  Build contains: ${Object.keys(pages).sort().join(', ')}\n\n` +
+      'An App Router build always emits a root layout, so this means the manifest shape ' +
+      `changed and ${rel(selfPath)} is reading it wrong. The root layout's own client chunk ` +
+      'is listed under "/layout" and in no page entry, so losing it silently would drop ' +
+      'bytes the browser loads on every guarded route out of the scan.',
+    'Bundle gate cannot find the root layout',
+  )
+}
+
+// The page-level anti-placeholder guard above proves every guarded route is in
+// the build; it does not prove any of them contributes bytes. A page present with
+// an empty (or CSS-only) chunk list scans nothing and would pass — the one place
+// this script's failure mode is silent, and the backstop for the Turbopack risk
+// in "Not covered". The `.js` filter is the likeliest trigger: a Next release or
+// a bundler change that names client chunks `.mjs` reads the manifest fine,
+// clears the page-presence guard, throws nothing, and reports green on 0 bytes.
+if (chunkOwners.size === 0) {
+  fail(
+    `Every guarded route was found in ${rel(manifestPath)}, but none of them attributes a ` +
+      'single .js chunk — so this gate scanned nothing and would have passed.\n' +
+      `  Routes checked: ${checkedRoutes.join(', ')}\n\n` +
+      'Most likely the manifest no longer names client chunks with a .js extension; check the ' +
+      `extension filter in ${rel(selfPath)}. A zero-chunk scan is a hard failure on purpose: a ` +
+      'green row that scanned 0 bytes reads as enforcement while guarding nothing.',
+    'Bundle gate scanned zero chunks',
+  )
 }
 
 const violations = []
@@ -197,7 +337,11 @@ for (const [file, owners] of [...chunkOwners].sort()) {
 
 console.log(
   `Scanned ${chunkOwners.size} client chunk(s) (${fmtBytes(scannedBytes)}) across ` +
-    `${checkedRoutes.length} guarded route(s): ${checkedRoutes.join(', ')}.`,
+    `${checkedRoutes.length} guarded route(s): ${checkedRoutes.join(', ')}` +
+    (ancestorsScanned.size > 0
+      ? `, plus ${ancestorsScanned.size} ancestor segment(s): ${[...ancestorsScanned].sort().join(', ')}`
+      : '') +
+    '.',
 )
 
 if (violations.length === 0) {
@@ -215,7 +359,7 @@ const detail = violations
   .join('\n')
 
 fail(
-  `zod is in the create-lobby client graph again. ` +
+  `zod is back in a guarded route's initial client chunks. ` +
     `${violations.length} guarded chunk(s) contain a zod fingerprint:\n\n${detail}\n\n` +
     'zod is a server-side validator (ADR-0007 §8: the descriptor is validated at registry\n' +
     'load, not in the browser). It measured 79,639 B raw on this route before PER-115, to\n' +
@@ -266,20 +410,38 @@ function build() {
 }
 
 /**
- * Confirms every fingerprint still occurs in the installed zod's runtime files.
+ * Confirms every importable zod variant contains at least one fingerprint.
  *
- * Without this the gate's failure mode is silence: rename the codes upstream and
- * every scan stops matching, the gate goes green, and nothing says the check
- * stopped checking. zod's package entry is a 105-byte re-export barrel, so the
- * strings live one level down in `v3/` — hence a directory walk rather than a
- * read of the resolved entry file.
+ * Without this the gate's failure mode is silence: if the markers stop matching
+ * the code that actually ships, every scan comes back clean, the gate goes green,
+ * and nothing says the check stopped checking.
+ *
+ * Checking the *package* is not enough, which is the PER-126 review finding.
+ * `zod@3.25.76` ships two version lineages side by side, and v4 renamed the issue
+ * codes, so a walk of the whole package root finds the v3 markers in `v3/` and
+ * reports healthy while a `zod/v4` importer ships a validator carrying none of
+ * them. Coverage therefore has to be asserted per lineage.
+ *
+ * The lineages are derived from the package's `exports` map rather than from a
+ * directory listing, because `exports` is what a consumer can actually import: a
+ * future `./v5` shows up here and demands a fingerprint, and a directory that is
+ * not exported cannot be reached and does not matter.
+ *
+ * Re-export barrels are followed to the code they forward to instead of being
+ * required to carry a marker themselves. zod's own entry is a 105-byte barrel and
+ * `v4-mini/index.js` is a single `export * from "../v4/mini/index.js"`, so both
+ * resolve onto another lineage's code — demanding a marker *in* them would fail
+ * the gate on a file that holds no validator at all.
  */
-function selfCheckMarkers() {
+function selfCheckVariants() {
   const require = createRequire(join(repoRoot, 'packages', 'game-sdk', 'package.json'))
 
   let zodRoot
+  let zodPkg
   try {
-    zodRoot = dirname(require.resolve('zod/package.json'))
+    const pkgPath = require.resolve('zod/package.json')
+    zodRoot = dirname(pkgPath)
+    zodPkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
   } catch (error) {
     fail(
       `Could not resolve zod from packages/game-sdk: ${error.message}\n` +
@@ -287,40 +449,166 @@ function selfCheckMarkers() {
     )
   }
 
-  // `src/` is zod's shipped TypeScript, `tests/` its own suite. Neither is what a
-  // bundler would pull in, so neither should count as evidence the marker is live.
-  const runtimeFiles = walk(zodRoot).filter(
-    (file) => /\.(js|cjs|mjs)$/.test(file) && !/[\\/](?:src|tests)[\\/]/.test(file),
+  // Every concrete (non-wildcard) entry point a consumer can import. Subpaths
+  // below a lineage root (`./v4/core`, `./v4/mini`) resolve into the same
+  // directory as the lineage itself, so they fold into one group below.
+  const subpaths = Object.keys(zodPkg.exports ?? {}).filter(
+    (key) =>
+      (key === '.' || key.startsWith('./')) && !key.includes('*') && key !== './package.json',
   )
 
-  const counts = new Map(ZOD_MARKERS.map((marker) => [marker, 0]))
-  for (const file of runtimeFiles) {
-    const source = readFileSync(file, 'utf8')
-    for (const marker of ZOD_MARKERS) {
-      if (source.includes(marker)) counts.set(marker, counts.get(marker) + 1)
-    }
-  }
-
-  const stale = ZOD_MARKERS.filter((marker) => counts.get(marker) === 0)
-  if (stale.length > 0) {
+  if (subpaths.length === 0) {
     fail(
-      `Fingerprint self-check failed. These marker(s) no longer appear anywhere in the ` +
-        `installed zod (${rel(zodRoot)}):\n` +
-        stale.map((marker) => `  "${marker}"`).join('\n') +
-        '\n\nA fingerprint that matches nothing makes this gate pass unconditionally, so this ' +
-        'is a failure rather than a warning. zod was probably upgraded and renamed its issue ' +
-        `codes. Pick replacement string literals from zod's runtime source and update ` +
-        `ZOD_MARKERS in ${rel(selfPath)}.`,
+      `Could not read any entry points from ${rel(join(zodRoot, 'package.json'))}. ` +
+        'The gate derives the variants it must fingerprint from zod\'s "exports" map, so an ' +
+        'unreadable map means it cannot tell what shipped. Check the installed zod layout.',
       'zod fingerprint self-check failed',
     )
   }
 
-  return new Set(
-    runtimeFiles.filter((file) => {
+  // Group entry points by the lineage directory their code really lives in.
+  const lineageSubpaths = new Map()
+  for (const subpath of subpaths) {
+    const entry = resolveEntry(zodRoot, zodPkg, subpath)
+    if (!entry) continue
+    const dir = lineageDirOf(zodRoot, entry)
+    if (!lineageSubpaths.has(dir)) lineageSubpaths.set(dir, [])
+    lineageSubpaths.get(dir).push(subpath)
+  }
+
+  const lineages = []
+  const uncovered = []
+
+  for (const [dir, dirSubpaths] of [...lineageSubpaths].sort()) {
+    // `src/` is zod's shipped TypeScript and `tests/` its own suite. Neither is
+    // what a bundler pulls in, so neither counts as evidence a marker is live.
+    const runtimeFiles = walk(join(zodRoot, dir)).filter(
+      (file) => /\.(js|cjs|mjs)$/.test(file) && !/[\\/](?:src|tests)[\\/]/.test(file),
+    )
+
+    const present = new Set()
+    let matchingFiles = 0
+    for (const file of runtimeFiles) {
       const source = readFileSync(file, 'utf8')
-      return ZOD_MARKERS.some((marker) => source.includes(marker))
-    }),
-  ).size
+      const hits = ZOD_MARKERS.filter((marker) => source.includes(marker))
+      if (hits.length > 0) matchingFiles += 1
+      for (const hit of hits) present.add(hit)
+    }
+
+    const lineage = {
+      dir,
+      subpaths: dirSubpaths.sort(),
+      markers: [...present],
+      files: matchingFiles,
+    }
+    lineages.push(lineage)
+    if (present.size === 0) uncovered.push(lineage)
+  }
+
+  if (uncovered.length > 0) {
+    fail(
+      'Fingerprint self-check failed. This zod build ships variant(s) whose issue codes are ' +
+        'not fingerprinted, so a module importing one of them would ship a validator this ' +
+        'gate cannot see:\n' +
+        uncovered
+          .map((l) => `  ${l.dir}/ — reachable as ${l.subpaths.join(', ')} — 0 markers`)
+          .join('\n') +
+        `\n\nCurrent markers: ${ZOD_MARKERS.map((m) => `"${m}"`).join(', ')}\n` +
+        `Installed zod: ${zodPkg.version} at ${rel(zodRoot)}\n\n` +
+        'zod was probably upgraded and renamed its issue codes, or grew a new version lineage ' +
+        '(it has done both: v4 renamed every code v3 used). Pick a string literal from that ' +
+        "variant's runtime source — an issue code is ideal, since bundlers preserve string " +
+        `contents but rename identifiers — and add it to ZOD_MARKERS in ${rel(selfPath)}.\n` +
+        'This is a failure rather than a warning because a fingerprint that matches nothing ' +
+        'makes this gate pass unconditionally.',
+      'zod fingerprint self-check failed',
+    )
+  }
+
+  return { root: zodRoot, version: zodPkg.version, lineages }
+}
+
+/**
+ * The runtime file an `exports` subpath resolves to, following re-export barrels.
+ *
+ * A barrel is not a code root: `zod`'s own entry and `zod/v4-mini` both just
+ * forward elsewhere, so the lineage that owns their code is the one they point at.
+ */
+function resolveEntry(zodRoot, zodPkg, subpath) {
+  const entry = zodPkg.exports[subpath]
+  // Prefer the ESM condition: this gate is about what a browser bundler emits,
+  // and that is the condition webpack resolves for `apps/web`'s client graph.
+  const target =
+    typeof entry === 'string'
+      ? entry
+      : (entry?.import?.default ?? entry?.import ?? entry?.default ?? entry?.require?.default)
+  if (typeof target !== 'string') return null
+
+  let file = join(zodRoot, target)
+  for (let hop = 0; hop < 10; hop += 1) {
+    if (!existsSync(file) || statSync(file).isDirectory()) return null
+    const next = soleReexportTarget(file)
+    if (!next) return file
+    file = next
+  }
+  return file
+}
+
+/**
+ * If `file` only forwards another module, the file it forwards to.
+ *
+ * Returns null for a file containing any real code, or one that fans out to more
+ * than one module — in both cases the file itself is the lineage's code.
+ *
+ * zod's own entry is the shape this has to recognise, and it is more than bare
+ * `export * from`:
+ *
+ *     import * as z from "./v3/external.js"
+ *     export * from "./v3/external.js"
+ *     export { z }
+ *     export default z
+ *
+ * Every line either names the one target module or re-publishes a binding
+ * already taken from it, so the file holds no validator of its own. ESM only, by
+ * design: this gate cares about what a browser bundler emits, and that is the
+ * `import` condition resolved above.
+ */
+function soleReexportTarget(file) {
+  const code = readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('//'))
+
+  const targets = new Set()
+  for (const line of code) {
+    // `import ... from "T"` / `export * from "T"` / `export { a, b } from "T"`
+    const forwarding =
+      /^(?:import|export)\s+(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*["']([^"']+)["'];?$/.exec(
+        line,
+      )
+    if (forwarding) {
+      targets.add(forwarding[1])
+      continue
+    }
+    // `export { z }` / `export default z` — re-publishing a binding that can only
+    // have come from one of the targets above, so it adds no code of its own.
+    if (/^export\s+\{[^}]*\}\s*;?$/.test(line)) continue
+    if (/^export\s+default\s+\w+\s*;?$/.test(line)) continue
+
+    return null // real code, so this file is the lineage
+  }
+
+  if (targets.size !== 1) return null
+  const [target] = [...targets]
+  if (!target.startsWith('.')) return null
+  return join(dirname(file), target)
+}
+
+/** The top-level directory under the zod root that owns `file` (`v3`, `v4`, …). */
+function lineageDirOf(zodRoot, file) {
+  const segments = relative(zodRoot, file).split(/[\\/]/)
+  return segments.length > 1 ? segments[0] : '.'
 }
 
 /** Every file under `dir`, recursively. */
