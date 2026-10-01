@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import {
   VALID,
   asSeatId,
@@ -32,6 +33,8 @@ import {
   formatReport,
   describeProblem,
   jsonRoundTrip,
+  perturb,
+  planPerturbations,
   stableStringify,
   withoutAmbientSources,
 } from '../src/index.js'
@@ -446,5 +449,251 @@ describe('CheckRecorder and the report', () => {
     expect(text).toContain('note: a note')
     expect(text).toContain('at seed=1')
     expect(failedChecks(report)).toEqual(['determinism'])
+  })
+})
+
+/**
+ * The `accepted ⊆ offered` corpus generator (ADR-0012).
+ *
+ * This one belongs here rather than only in `mutants.test.ts` for the reason at
+ * the top of this file: its failure mode is not a failing test, it is an empty
+ * corpus and a silently passing conformance run. The schema shapes below are
+ * the ones that actually ship — chess's action is a discriminated union whose
+ * optional `promotion` sits one level down, inside `move`.
+ */
+describe('planPerturbations', () => {
+  function pathsOf(plan: ReturnType<typeof planPerturbations>): readonly string[] {
+    return plan.fields.map((field) => field.path).sort()
+  }
+
+  it('reads a flat optional field with a representative value', () => {
+    const plan = planPerturbations(
+      z.object({ type: z.literal('play'), face: z.enum(['up', 'down']).optional() }),
+      undefined,
+    )
+    expect(plan.schemaReadable).toBe(true)
+    expect(plan.gaps).toEqual([])
+    expect(plan.fields).toEqual([
+      { path: 'face', segments: ['face'], value: 'up', source: 'actionSchema' },
+    ])
+  })
+
+  it('reads every scalar type the ADR names, through every wrapper', () => {
+    const plan = planPerturbations(
+      z.object({
+        lit: z.literal(7).optional(),
+        str: z.string().optional(),
+        num: z.number().optional(),
+        bool: z.boolean().optional(),
+        native: z.nativeEnum({ A: 'a', B: 'b' }).optional(),
+        nullable: z.boolean().nullable().optional(),
+        readonlyish: z.number().readonly().optional(),
+        defaulted: z.string().default('d'),
+        unioned: z.union([z.literal('first'), z.number()]).optional(),
+      }),
+      undefined,
+    )
+    expect(plan.gaps).toEqual([])
+    expect(Object.fromEntries(plan.fields.map((field) => [field.path, field.value]))).toEqual({
+      lit: 7,
+      str: 'atrium-probe',
+      num: 1,
+      bool: true,
+      native: 'a',
+      nullable: true,
+      readonlyish: 1,
+      defaulted: 'atrium-probe',
+      unioned: 'first',
+    })
+  })
+
+  it('finds chess’s promotion: nested, inside a discriminated-union member', () => {
+    // The exact shape of `chessActionSchema`. A collector that only read
+    // top-level keys would report "nothing to cover" on the very defect
+    // ADR-0012 was written about (PER-198).
+    const plan = planPerturbations(
+      z.discriminatedUnion('type', [
+        z
+          .object({
+            type: z.literal('move'),
+            move: z
+              .object({
+                from: z.string(),
+                to: z.string(),
+                promotion: z.enum(['q', 'r', 'b', 'n']).optional(),
+              })
+              .strict(),
+          })
+          .strict(),
+        z.object({ type: z.literal('resign') }).strict(),
+      ]),
+      undefined,
+    )
+    expect(plan.schemaReadable).toBe(true)
+    expect(plan.gaps).toEqual([])
+    expect(pathsOf(plan)).toEqual(['move.promotion'])
+    expect(plan.fields[0]?.value).toBe('q')
+  })
+
+  it('contributes a key declared by several union members exactly once', () => {
+    const plan = planPerturbations(
+      z.discriminatedUnion('type', [
+        z.object({ type: z.literal('a'), note: z.string().optional() }),
+        z.object({ type: z.literal('b'), note: z.string().optional() }),
+      ]),
+      undefined,
+    )
+    expect(pathsOf(plan)).toEqual(['note'])
+  })
+
+  it('names a schema it cannot introspect instead of returning nothing', () => {
+    const plan = planPerturbations({ safeParse: () => ({ success: true }) }, undefined)
+    expect(plan.schemaReadable).toBe(false)
+    expect(plan.fields).toEqual([])
+    expect(plan.gaps).toEqual([
+      {
+        subject: 'actionSchema',
+        reason: 'an object with no zod v3 _def (a custom parser, or a hand-rolled schema)',
+      },
+    ])
+  })
+
+  it('names an optional field whose inner type it cannot sample', () => {
+    const plan = planPerturbations(
+      z.object({ type: z.literal('play'), meta: z.record(z.string()).optional() }),
+      undefined,
+    )
+    expect(plan.schemaReadable).toBe(true)
+    expect(plan.fields).toEqual([])
+    expect(plan.gaps).toEqual([{ subject: "optional field 'meta'", reason: 'ZodRecord' }])
+  })
+
+  it('names a union variant that is not an object', () => {
+    const plan = planPerturbations(
+      z.union([z.object({ type: z.literal('a'), note: z.string().optional() }), z.string()]),
+      undefined,
+    )
+    expect(plan.schemaReadable).toBe(true)
+    expect(pathsOf(plan)).toEqual(['note'])
+    expect(plan.gaps).toEqual([{ subject: 'a variant of actionSchema', reason: 'ZodString' }])
+  })
+
+  it('names a nested variant it cannot read, by the field it sits under', () => {
+    const plan = planPerturbations(
+      z.object({
+        type: z.literal('move'),
+        move: z.union([z.object({ to: z.string().optional() }), z.string()]),
+      }),
+      undefined,
+    )
+    expect(pathsOf(plan)).toEqual(['move.to'])
+    expect(plan.gaps).toEqual([{ subject: "a variant of the field 'move'", reason: 'ZodString' }])
+  })
+
+  it('stops at the nesting bound instead of walking an arbitrary tree', () => {
+    // Three path segments are in (chess needs two, so there is one level of
+    // headroom); the fourth is out. The bound is what keeps the cost law in
+    // ADR-0012 a law rather than a function of how deep a game nests.
+    const plan = planPerturbations(
+      z.object({
+        a: z.object({
+          flat: z.string().optional(),
+          b: z.object({ c: z.string().optional(), d: z.object({ e: z.string().optional() }) }),
+        }),
+      }),
+      undefined,
+    )
+    expect(pathsOf(plan)).toEqual(['a.b.c', 'a.flat'])
+  })
+
+  it('declines a union nested inside a union rather than searching forever', () => {
+    const plan = planPerturbations(
+      z.object({ u: z.union([z.union([z.string(), z.number()]), z.boolean()]).optional() }),
+      undefined,
+    )
+    // The outer union's first option is itself a union, which the sampler stops
+    // at; the second option is a boolean it can read.
+    expect(plan.fields[0]).toMatchObject({ path: 'u', value: true })
+  })
+
+  it('names a non-object actionSchema by what it actually got', () => {
+    expect(planPerturbations(undefined, undefined).gaps).toEqual([
+      { subject: 'actionSchema', reason: 'a undefined' },
+    ])
+    expect(planPerturbations(z.string(), undefined).gaps).toEqual([
+      { subject: 'actionSchema', reason: 'ZodString' },
+    ])
+  })
+
+  it('ignores a declared perturbation with an empty key', () => {
+    expect(planPerturbations(z.object({}), [{ key: '', values: ['x'] }]).fields).toEqual([])
+  })
+
+  it('lets a declared perturbation override the schema, and keeps the gap visible', () => {
+    const plan = planPerturbations(
+      z.object({ type: z.literal('play'), meta: z.record(z.string()).optional() }),
+      [{ key: 'meta', values: [{ a: 'b' }, { c: 'd' }] }],
+    )
+    expect(plan.fields).toHaveLength(2)
+    expect(plan.fields.every((field) => field.source === 'declared')).toBe(true)
+    // The schema is still unreadable here; papering over it must not hide that.
+    expect(plan.gaps).toEqual([{ subject: "optional field 'meta'", reason: 'ZodRecord' }])
+  })
+
+  it('accepts a dotted path in a declared perturbation', () => {
+    const plan = planPerturbations({ safeParse: () => ({ success: true }) }, [
+      { key: 'move.promotion', values: ['q'] },
+    ])
+    expect(plan.fields[0]).toMatchObject({
+      path: 'move.promotion',
+      segments: ['move', 'promotion'],
+      value: 'q',
+    })
+  })
+})
+
+describe('perturb', () => {
+  const field = { path: 'face', segments: ['face'], value: 'up', source: 'declared' } as const
+  const nested = {
+    path: 'move.promotion',
+    segments: ['move', 'promotion'],
+    value: 'q',
+    source: 'declared',
+  } as const
+
+  it('adds the field without touching the original', () => {
+    const action = { type: 'play', cardId: 'c01' }
+    const result = perturb(action, field)
+    expect(result).toEqual({ ok: true, value: { type: 'play', cardId: 'c01', face: 'up' } })
+    expect(action).toEqual({ type: 'play', cardId: 'c01' })
+  })
+
+  it('declines when the action already carries the key', () => {
+    // Adding a field that is already there is not a second spelling.
+    expect(perturb({ type: 'play', face: 'down' }, field)).toEqual({ ok: false })
+    // Even when it is explicitly undefined: the key is present on the wire.
+    expect(perturb({ type: 'play', face: undefined }, field)).toEqual({ ok: false })
+  })
+
+  it('rebuilds a nested path, sharing nothing with the original', () => {
+    const action = { type: 'move', move: { from: 'e2', to: 'e4' } }
+    const result = perturb(action, nested)
+    expect(result).toEqual({
+      ok: true,
+      value: { type: 'move', move: { from: 'e2', to: 'e4', promotion: 'q' } },
+    })
+    expect(action.move).toEqual({ from: 'e2', to: 'e4' })
+  })
+
+  it('declines when the parent on the path is absent', () => {
+    // What a `resign` action looks like to a probe aimed at `move.promotion`.
+    expect(perturb({ type: 'resign' }, nested)).toEqual({ ok: false })
+    expect(perturb({ type: 'move', move: 'e2e4' }, nested)).toEqual({ ok: false })
+  })
+
+  it('refuses a non-plain-object target', () => {
+    expect(perturb(null, field)).toEqual({ ok: false })
+    expect(perturb('resign', field)).toEqual({ ok: false })
+    expect(perturb([1, 2], field)).toEqual({ ok: false })
   })
 })

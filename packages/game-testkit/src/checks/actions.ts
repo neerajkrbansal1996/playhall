@@ -26,12 +26,19 @@
  * `getLegalActions` must agree with `validateAction`; a disagreement in
  * either direction breaks move hints, bot seats and this very suite, which
  * uses `getLegalActions` to drive playouts.
+ *
+ * The reverse direction — `accepted ⊆ offered`, ADR-0012 — is the half that
+ * needs more than sampling, because a spelling `getLegalActions` omits
+ * *everywhere* cannot appear in a corpus drawn from what it offered. See
+ * `../internal/perturb.ts` for the generator that closes that, and the coverage
+ * notes at the end of the check for the number it reports.
  */
 
 import { type GameEvent, STANDARD_ACTION_ERROR_CODES, type SeatId } from '@playhall/game-sdk'
 import { CheckRecorder } from '../report.js'
 import { type Prepared, healthyRuns } from '../internal/prepare.js'
 import { contextAt, outsiderSeatId } from '../internal/driver.js'
+import { type PerturbationPlan, perturb, planPerturbations } from '../internal/perturb.js'
 import { preview, stableStringify } from '../internal/value.js'
 
 /** Junk every `actionSchema` must reject, regardless of the game. */
@@ -311,6 +318,24 @@ export function checkLegalActionsAgree<
     )
   }
 
+  // ADR-0012. The perturbation corpus is built relative to each position from
+  // the actions the game offered *there*, so unlike `probeActions` it does not
+  // need a playout to wander anywhere in particular.
+  const plan = planPerturbations(server.actionSchema, prep.subject.actionPerturbations)
+  let forwardCorpus = 0
+  let perturbedCorpus = 0
+  /**
+   * Perturbations that survived the `listedKeys` skip and so reached
+   * `validateAction`. Separate from the corpus size because they answer
+   * different questions: the corpus is what ADR-0012's cost law counts, and
+   * this is what the direction actually asserted. A corpus every member of
+   * which `getLegalActions` already offers is a game that enumerates every
+   * spelling — a pass, not a gap.
+   */
+  let perturbedAsserted = 0
+  const probesByPath = new Map<string, number>()
+  for (const field of plan.fields) probesByPath.set(field.path, 0)
+
   for (const run of runs.slice(0, 12)) {
     const where0 = `${run.scenario.label} seed=${String(run.context.seed)}`
     const states = [run.playout.initial.state, ...run.playout.steps.map((step) => step.after)]
@@ -322,6 +347,7 @@ export function checkLegalActionsAgree<
         const listedKeys = new Set(listed.map((action) => stableStringify(action)))
 
         // Forward: everything listed must validate.
+        forwardCorpus += listed.length
         for (const action of listed) {
           const outcome = prep.guard(() => server.validateAction(ctx, state, seat.seatId, action))
           recorder.assert(outcome.ok, () => ({
@@ -340,6 +366,25 @@ export function checkLegalActionsAgree<
           if (other.seatId === seat.seatId) continue
           reverseCorpus.push(...prep.guard(() => getLegalActions(state, other.seatId)))
         }
+
+        // …and with perturbations of this seat's own offered actions, which is
+        // the only source that can contain a spelling `getLegalActions` omits
+        // everywhere. The *parsed* value goes into the corpus, because the
+        // contract is about the action after `actionSchema`, and a perturbation
+        // the schema rejects never reaches the game at all.
+        for (const action of listed) {
+          for (const field of plan.fields) {
+            const candidate = perturb(action, field)
+            if (!candidate.ok) continue
+            const parsed = server.actionSchema.safeParse(candidate.value)
+            if (!parsed.success) continue
+            reverseCorpus.push(parsed.data)
+            perturbedCorpus += 1
+            if (!listedKeys.has(stableStringify(parsed.data))) perturbedAsserted += 1
+            probesByPath.set(field.path, (probesByPath.get(field.path) ?? 0) + 1)
+          }
+        }
+
         for (const action of reverseCorpus) {
           if (listedKeys.has(stableStringify(action))) continue
           const outcome = prep.guard(() => server.validateAction(ctx, state, seat.seatId, action))
@@ -353,7 +398,82 @@ export function checkLegalActionsAgree<
     }
   }
 
+  reportPerturbationCoverage(recorder, plan, {
+    forwardCorpus,
+    perturbedCorpus,
+    perturbedAsserted,
+    probesByPath,
+  })
+
   return recorder
+}
+
+interface PerturbationTally {
+  readonly forwardCorpus: number
+  readonly perturbedCorpus: number
+  readonly perturbedAsserted: number
+  readonly probesByPath: ReadonlyMap<string, number>
+}
+
+/**
+ * Says what the perturbation direction actually did.
+ *
+ * This is the condition ADR-0012's approval rests on. A direction that
+ * generates zero probes and reports a pass reproduces the `passWithNoTests`
+ * failure mode on a check whose entire purpose is to stop a silent pass, so a
+ * green run has to be distinguishable from a run that never happened. Only the
+ * `covered:` line claims coverage, and it is emitted only when probes were
+ * actually generated.
+ */
+function reportPerturbationCoverage(
+  recorder: CheckRecorder,
+  plan: PerturbationPlan,
+  tally: PerturbationTally,
+): void {
+  const PREFIX = '`accepted ⊆ offered` perturbation direction'
+  const { forwardCorpus, perturbedCorpus, perturbedAsserted, probesByPath } = tally
+
+  for (const gap of plan.gaps) {
+    recorder.note(
+      `${PREFIX} NOT covered for ${gap.subject}: the schema introspector cannot read ${gap.reason}; declare it in actionPerturbations on the conformance subject so the direction runs (ADR-0012)`,
+    )
+  }
+
+  const paths = [...probesByPath.keys()]
+  if (plan.fields.length === 0) {
+    if (plan.gaps.length === 0) {
+      recorder.note(
+        `${PREFIX} has nothing to cover: actionSchema declares no optional field, so there is no tolerated-field spelling to probe`,
+      )
+    }
+  } else if (perturbedCorpus === 0) {
+    recorder.note(
+      `${PREFIX} NOT covered: ${String(plan.fields.length)} perturbation(s) over field(s) ${paths.join(', ')} produced 0 surviving probes — every candidate was either already carried by the offered action or rejected by actionSchema, so the direction did not run`,
+    )
+  } else {
+    const breakdown = paths.map((path) => `${path}=${String(probesByPath.get(path) ?? 0)}`)
+    const reached =
+      perturbedAsserted === 0
+        ? 'none of which needed asserting: getLegalActions already offers every one of them'
+        : `${String(perturbedAsserted)} of which reached validateAction`
+    recorder.note(
+      `${PREFIX} covered: ${String(perturbedCorpus)} probes from ${String(plan.fields.length)} perturbation(s) over field(s) ${breakdown.join(', ')}, ${reached}`,
+    )
+  }
+
+  // The number ADR-0012 pins, in the format its evidence section uses, plus the
+  // `validateAction` calls the direction actually added.
+  //
+  // The law is `perturbed <= forward × fields`, with equality when no offered
+  // action already carries the field and the schema accepts every
+  // representative value. A ratio below 1 is informative rather than wrong:
+  // chess's real promotions already carry `promotion`, so they contribute no
+  // probe, and a regex-constrained string rejects the sampler's placeholder.
+  const ceiling = forwardCorpus * plan.fields.length
+  const ratio = ceiling === 0 ? 'n/a' : (perturbedCorpus / ceiling).toFixed(3)
+  recorder.note(
+    `[cost law] fields=${String(plan.fields.length)} forward=${String(forwardCorpus)} perturbed=${String(perturbedCorpus)} asserted=${String(perturbedAsserted)} ratio=${ratio}`,
+  )
 }
 
 function sampleSteps<T>(items: readonly T[], count: number): readonly T[] {
