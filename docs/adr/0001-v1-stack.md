@@ -56,6 +56,20 @@
   `packages/game-sdk` is unchanged and no SDK contract change is implied. Row 2 also now states
   what layer 2 does **not** prove, so it cannot be cited as discharging layer 5 or 6. Found while
   ruling on [PER-153](/PER/issues/PER-153); corrected on [PER-158](/PER/issues/PER-158).
+- **Amended:** 2026-10-01 (rev 8) — **§4.4.1 only; no decision changes.** Rev 7 ended layer 3 at
+  "the negative fixture is part of layer 3's deliverable … without one, a rule that catches 0 of 4
+  is indistinguishable from a clean tree" — singular and unspecified. A reviewer auditing the
+  first room-class PR against this section would therefore accept **one** fixture with **one**
+  assertion, which is the failure mode the fixture exists to prevent: a count-of-4 assertion alone
+  is satisfied by a ban that also fires on every unrelated receiver in `apps/realtime/src`. §4.4.1
+  now specifies the fixture harness — a **new harness kind** for this repo, since no test here
+  asserts an ESLint rule fires and every existing negative fixture is a dependency-cruiser fixture
+  — and pins its **three** assertions, the four ways the harness can return a false zero, and the
+  load-bearing fixture location. All measured at `7d16885`, eslint 9.39.5. Docs-only: layer 3's
+  implementation and `eslint.config.mjs` remain [PER-15](/PER/issues/PER-15)'s deliverable. Found
+  while correcting an over-claim in [PER-153](/PER/issues/PER-153)'s rev 3 header, which said both
+  of Platform Engineer's asks landed in rev 7 when only layer 2's had; corrected on
+  [PER-173](/PER/issues/PER-173).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-8](/PER/issues/PER-8) (epic [PER-3](/PER/issues/PER-3))
@@ -281,7 +295,7 @@ forgotten, only deliberately removed.
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
 | 1   | **The room never assigns `this.state`.** A Colyseus room with no state runs no patch loop, so there is no unfiltered thing to forget to filter.                                                                                                                                                                                                                                                                                                             | Structural | [PER-15](/PER/issues/PER-15)                                                      |
 | 2   | **One egress funnel, enforced by the type system.** `client.send` / `client.raw` / `broadcast` are reachable only from a single `colyseusEgress()` module, which accepts a branded `RedactedView<T>` **produced only by the platform's redaction call site** — the wrapper that invokes the game's `getViewFor` / `getSnapshotFor`, not those functions' declared return type. Passing raw game state does not typecheck. Scope and limits below the table. | Type-level | [PER-15](/PER/issues/PER-15)                                                      |
-| 3   | **`broadcast` / `send` / `raw` banned outside that module** by `no-restricted-properties` in the **property-only** form (`{ property: 'broadcast' }`, no `object`), in a **new config block scoped to the room source** with the `colyseusEgress()` module excluded via `ignores`, plus a negative fixture. Recipe and measurement below the table.                                                                                                         | Lint       | [PER-15](/PER/issues/PER-15) — no source to lint until `apps/realtime` has a room |
+| 3   | **`broadcast` / `send` / `raw` banned outside that module** by `no-restricted-properties` in the **property-only** form (`{ property: 'broadcast' }`, no `object`), in a **new config block scoped to the room source** with the `colyseusEgress()` module excluded via `ignores`, plus a fixture harness carrying **three** named assertions. Recipe, measurement and harness spec below the table.                                                        | Lint       | [PER-15](/PER/issues/PER-15) — no source to lint until `apps/realtime` has a room |
 | 4   | **`@colyseus/schema` unreachable from a game**, so a game cannot express its state as framework state in the first place.                                                                                                                                                                                                                                                                                                                                   | CI gate    | **Landed** — `no-game-to-colyseus`, `c50da31`                                     |
 | 5   | **Testkit hidden-information leak tests** — proves `getViewFor` returns the right bytes.                                                                                                                                                                                                                                                                                                                                                                    | Test       | [PER-17](/PER/issues/PER-17)                                                      |
 | 6   | **Egress capture test** — asserts the server sent _nothing else_. Layer 5 proves the redactor is correct; only this proves no other code path writes to a socket.                                                                                                                                                                                                                                                                                           | Test       | [PER-15](/PER/issues/PER-15) — **required deliverable, not optional**             |
@@ -353,6 +367,81 @@ family" would be green for free.
 That is why the negative fixture is part of layer 3's deliverable on
 [PER-15](/PER/issues/PER-15) and not a nicety: without one, a rule that catches 0 of 4 is
 indistinguishable from a clean tree. The rule itself lands with PER-15, not with this revision.
+
+**Layer 3's fixture harness, specified (rev 8).** The paragraph above says "a negative fixture",
+singular and unspecified. That is not enough to review against: a single fixture asserting
+"some errors were reported" passes for at least four different wrong reasons, each measured
+below. What layer 3 owes is a harness with **three** named assertions.
+
+_The harness is a new kind for this repo._ No existing test asserts that an **ESLint** rule
+fires. Every negative fixture we have today — all twenty `tools/boundary-fixtures/*.fixture`
+files at `7d16885` — is a **dependency-cruiser** fixture, driven through
+`tools/boundaries/src/mini-repo.ts`. That harness cannot express layer 3, because layer 3 is a
+lint rule about call shapes inside one file, not a dependency edge between modules. Grepping
+`7d16885` for `new ESLint(` and `loadESLint` returns **zero hits**. So layer 3 must build the
+repo's first lint-rule fixture harness: a vitest test driving the **programmatic `ESLint` API**.
+Budget it as new work, not as "add a fixture to the existing set".
+
+`mini-repo.ts` already reaches the conclusion this section is applying to layer 3 — its header
+comment warns that a fixture placed where "the rules do not match … proves nothing", which is
+precisely why it copies `.dependency-cruiser.cjs` verbatim and rebuilds a miniature workspace
+rather than linting a fixture in place. Layer 3's equivalent of that discipline is the fixture
+location below.
+
+_The three assertions._ Each exists to close a specific false green. All counts are of messages
+with `ruleId === 'no-restricted-properties'`, measured at `7d16885` with eslint 9.39.5 against a
+mini-repo reproducing the block from _The scope_ above.
+
+| #   | Assertion                                               | Measured | Why it exists                                                                                                                                                                                                                |
+| --- | ------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The violating fixture yields **exactly 4** errors.      | 4        | Pins the count. The four shapes in _The form_'s table are caught by different parts of the rule; a rule catching **1 of 4** — exactly what rev 6's `{ object, property }` form did — still satisfies "errors were reported". |
+| 2   | A **compliant** file in the **same tree** yields **0**. | 0        | The generic-name check. `send` and `raw` are ordinary names, and the property-only form matches on **any** receiver. Without this, a ban firing on every receiver in `apps/realtime/src` still passes assertion 1.           |
+| 3   | The `colyseusEgress()` module itself yields **0**.      | 0        | It genuinely contains `client.send`. This **proves** the block's `ignores` exemption rather than assuming it — and a broken exemption makes the one legal egress path unbuildable, so it fails loud rather than leaking.     |
+
+_Four ways this harness returns a false zero._ Each was reproduced; a layer 3 PR that does not
+rule all four out has not discharged the layer.
+
+1. **Default `ESLint` options.** The fixture sits in the repo-level `ignores` (see below), so a
+   plain `new ESLint()` returns `errorCount: 0` plus the warning _"File ignored because of a
+   matching ignore pattern."_ — a silent pass on assertion 1. The harness must construct
+   `new ESLint({ ignore: false })`.
+2. **No TypeScript parser.** Without one, every `.ts` fixture yields exactly **1 fatal** message,
+   `"Parsing error: Unexpected token :"`. An assertion phrased as "errors > 0" passes on a file
+   that was never actually analysed. The harness must supply the parser and **assert no message
+   has `fatal: true`** before counting.
+3. **Counting `errorCount` instead of filtering by `ruleId`.** With the repo's unscoped blocks
+   also in effect, the violating fixture measures `errorCount: 6` against **4** egress errors —
+   the other two come from unrelated rules. A hard-coded `6` silently decays to a passing
+   assertion the moment an unrelated rule changes. Filter by `ruleId`.
+4. **A zero that means "never linted".** Assertion 3 is only meaningful if the module was linted
+   **and** exempted. A file matched by no config block at all also reports 0, carrying the note
+   _"File ignored because no matching configuration was supplied."_ — indistinguishable from a
+   working exemption unless the harness checks it.
+
+_The fixture location is load-bearing._ The fixture must sit **inside** the linted tree, at
+`apps/realtime/src/__fixtures__/`, with that exact path added to the **repo-level** `ignores` so
+`pnpm lint` stays green while the harness lints it explicitly via `ignore: false`. Measured with
+the fixture moved out:
+
+| Fixture location                     | Egress errors | Signal                                               |
+| ------------------------------------ | ------------- | ---------------------------------------------------- |
+| `apps/realtime/src/__fixtures__/`    | **4**         | correct                                              |
+| a sibling directory outside the repo | **0**         | warns _"File ignored because outside of base path."_ |
+| `tools/egress-fixtures/`             | **0**         | **silent — no warning at all**                       |
+
+The in-repo miss is the more dangerous of the two, and the more likely: parking egress fixtures
+next to the existing `tools/boundary-fixtures/` is the obvious thing to do, and the
+`files: ['apps/realtime/src/**/*.ts']` block simply does not match there. It reports zero with no
+diagnostic whatsoever. A reviewer sees a green harness and a fixture file and concludes layer 3
+is enforced.
+
+_A cost this records rather than hides._ The property-only form fires on **every** receiver, so a
+legitimate non-Colyseus call in the linted tree — `logger.send('telemetry')` — is one error
+(measured: 1). That is the price of catching 4 of 4, and it is why _The scope_ above confines the
+block to the room source instead of the repo. If `apps/realtime/src` later grows code that
+legitimately calls `.send` on something that is not a Colyseus client, the answer is to narrow
+the block's `files:` to the room modules — **not** to loosen the rule back toward the
+`{ object, property }` form, which would silently return layer 3 to catching 1 of 4.
 
 **Where this is weakest, stated plainly.** Layers 1, 2 and 3 are mechanical, but none of them
 exists today: Colyseus appears in no source file in the repo, so there is nothing for them to
