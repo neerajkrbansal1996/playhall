@@ -40,6 +40,14 @@ export {
 
 export { CHESS_SETTINGS_KEYS, chessSettingsForm, formFieldKeys } from './form.js'
 
+/**
+ * ADR-0007 descriptor types, straight from the SDK.
+ *
+ * These used to come through `../sdk/contract.js`, which was the local shim
+ * standing in for the SDK. The shim is gone ([PER-103](/PER/issues/PER-103));
+ * this re-export is here only so a consumer of the settings module does not
+ * have to import the SDK separately to type the descriptor it just read.
+ */
 export type {
   FieldVisibility,
   NumberField,
@@ -48,7 +56,7 @@ export type {
   SettingsField,
   SettingsFormDescriptor,
   ToggleField,
-} from '../sdk/contract.js'
+} from '@playhall/game-sdk'
 
 export {
   CHESS_SETTINGS_PRESETS,
