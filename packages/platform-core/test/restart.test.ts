@@ -8,7 +8,7 @@
  */
 import { asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { createManualClock } from '../src/timers/clock.js'
+import { fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService, restoreTimerService } from '../src/timers/service.js'
 
@@ -23,7 +23,7 @@ const TURN = asTimerId('turn')
 const throughRedis = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as unknown
 
 function liveMatch(startMs = 1_700_000_000_000) {
-  const clock = createManualClock(startMs)
+  const clock = fixedClock(startMs)
   const service = new TimerService({
     matchId: MATCH,
     clock,
@@ -43,7 +43,7 @@ describe('snapshot / restore', () => {
     const snapshot = throughRedis(live.service.snapshot())
 
     // The process dies. A replacement comes up 8 s later.
-    const restartedClock = createManualClock(live.clock.now() + 8_000)
+    const restartedClock = fixedClock(live.clock.now() + 8_000)
     const restored = restoreTimerService(snapshot, {
       clock: restartedClock,
       scheduler: createManualScheduler(),
@@ -65,7 +65,7 @@ describe('snapshot / restore', () => {
     const snapshot = throughRedis(live.service.snapshot())
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(live.clock.now() + 45_000),
+      clock: fixedClock(live.clock.now() + 45_000),
       scheduler: createManualScheduler(),
       chargeDowntime: false,
     })
@@ -79,7 +79,7 @@ describe('snapshot / restore', () => {
     live.clock.advance(10_000)
     const snapshot = throughRedis(live.service.snapshot())
 
-    const restartedClock = createManualClock(live.clock.now())
+    const restartedClock = fixedClock(live.clock.now())
     const restored = restoreTimerService(snapshot, {
       clock: restartedClock,
       scheduler: createManualScheduler(),
@@ -91,7 +91,7 @@ describe('snapshot / restore', () => {
   })
 
   it('preserves an unspent simple delay across a restart', () => {
-    const clock = createManualClock(1_700_000_000_000)
+    const clock = fixedClock(1_700_000_000_000)
     const service = new TimerService({ matchId: MATCH, clock, scheduler: createManualScheduler() })
     service.declarePlayerClock(WHITE_CLOCK, WHITE, {
       initialMs: 60_000,
@@ -102,7 +102,7 @@ describe('snapshot / restore', () => {
     clock.advance(2_000) // 2 s of the 5 s delay spent
 
     const restored = restoreTimerService(throughRedis(service.snapshot()), {
-      clock: createManualClock(clock.now()),
+      clock: fixedClock(clock.now()),
       scheduler: createManualScheduler(),
     })
 
@@ -118,7 +118,7 @@ describe('snapshot / restore', () => {
     const snapshot = throughRedis(live.service.snapshot())
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(live.clock.now() + 600_000),
+      clock: fixedClock(live.clock.now() + 600_000),
       scheduler: createManualScheduler(),
     })
 
@@ -135,7 +135,7 @@ describe('snapshot / restore', () => {
     const expiries: string[] = []
     const restored = restoreTimerService(snapshot, {
       // Down for six minutes. White had 280 s left; they flagged 80 s ago.
-      clock: createManualClock(live.clock.now() + 360_000),
+      clock: fixedClock(live.clock.now() + 360_000),
       scheduler: createManualScheduler(),
       onExpire: (expiry) => expiries.push(expiry.timerId),
     })
@@ -145,13 +145,13 @@ describe('snapshot / restore', () => {
   })
 
   it('round-trips a plain one-shot timer', () => {
-    const clock = createManualClock(1_700_000_000_000)
+    const clock = fixedClock(1_700_000_000_000)
     const service = new TimerService({ matchId: MATCH, clock, scheduler: createManualScheduler() })
     service.set(TURN, { seatId: WHITE, delayMs: 30_000, kind: 'turn' })
     clock.advance(5_000)
 
     const restored = restoreTimerService(throughRedis(service.snapshot()), {
-      clock: createManualClock(clock.now()),
+      clock: fixedClock(clock.now()),
       scheduler: createManualScheduler(),
     })
     expect(restored.remainingMs(TURN)).toBe(25_000)
@@ -170,7 +170,7 @@ describe('restore refuses to guess', () => {
     expect(() =>
       restoreTimerService(snapshot, {
         // The replacement host's wall clock is 5 s behind the dead one's.
-        clock: createManualClock(live.clock.now() - 5_000),
+        clock: fixedClock(live.clock.now() - 5_000),
         scheduler: createManualScheduler(),
       }),
     ).toThrow(/stepped backwards/)
@@ -178,12 +178,15 @@ describe('restore refuses to guess', () => {
 
   it('rejects a blob whose shape has drifted', () => {
     expect(() =>
-      restoreTimerService({ version: 1, matchId: 'm1' }, { scheduler: createManualScheduler() }),
+      restoreTimerService(
+        { version: 1, matchId: 'm1' },
+        { clock: fixedClock(0), scheduler: createManualScheduler() },
+      ),
     ).toThrow()
     expect(() =>
       restoreTimerService(
         { version: 2, matchId: 'm1', savedAtMs: 0, timers: [] },
-        { scheduler: createManualScheduler() },
+        { clock: fixedClock(0), scheduler: createManualScheduler() },
       ),
     ).toThrow()
   })
@@ -210,7 +213,7 @@ describe('restore refuses to guess', () => {
             },
           ],
         },
-        { clock: createManualClock(1_000), scheduler: createManualScheduler() },
+        { clock: fixedClock(1_000), scheduler: createManualScheduler() },
       ),
     ).toThrow()
   })
@@ -218,10 +221,249 @@ describe('restore refuses to guess', () => {
   it('accepts an empty match', () => {
     const restored = restoreTimerService(
       { version: 1, matchId: 'm1', savedAtMs: 0, timers: [] },
-      { clock: createManualClock(1_000), scheduler: createManualScheduler() },
+      { clock: fixedClock(1_000), scheduler: createManualScheduler() },
     )
     expect(restored.list()).toHaveLength(0)
     expect(restored.nextDeadlineMs()).toBeNull()
+  })
+})
+
+/**
+ * The invariant these guard is the one `endTurnRecord` states and
+ * `docs/timers.md` promises: **a record can never reach `remainingMs === 0`
+ * without a `TimerExpiry` having been delivered.** Every live mutator keeps it
+ * by draining at the mutation instant before it touches anything; `restore`
+ * used to reconcile first, which froze the flagged record at zero and made it
+ * invisible to `deadlineMsAt` — so the drain behind it had no deadline left to
+ * find and the expiry was lost for good.
+ *
+ * A planned drain is the deploy path and a crash is the common one, so this is
+ * the single place a flag-fall is most likely to go missing in production.
+ */
+describe('a flag-fall during downtime survives the restart', () => {
+  /**
+   * A `chess-clock` record, anchored and running, with `n` ms left.
+   *
+   * These tests build the snapshot by hand rather than through `snapshot()`,
+   * and that is the honest shape to test: the restore path parses untrusted
+   * JSON out of Redis, and "a record is still anchored while the scopes say it
+   * must not run" is schema-valid, is exactly what the pre-hold build wrote,
+   * and is what `#reconcile` then froze at zero. A live service never *writes*
+   * it, which is precisely why no test built through the live API caught this.
+   */
+  const runningClock = (
+    timerId: string,
+    seatId: string,
+    remainingMs: number,
+    anchorMs: number,
+  ) => ({
+    timerId,
+    seatId,
+    kind: 'chess-clock' as const,
+    remainingMs,
+    startedAtMs: anchorMs,
+    delayRemainingMs: 0,
+    turnElapsedMs: 0,
+    clock: {
+      initialMs: 300_000,
+      incrementMs: 0,
+      delayMs: 0,
+      delayMode: 'none' as const,
+      maxMs: null,
+    },
+    expired: false,
+    holds: [] as string[],
+    version: 4,
+  })
+
+  it('fires for a room the snapshot says was held', () => {
+    const snapshot = {
+      version: 2 as const,
+      matchId: 'm1',
+      savedAtMs: 1_000_000,
+      onMoveSeatId: WHITE,
+      roomHeld: true,
+      heldSeats: [],
+      heldTimers: [],
+      timers: [runningClock(WHITE_CLOCK, WHITE, 1_000, 1_000_000)],
+    }
+
+    // 90 s of downtime against a clock with 1 s left.
+    const fired: string[] = []
+    const restored = restoreTimerService(throughRedis(snapshot), {
+      clock: fixedClock(1_090_000),
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+
+    expect(fired).toEqual([WHITE_CLOCK])
+    expect(restored.get(WHITE_CLOCK)?.expired).toBe(true)
+    expect(restored.remainingMs(WHITE_CLOCK)).toBe(0)
+    // Terminal: lifting the hold cannot revive a dead clock.
+    restored.resumeAll()
+    expect(restored.isRunning(WHITE_CLOCK)).toBe(false)
+  })
+
+  it('fires for a seat the snapshot says was absent', () => {
+    const snapshot = {
+      version: 2 as const,
+      matchId: 'm1',
+      savedAtMs: 1_000_000,
+      onMoveSeatId: WHITE,
+      roomHeld: false,
+      heldSeats: [WHITE as string],
+      heldTimers: [],
+      timers: [runningClock(WHITE_CLOCK, WHITE, 1_000, 1_000_000)],
+    }
+
+    const fired: string[] = []
+    restoreTimerService(throughRedis(snapshot), {
+      clock: fixedClock(1_030_000),
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+
+    expect(fired).toEqual([WHITE_CLOCK])
+  })
+
+  it('fires when the game state alone says the record must stop', () => {
+    // No hold at all: the snapshot says Black is to move while White's clock is
+    // the one still anchored. `#reconcile` stops White because `#onMoveSeatId`
+    // says so, and that freeze is what used to swallow the expiry.
+    const snapshot = {
+      version: 2 as const,
+      matchId: 'm1',
+      savedAtMs: 1_000_000,
+      onMoveSeatId: BLACK,
+      roomHeld: false,
+      heldSeats: [],
+      heldTimers: [],
+      timers: [runningClock(WHITE_CLOCK, WHITE, 1_000, 1_000_000)],
+    }
+
+    const fired: string[] = []
+    restoreTimerService(throughRedis(snapshot), {
+      clock: fixedClock(1_090_000),
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+
+    expect(fired).toEqual([WHITE_CLOCK])
+  })
+
+  it('loses nothing when both clocks flag, including on the ambiguous v1 shape', () => {
+    // Two running clocks is a shape only the pre-hold build could produce (its
+    // `resumeForSeat` started the non-mover's clock), and `readV1Scopes`
+    // refuses to name a mover from it. Refusing to guess must not also mean
+    // losing both expiries: the budgets still ran out.
+    const snapshot = {
+      version: 1 as const,
+      matchId: 'm1',
+      savedAtMs: 1_000_000,
+      timers: [
+        {
+          timerId: WHITE_CLOCK,
+          seatId: WHITE,
+          kind: 'chess-clock' as const,
+          remainingMs: 500,
+          startedAtMs: 1_000_000,
+          delayRemainingMs: 0,
+          turnElapsedMs: 0,
+          clock: {
+            initialMs: 1_000,
+            incrementMs: 0,
+            delayMs: 0,
+            delayMode: 'none' as const,
+            maxMs: null,
+          },
+          expired: false,
+          version: 3,
+        },
+        {
+          timerId: BLACK_CLOCK,
+          seatId: BLACK,
+          kind: 'chess-clock' as const,
+          remainingMs: 800,
+          startedAtMs: 1_000_000,
+          delayRemainingMs: 0,
+          turnElapsedMs: 0,
+          clock: {
+            initialMs: 1_000,
+            incrementMs: 0,
+            delayMs: 0,
+            delayMode: 'none' as const,
+            maxMs: null,
+          },
+          expired: false,
+          version: 3,
+        },
+      ],
+    }
+
+    const fired: string[] = []
+    const restored = restoreTimerService(throughRedis(snapshot), {
+      clock: fixedClock(1_060_000),
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+
+    // In deadline order: White had 500 ms, Black 800 ms.
+    expect(fired).toEqual([WHITE_CLOCK, BLACK_CLOCK])
+    expect(restored.get(WHITE_CLOCK)?.expired).toBe(true)
+    expect(restored.get(BLACK_CLOCK)?.expired).toBe(true)
+  })
+
+  it('still leaves an un-flagged paused clock paused and unexpired', () => {
+    // The guard against the fix over-reaching. A clock with budget left must
+    // come back paused, not expired, and must not have been charged.
+    const live = liveMatch()
+    live.service.switchTurnTo(WHITE)
+    live.clock.advance(10_000)
+    live.service.pauseAll()
+    const snapshot = throughRedis(live.service.snapshot())
+
+    const fired: string[] = []
+    const restored = restoreTimerService(snapshot, {
+      clock: fixedClock(live.clock.now() + 90_000),
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+
+    expect(fired).toEqual([])
+    expect(restored.get(WHITE_CLOCK)?.expired).toBe(false)
+    expect(restored.isRunning(WHITE_CLOCK)).toBe(false)
+    expect(restored.remainingMs(WHITE_CLOCK)).toBe(290_000)
+  })
+})
+
+/**
+ * `#reconcile`'s own guard, independent of the restore ordering. It is the
+ * belt to the drain's braces, and it has to be scoped correctly: a *running*
+ * record frozen at zero flagged, but a record merely *armed* with a zero
+ * budget under a hold has never had the chance to run.
+ */
+describe('reconcile fails closed on a record frozen at zero', () => {
+  it('does not expire a zero-budget timer armed while a hold covers it', () => {
+    const live = liveMatch()
+    live.service.pauseAll()
+    live.service.set(TURN, { delayMs: 0 })
+
+    expect(live.service.get(TURN)?.expired).toBe(false)
+    expect(live.service.isRunning(TURN)).toBe(false)
+
+    // It fires the moment the hold lifts, which is `set`'s stated contract.
+    const fired: string[] = []
+    const service = new TimerService({
+      matchId: MATCH,
+      clock: live.clock,
+      scheduler: createManualScheduler(),
+      onExpire: (expiry) => fired.push(expiry.timerId),
+    })
+    service.pauseAll()
+    service.set(TURN, { delayMs: 0 })
+    expect(fired).toEqual([])
+    service.resumeAll()
+    expect(fired).toEqual([TURN])
   })
 })
 
@@ -229,7 +471,7 @@ describe('TimerService.restore', () => {
   it('is the same thing as the free function', () => {
     const snapshot = { version: 1, matchId: 'm1', savedAtMs: 0, timers: [] }
     const restored = TimerService.restore(snapshot, {
-      clock: createManualClock(1_000),
+      clock: fixedClock(1_000),
       scheduler: createManualScheduler(),
     })
     expect(restored.matchId).toBe(MATCH)

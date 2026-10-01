@@ -22,21 +22,39 @@ no accumulating term — the only error is the error of the current reading. Sam
 idea on the client: it holds absolute deadlines in server time and subtracts,
 rather than running a countdown.
 
-`clock.ts` is the only module under `packages` allowed to read ambient time, and
-`eslint.config.mjs` enforces that. The system clock is anchored once
+Nothing under `packages` reads ambient time — ADR-0002 §4, with no exemption in
+`eslint.config.mjs`. `TimerServiceOptions.clock` is a **required** injected
+port, so a room cannot be built without being handed the process clock; the one
+implementation that reads the host lives in the composition root,
+`apps/realtime/src/clock.ts`. It is anchored once
 (`wallOrigin + (performance.now() - monoOrigin)`) so an NTP step on the host
-cannot take a second off a player's clock.
+cannot take a second off a player's clock. Tests pass `fixedClock`.
+
+## What it rejects
+
+Every millisecond quantity that crosses in from a game — `delayMs`, the
+`ctx.now` a command was stamped with, a player-clock configuration — must be an
+integer, and a duration must also be non-negative. Anything else throws a
+`RangeError` at the boundary.
+
+That is deliberately strict, because a `NaN` is not a slightly wrong deadline:
+it makes a timer that can never fire, arms the scheduler at `0` so the room
+spins forever, makes the snapshot fail its own schema so the match can never be
+restored, and makes the _client_ reject the whole `timer:sync` frame so every
+clock in the room freezes. All four are silent. `apply()` validates a whole
+command batch before executing any of it, so a bad batch is a no-op plus a
+throw rather than half a mutation on the match log.
 
 ## What is supported
 
-| Kind           | What it is                                              |
-| -------------- | ------------------------------------------------------- |
-| `chess-clock`  | Per-player budget, runs only while that seat is to move |
-| `turn`         | One deadline for the current mover                      |
-| `phase`        | A deadline for a whole phase (simultaneous play)        |
-| `match`        | A ceiling on the whole match                            |
-| `grace`        | Reconnection grace, usually driven by `disconnectPolicy` |
-| `custom`       | Anything else the manifest declares                     |
+| Kind          | What it is                                               |
+| ------------- | -------------------------------------------------------- |
+| `chess-clock` | Per-player budget, runs only while that seat is to move  |
+| `turn`        | One deadline for the current mover                       |
+| `phase`       | A deadline for a whole phase (simultaneous play)         |
+| `match`       | A ceiling on the whole match                             |
+| `grace`       | Reconnection grace, usually driven by `disconnectPolicy` |
+| `custom`      | Anything else the manifest declares                      |
 
 Per-player clocks support a Fischer `incrementMs` (credited when the turn
 completes, never to a seat that flagged mid-move), a `delayMs` in either
@@ -54,19 +72,19 @@ changes, and on a keepalive so a long-idle client re-measures its offset.
   "type": "timer:sync",
   "matchId": "…",
   "serverTime": 1700000000000, // server clock when the frame was built
-  "replyTo": "clientMsgId",    // echo when answering a request, else null
+  "replyTo": "clientMsgId", // echo when answering a request, else null
   "timers": [
     {
       "timerId": "clock:white",
       "seatId": "white",
       "kind": "chess-clock",
-      "state": "running",      // running | paused | expired
-      "remainingMs": 293000,   // as of serverTime; render this when paused
+      "state": "running", // running | paused | expired
+      "remainingMs": 293000, // as of serverTime; render this when paused
       "deadlineAtMs": 1700000293000, // absolute, in *server* time; null unless running
       "delayRemainingMs": 0,
-      "version": 7
-    }
-  ]
+      "version": 7,
+    },
+  ],
 }
 ```
 
@@ -102,7 +120,7 @@ tracker.views() // TimerView[], ready to render
 `service.snapshot()` is JSON-safe and goes into Redis; `TimerService.restore()`
 parses it (never casts) and rebuilds. Anchors are absolute epoch milliseconds,
 because a monotonic counter does not survive a process. A snapshot stamped in
-the *future* relative to the restoring host is rejected rather than trusted.
+the _future_ relative to the restoring host is rejected rather than trusted.
 
 - `chargeDowntime: true` (default) — a crash. From the players' point of view
   the clock never stopped, so it did not; a flag that fell while the process was

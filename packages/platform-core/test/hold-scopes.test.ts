@@ -14,7 +14,7 @@
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService, restoreTimerService } from '../src/timers/service.js'
 
@@ -34,8 +34,8 @@ const SPECS: readonly TimerSpec[] = [
 /** Whatever Redis gives back is JSON, not our objects. */
 const throughRedis = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as unknown
 
-function chess(startMs = 1_000_000): { clock: ManualClock; service: TimerService } {
-  const clock = createManualClock(startMs)
+function chess(startMs = 1_000_000): { clock: MutableClock; service: TimerService } {
+  const clock = fixedClock(startMs)
   const service = new TimerService({
     matchId: MATCH,
     clock,
@@ -155,7 +155,7 @@ describe('seat hold then room hold', () => {
     const specs: readonly TimerSpec[] = [
       { id: 'turn', kind: 'turn', description: 'move deadline', pausesOnDisconnect: false },
     ]
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -188,7 +188,7 @@ describe('the game state outranks every scope', () => {
   })
 
   it('never holds an expired clock, so no later resume can revive it', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({
       matchId: MATCH,
       clock,
@@ -222,7 +222,7 @@ describe('the scopes survive Redis', () => {
     expect(snapshot.version).toBe(2)
 
     const restored = restoreTimerService(throughRedis(snapshot), {
-      clock: createManualClock(h.clock.now() + 90_000),
+      clock: fixedClock(h.clock.now() + 90_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
     })
@@ -259,7 +259,7 @@ describe('the scopes survive Redis', () => {
         ],
       },
       {
-        clock: createManualClock(1_060_000),
+        clock: fixedClock(1_060_000),
         scheduler: createManualScheduler(),
         specs: SPECS,
       },
@@ -300,7 +300,7 @@ describe('the scopes survive Redis', () => {
           v1Record({ timerId: 'turn', seatId: null, kind: 'turn', holds: ['timer'] }),
         ],
       },
-      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+      { clock: fixedClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
     )
 
     expect(restored.onMoveSeatId).toBe(WHITE)
@@ -345,7 +345,7 @@ describe('the scopes survive Redis', () => {
           }),
         ],
       },
-      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+      { clock: fixedClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
     )
 
     expect(restored.onMoveSeatId).toBeNull()
@@ -379,7 +379,7 @@ describe('the scopes survive Redis', () => {
           }),
         ],
       },
-      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+      { clock: fixedClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
     )
 
     expect(restored.onMoveSeatId).toBeNull()
@@ -413,7 +413,7 @@ describe('the scopes survive Redis', () => {
           }),
         ],
       },
-      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+      { clock: fixedClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
     )
 
     // White alone carries `['room']`, so this one *is* recoverable.
@@ -447,7 +447,7 @@ describe('the scopes survive Redis', () => {
           }),
         ],
       },
-      { clock: createManualClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
+      { clock: fixedClock(1_010_000), scheduler: createManualScheduler(), specs: SPECS },
     )
 
     expect(restored.onMoveSeatId).toBeNull()

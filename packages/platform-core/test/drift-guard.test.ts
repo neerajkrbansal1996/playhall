@@ -14,8 +14,8 @@
  */
 import { asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import type { Clock } from '../src/timers/clock.js'
-import { createSystemClock } from '../src/timers/clock.js'
+import type { Clock } from '../src/runtime.js'
+import { realSystemClock } from './fixtures/real-clock.js'
 import { TimerService } from '../src/timers/service.js'
 import { TimerSyncTracker } from '../src/timers/sync.js'
 
@@ -33,8 +33,8 @@ function skewed(base: Clock, skewMs: number): Clock {
 
 describe('drift over a real, if short, run', () => {
   it('a client that synced once stays with the server for five seconds', async () => {
-    const serverClock = createSystemClock()
-    const clientClock = skewed(createSystemClock(), 86_400_000)
+    const serverClock = realSystemClock()
+    const clientClock = skewed(realSystemClock(), 86_400_000)
 
     const service = new TimerService({ matchId: MATCH, clock: serverClock })
     service.declarePlayerClock(CLOCK, SEAT, { initialMs: 600_000 })
@@ -65,7 +65,7 @@ describe('drift over a real, if short, run', () => {
   }, 30_000)
 
   it('a two-second timer fires within a few ms of its deadline', async () => {
-    const clock = createSystemClock()
+    const clock = realSystemClock()
     let fired: { dueAtMs: number; latenessMs: number } | null = null
     const service = new TimerService({
       matchId: MATCH,

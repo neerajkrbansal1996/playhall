@@ -26,13 +26,14 @@
  * minimum is the closest to symmetric. We keep a small window of samples and
  * use the best one rather than averaging in the bad ones.
  *
- * The client clock must be monotonic (`createSystemClock`). A phone that
- * corrects its wall clock mid-match would otherwise jump every timer at once.
+ * The client clock must be monotonic. A phone that corrects its wall clock
+ * mid-match would otherwise jump every timer at once, so the browser shell
+ * anchors `performance.now()` once and passes that in — the same construction
+ * `apps/realtime` uses server-side.
  */
 
 import type { SeatId, TimerKind } from '@playhall/game-sdk'
-import type { Clock } from './clock.js'
-import { createSystemClock } from './clock.js'
+import type { Clock } from '../runtime.js'
 import type { TimerSyncMessage } from './wire.js'
 import { timerSyncMessageSchema } from './wire.js'
 
@@ -114,8 +115,13 @@ export interface ClientTimerView {
 }
 
 export interface TimerSyncTrackerOptions {
-  /** Monotonic client clock. Defaults to the real one. */
-  readonly clock?: Clock
+  /**
+   * The client's own monotonic clock. **Required**, for the same reason
+   * `TimerServiceOptions.clock` is: a default here would be an ambient clock
+   * inside a `packages` source tree, which ADR-0002 §4 does not allow and which
+   * this package has no exemption for. The browser shell supplies it.
+   */
+  readonly clock: Clock
 }
 
 /**
@@ -130,8 +136,8 @@ export class TimerSyncTracker {
   #sync = new ServerTimeSync()
   #message: TimerSyncMessage | null = null
 
-  constructor(options: TimerSyncTrackerOptions = {}) {
-    this.#clock = options.clock ?? createSystemClock()
+  constructor(options: TimerSyncTrackerOptions) {
+    this.#clock = options.clock
   }
 
   get serverTimeSync(): ServerTimeSync {

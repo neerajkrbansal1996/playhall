@@ -34,8 +34,8 @@
 
 import { asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { expect, it } from 'vitest'
-import type { Clock } from '../src/timers/clock.js'
-import { createSystemClock } from '../src/timers/clock.js'
+import type { Clock } from '../src/runtime.js'
+import { realSystemClock } from '../test/fixtures/real-clock.js'
 import { TimerService } from '../src/timers/service.js'
 import { TimerSyncTracker } from '../src/timers/sync.js'
 
@@ -69,9 +69,9 @@ function percentile(sorted: readonly number[], p: number): number {
 it(
   `client-visible clock drift stays under ${DRIFT_BUDGET_MS} ms over 5 minutes`,
   async () => {
-    const serverClock = createSystemClock()
+    const serverClock = realSystemClock()
     // A separate anchor, plus a constant skew: this is a different machine.
-    const clientClock = skewedClock(createSystemClock(), CLIENT_SKEW_MS)
+    const clientClock = skewedClock(realSystemClock(), CLIENT_SKEW_MS)
 
     let fired: { dueAtMs: number; firedAtMs: number; latenessMs: number } | null = null
     const service = new TimerService({

@@ -7,9 +7,6 @@
  * `TimerView[]` it is handed. It never reads a clock and never counts down.
  */
 
-export type { Clock, ManualClock } from './clock.js'
-export { createFixedClock, createManualClock, createSystemClock } from './clock.js'
-
 export type { DelayMode, PlayerClockConfig, TimerHold, TimerRecord } from './record.js'
 export {
   DEFAULT_PLAYER_CLOCK,

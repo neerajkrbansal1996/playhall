@@ -13,7 +13,7 @@
  * anchors, so a late or short wake-up costs nothing but a second pass.
  */
 
-import type { Clock } from './clock.js'
+import type { Clock } from '../runtime.js'
 
 export interface Scheduler {
   /** Arm for `atMs`, replacing any previous arm. */

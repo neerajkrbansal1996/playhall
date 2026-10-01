@@ -15,7 +15,7 @@
  */
 import { type TimerSpec, asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { type TimerExpiry, TimerService, restoreTimerService } from '../src/timers/service.js'
 
@@ -36,13 +36,13 @@ const SPECS: readonly TimerSpec[] = [
 const throughRedis = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as unknown
 
 interface Harness {
-  clock: ManualClock
+  clock: MutableClock
   service: TimerService
   expiries: TimerExpiry[]
 }
 
 function chess(options: { initialMs?: number; startMs?: number } = {}): Harness {
-  const clock = createManualClock(options.startMs ?? 1_000_000)
+  const clock = fixedClock(options.startMs ?? 1_000_000)
   const expiries: TimerExpiry[] = []
   const service = new TimerService({
     matchId: MATCH,
@@ -183,7 +183,7 @@ describe('overlapping holds nest', () => {
   })
 
   it('drops holds when the game re-arms the timer, so a stale pause cannot strand it', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const service = new TimerService({ matchId: MATCH, clock, scheduler: createManualScheduler() })
     service.set(TURN, { delayMs: 30_000 })
     service.pause(TURN)
@@ -203,7 +203,7 @@ describe('a restart lands on the state the room was actually in', () => {
     const snapshot = throughRedis(h.service.snapshot())
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(h.clock.now() + 45_000),
+      clock: fixedClock(h.clock.now() + 45_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
       chargeDowntime: false,
@@ -223,7 +223,7 @@ describe('a restart lands on the state the room was actually in', () => {
     const snapshot = throughRedis(h.service.snapshot())
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(h.clock.now() + 60_000),
+      clock: fixedClock(h.clock.now() + 60_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
       chargeDowntime: false,
@@ -246,7 +246,7 @@ describe('a restart lands on the state the room was actually in', () => {
     const snapshot = throughRedis(h.service.snapshot())
 
     const restored = restoreTimerService(snapshot, {
-      clock: createManualClock(h.clock.now() + 600_000),
+      clock: fixedClock(h.clock.now() + 600_000),
       scheduler: createManualScheduler(),
       specs: SPECS,
     })
@@ -280,7 +280,7 @@ describe('a restart lands on the state the room was actually in', () => {
           },
         ],
       },
-      { clock: createManualClock(1_005_000), scheduler: createManualScheduler() },
+      { clock: fixedClock(1_005_000), scheduler: createManualScheduler() },
     )
 
     expect(restored.get(TURN)?.holds).toEqual([])
@@ -339,7 +339,7 @@ describe('a flag-fall is never swallowed by the mutation that stepped over it', 
   })
 
   it('delivers the expiry when a game command steps over the deadline', () => {
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const expiries: TimerExpiry[] = []
     const service = new TimerService({
       matchId: MATCH,
@@ -358,7 +358,7 @@ describe('a flag-fall is never swallowed by the mutation that stepped over it', 
     // The invariant, walked over a whole game's worth of switches with no poll
     // anywhere and a step that does not divide the budget — so the flag falls
     // *between* two switches rather than on one.
-    const clock = createManualClock(1_000_000)
+    const clock = fixedClock(1_000_000)
     const expiries: TimerExpiry[] = []
     const service = new TimerService({
       matchId: MATCH,

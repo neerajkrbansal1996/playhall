@@ -8,7 +8,7 @@
  */
 import { REPLAY, SPECTATOR, asMatchId, asSeatId, asTimerId, seatViewer } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { TimerService } from '../src/timers/service.js'
 import { ServerTimeSync, TimerSyncTracker } from '../src/timers/sync.js'
@@ -27,8 +27,8 @@ const TURN = asTimerId('turn')
  * depend on it being small.
  */
 function pair(options: { clientSkewMs?: number; upMs?: number; downMs?: number } = {}) {
-  const serverClock = createManualClock(1_700_000_000_000)
-  const clientClock = createManualClock(1_700_000_000_000 + (options.clientSkewMs ?? 0))
+  const serverClock = fixedClock(1_700_000_000_000)
+  const clientClock = fixedClock(1_700_000_000_000 + (options.clientSkewMs ?? 0))
   const upMs = options.upMs ?? 40
   const downMs = options.downMs ?? 40
 
@@ -379,7 +379,7 @@ describe('reconnection', () => {
   })
 
   it('renders nothing before the first sync rather than guessing', () => {
-    const tracker = new TimerSyncTracker({ clock: createManualClock(0) })
+    const tracker = new TimerSyncTracker({ clock: fixedClock(0) })
     expect(tracker.isEmpty).toBe(true)
     expect(tracker.views()).toEqual([])
     expect(tracker.remainingMs('anything')).toBe(0)
@@ -388,7 +388,7 @@ describe('reconnection', () => {
 
 describe('the tracker is defensive about what comes off the socket', () => {
   it('parses rather than trusts', () => {
-    const tracker = new TimerSyncTracker({ clock: createManualClock(0) })
+    const tracker = new TimerSyncTracker({ clock: fixedClock(0) })
     expect(() => tracker.applySync({ type: 'timer:sync' })).toThrow()
     expect(() =>
       tracker.applySync({ type: 'nope', matchId: 'm', serverTime: 0, timers: [] }),
@@ -497,7 +497,7 @@ describe('the wire frame', () => {
   })
 
   it('carries integers only, so no client has to decide how to round', () => {
-    const clock: ManualClock = createManualClock(0)
+    const clock: MutableClock = fixedClock(0)
     const service = new TimerService({ matchId: MATCH, clock, scheduler: createManualScheduler() })
     service.set(TURN, { delayMs: 1_500 })
     clock.advance(333)

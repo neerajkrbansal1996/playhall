@@ -15,7 +15,7 @@ import {
   setTimer,
 } from '@playhall/game-sdk'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { type ManualClock, createManualClock } from '../src/timers/clock.js'
+import { type MutableClock, fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { type TimerExpiry, TimerService } from '../src/timers/service.js'
 
@@ -35,13 +35,13 @@ const SPECS: readonly TimerSpec[] = [
 ]
 
 interface Harness {
-  clock: ManualClock
+  clock: MutableClock
   service: TimerService
   expiries: TimerExpiry[]
 }
 
 function harness(options: { specs?: readonly TimerSpec[]; startMs?: number } = {}): Harness {
-  const clock = createManualClock(options.startMs ?? 1_000_000)
+  const clock = fixedClock(options.startMs ?? 1_000_000)
   const expiries: TimerExpiry[] = []
   const service = new TimerService({
     matchId: MATCH,
@@ -350,7 +350,7 @@ describe('disconnect and pause', () => {
 
 describe('re-entrancy', () => {
   it('lets an expiry handler arm the next timer without recursing', () => {
-    const clock = createManualClock(0)
+    const clock = fixedClock(0)
     let rounds = 0
     const service = new TimerService({
       matchId: MATCH,
@@ -375,7 +375,7 @@ describe('re-entrancy', () => {
   })
 
   it('drains a handler that re-arms a zero-length timer, without recursing', () => {
-    const clock = createManualClock(0)
+    const clock = fixedClock(0)
     const onExpire = vi.fn((expiry: TimerExpiry) => {
       if (onExpire.mock.calls.length < 5)
         service.set(expiry.timerId, { delayMs: 0, issuedAtMs: clock.now() })
@@ -399,7 +399,7 @@ describe('re-entrancy', () => {
   })
 
   it('force-expires and reports when a handler out-runs the drain cap', () => {
-    const clock = createManualClock(0)
+    const clock = fixedClock(0)
     const dropped: TimerExpiry[][] = []
     const service = new TimerService({
       matchId: MATCH,
@@ -422,7 +422,7 @@ describe('re-entrancy', () => {
   })
 
   it('does not let the exhaustion handler re-enter the drain', () => {
-    const clock = createManualClock(0)
+    const clock = fixedClock(0)
     let exhausted = 0
     // Pathological twice over: re-arms on every expiry *and* reacts to the
     // exhaustion report by re-arming again. `onExpire` is guarded by `#firing`;

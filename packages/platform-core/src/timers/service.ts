@@ -31,8 +31,8 @@ import type {
   TimerSpec,
   Viewer,
 } from '@playhall/game-sdk'
-import type { Clock } from './clock.js'
-import { createSystemClock } from './clock.js'
+import type { Clock } from '../runtime.js'
+import { assertDurationMs, assertEpochMs, assertOptionalDurationMs } from './quantities.js'
 import { type Scheduler, createTimeoutScheduler } from './scheduler.js'
 import {
   DEFAULT_PLAYER_CLOCK,
@@ -48,6 +48,7 @@ import {
   isHeld,
   isRunning,
   pauseRecord,
+  rawElapsedMs,
   remainingMsAt,
   resetRecord,
   resumeRecord,
@@ -90,8 +91,18 @@ export interface TimerViewEntry {
 
 export interface TimerServiceOptions {
   readonly matchId: MatchId
-  /** Defaults to the shared system clock. Tests pass a manual clock. */
-  readonly clock?: Clock
+  /**
+   * The server-authoritative clock. **Required**, and deliberately so: a
+   * default would be an ambient clock, and an ambient clock is exactly what
+   * `runtime.ts` exists to keep out of this package (ADR-0002 §4). The real
+   * implementation lives in the composition root, `apps/realtime`; tests pass
+   * `fixedClock`.
+   *
+   * Making it required also makes "I forgot to inject the room's clock" a
+   * compile error rather than a room that quietly runs on its own notion of
+   * now and disagrees with every other room on the instance.
+   */
+  readonly clock: Clock
   /** Defaults to a `setTimeout` scheduler over `clock`. */
   readonly scheduler?: Scheduler
   /**
@@ -171,7 +182,18 @@ export class TimerService {
 
   constructor(options: TimerServiceOptions) {
     this.matchId = options.matchId
-    this.#clock = options.clock ?? createSystemClock()
+    // The type says required; this says it at runtime too, because the callers
+    // that matter are at a boundary. The room runner builds these from stored
+    // room state, and an `any` or a hand-rolled options object that drops the
+    // clock would otherwise construct fine and throw on the first *deadline* —
+    // minutes later, inside a timer callback, nowhere near the mistake.
+    if (options.clock === undefined) {
+      throw new TypeError(
+        `TimerService for match ${options.matchId} was built without a clock; ` +
+          'pass the process clock (apps/realtime) or a fixedClock in tests',
+      )
+    }
+    this.#clock = options.clock
     this.#scheduler = options.scheduler ?? createTimeoutScheduler(this.#clock)
     this.#specs = options.specs ? new Map(options.specs.map((spec) => [spec.id, spec])) : null
     this.#onExpire = options.onExpire ?? (() => {})
@@ -259,8 +281,12 @@ export class TimerService {
     atMs?: number,
   ): TimerRecord {
     const merged: PlayerClockConfig = { ...DEFAULT_PLAYER_CLOCK, ...config }
+    assertDurationMs('initialMs', merged.initialMs)
+    assertDurationMs('incrementMs', merged.incrementMs)
+    assertDurationMs('delayMs', merged.delayMs)
+    assertOptionalDurationMs('maxMs', merged.maxMs)
     this.#assertDeclared(timerId)
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#records.set(
       timerId,
@@ -303,7 +329,8 @@ export class TimerService {
     },
   ): TimerRecord {
     this.#assertDeclared(timerId)
-    const issuedAtMs = options.issuedAtMs ?? this.#clock.now()
+    assertDurationMs('delayMs', options.delayMs)
+    const issuedAtMs = this.#at(options.issuedAtMs)
     this.#drainDue(issuedAtMs)
     const existing = this.#records.get(timerId)
 
@@ -342,7 +369,7 @@ export class TimerService {
    * `atMs` is the issuing instant, for the same reason `pause` takes one.
    */
   clear(timerId: TimerId, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#heldTimers.delete(timerId)
     if (this.#records.delete(timerId)) this.#rearm()
@@ -357,7 +384,7 @@ export class TimerService {
    * is a no-op rather than a hold left lying in wait for a future `set`.
    */
   pause(timerId: TimerId, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     if (!this.#records.has(timerId)) return
     this.#heldTimers.add(timerId)
@@ -366,7 +393,7 @@ export class TimerService {
   }
 
   resume(timerId: TimerId, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     if (!this.#records.has(timerId)) return
     this.#heldTimers.delete(timerId)
@@ -390,7 +417,7 @@ export class TimerService {
    * through a room pause.
    */
   switchTurnTo(toSeatId: SeatId | null, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     const fromSeatId = this.#onMoveSeatId
     if (fromSeatId !== null && fromSeatId !== toSeatId) {
@@ -418,7 +445,7 @@ export class TimerService {
    * server-authoritative.
    */
   pauseForSeat(seatId: SeatId, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#heldSeats.add(seatId)
     this.#reconcile(nowMs)
@@ -432,7 +459,7 @@ export class TimerService {
    * stopped until the host unpauses too.
    */
   resumeForSeat(seatId: SeatId, atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#heldSeats.delete(seatId)
     this.#reconcile(nowMs)
@@ -446,7 +473,7 @@ export class TimerService {
    * where the game state says it should be rather than starting every clock.
    */
   pauseAll(atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#roomHeld = true
     this.#reconcile(nowMs)
@@ -454,7 +481,7 @@ export class TimerService {
   }
 
   resumeAll(atMs?: number): void {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     this.#drainDue(nowMs)
     this.#roomHeld = false
     this.#reconcile(nowMs)
@@ -464,8 +491,18 @@ export class TimerService {
   /**
    * Executes the timer commands a game returned. `issuedAtMs` must be the
    * `ctx.now` the game saw.
+   *
+   * The whole batch is validated before any of it runs. A reducer returns its
+   * commands as one unit, so half-applying a batch whose third command is
+   * malformed would leave the room in a state the game never asked for and
+   * cannot reason about — and unlike a rejected batch, that state is on the
+   * match log. Validate-then-execute makes a bad batch a no-op plus a throw.
    */
   apply(commands: readonly TimerCommand[], issuedAtMs: number): void {
+    assertEpochMs('issuedAtMs', issuedAtMs)
+    for (const command of commands) {
+      if (command.op === 'set') assertDurationMs(`${command.timerId}.delayMs`, command.delayMs)
+    }
     this.#drainDue(issuedAtMs)
     for (const command of commands) {
       switch (command.op) {
@@ -509,7 +546,7 @@ export class TimerService {
    */
   poll(atMs?: number): readonly TimerExpiry[] {
     if (this.#disposed || this.#firing) return []
-    const firedAtMs = atMs ?? this.#clock.now()
+    const firedAtMs = this.#at(atMs)
 
     const due: { record: TimerRecord; dueAtMs: number }[] = []
     for (const record of this.#records.values()) {
@@ -559,7 +596,7 @@ export class TimerService {
    * hide a clock has a place to say so rather than a new code path.
    */
   sync(options?: { viewer?: Viewer; replyTo?: string | null; atMs?: number }): TimerSyncMessage {
-    const serverTime = options?.atMs ?? this.#clock.now()
+    const serverTime = this.#at(options?.atMs)
     return {
       type: 'timer:sync',
       matchId: this.matchId,
@@ -571,7 +608,7 @@ export class TimerService {
 
   /** The `TimerView[]` the SDK hands a game's UI. */
   views(atMs?: number): readonly TimerViewEntry[] {
-    const nowMs = atMs ?? this.#clock.now()
+    const nowMs = this.#at(atMs)
     return this.list().map((record) => ({
       timerId: record.timerId,
       seatId: record.seatId,
@@ -596,7 +633,7 @@ export class TimerService {
     return {
       version: 2,
       matchId: this.matchId,
-      savedAtMs: atMs ?? this.#clock.now(),
+      savedAtMs: this.#at(atMs),
       onMoveSeatId: this.#onMoveSeatId,
       roomHeld: this.#roomHeld,
       heldSeats: [...this.#heldSeats],
@@ -619,6 +656,21 @@ export class TimerService {
   }
 
   // --------------------------------------------------------------- internal
+
+  /**
+   * Resolves the instant a mutation happens at: the caller's `atMs` when it
+   * supplied one, otherwise the server clock.
+   *
+   * Every public method that accepts an instant goes through here, which is
+   * what makes the validation unskippable. A caller's `atMs` is a game's
+   * `ctx.now` arriving from the room runner, so it is untrusted arithmetic
+   * input to every deadline in the room — see `quantities.ts` for the four ways
+   * a `NaN` here kills a match. An omitted `atMs` needs no check: the clock is
+   * ours.
+   */
+  #at(atMs?: number): number {
+    return atMs === undefined ? this.#clock.now() : assertEpochMs('atMs', atMs)
+  }
 
   #assertDeclared(timerId: TimerId): void {
     if (this.#specs !== null && !this.#specs.has(timerId)) {
@@ -711,7 +763,29 @@ export class TimerService {
       if (shouldRun) {
         if (!isRunning(next)) next = startRecord(next, nowMs)
       } else if (isRunning(next)) {
+        const chargedMs = rawElapsedMs(next, nowMs)
         next = pauseRecord(next, nowMs)
+        // A record whose budget *this freeze* consumed to zero flagged; it did
+        // not merely stop. Leaving it un-expired makes it unrunnable, invisible
+        // to `deadlineMsAt` and therefore incapable of ever producing a
+        // `TimerExpiry` — `endTurnRecord` carries the same branch for the same
+        // reason, and `docs/timers.md` promises the behaviour.
+        //
+        // Belt to the drain's braces. Every mutator drains at `nowMs` before it
+        // touches a record, so in practice the flag-fall has already been
+        // delivered and `expired` is already true by the time we get here. This
+        // catches the entry point that skipped the drain, and it fails closed:
+        // a flagged clock reads as flagged rather than as a live clock sitting
+        // on 0:00 that nothing can ever fire.
+        //
+        // `chargedMs > 0` is the whole discriminator and it is load-bearing.
+        // Reaching zero *because time was spent* is a flag-fall. Being armed
+        // at zero is not — `set(id, { delayMs: 0 })` during a host pause
+        // creates a record that has never had the chance to run, and `set`
+        // promises it starts (and then immediately fires) when the hold lifts.
+        // Expiring it here instead would mean the game never hears about it at
+        // all, which is the very bug this branch exists to prevent.
+        if (chargedMs > 0 && next.remainingMs <= 0) next = expireRecord(next)
       }
       if (next !== record) this.#records.set(id, next)
     }
@@ -805,7 +879,7 @@ export class TimerService {
    * the live one — on the exact path that promise was written for.
    */
   #afterMutation(nowMs?: number): void {
-    this.#drainDue(nowMs ?? this.#clock.now())
+    this.#drainDue(this.#at(nowMs))
     this.#rearm()
   }
 
@@ -863,7 +937,7 @@ export class TimerService {
    */
   static restore(snapshot: unknown, options: RestoreTimerServiceOptions): TimerService {
     const parsed = timerSnapshotSchema.parse(snapshot)
-    const clock = options.clock ?? createSystemClock()
+    const clock = options.clock
     const service = new TimerService({ ...options, clock, matchId: parsed.matchId as MatchId })
     const nowMs = clock.now()
     const chargeDowntime = options.chargeDowntime ?? true
@@ -915,9 +989,26 @@ export class TimerService {
       )
     }
 
+    // Drain *before* reconciling, which is the order every live mutator uses
+    // and for the same reason. A flag may well have fallen while we were dead,
+    // and at this point the record that flagged is still anchored and running,
+    // so `deadlineMsAt` can see it and `poll` can deliver the expiry.
+    //
+    // Reconciling first loses it. `#reconcile` freezes a record a hold now
+    // covers, and freezing a record whose budget ran out during the downtime
+    // commits `remainingMs: 0`; `deadlineMsAt` returns null for a stopped
+    // record, so the drain that followed had nothing left to find. The match
+    // then resumed with a player on 0:00 whose clock could never run out and a
+    // game module that was never told they flagged — exactly the invariant
+    // `endTurnRecord` documents and `docs/timers.md` promises.
+    //
+    // The hold case the ordering has to respect still works: the drain fires
+    // the expiry, `expireRecord` makes the record terminal, and the reconcile
+    // behind it leaves an expired record alone.
+    service.#drainDue(nowMs)
     service.#reconcile(nowMs)
-    // A flag may well have fallen while we were dead; surface it immediately
-    // rather than on the next unrelated event.
+    // Anything the reconcile itself made due — a zero-length timer that only
+    // became runnable now because the snapshot's holds lifted — plus the re-arm.
     service.#afterMutation(nowMs)
     return service
   }

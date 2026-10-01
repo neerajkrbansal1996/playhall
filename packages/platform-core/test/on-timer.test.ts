@@ -26,7 +26,7 @@ import {
   setTimer,
 } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import { createManualClock } from '../src/timers/clock.js'
+import { fixedClock } from '../src/runtime.js'
 import { createManualScheduler } from '../src/timers/scheduler.js'
 import { type TimerExpiry, TimerService } from '../src/timers/service.js'
 
@@ -85,7 +85,7 @@ const toyGame = {
  * runner only has to stamp a context and feed the commands back.
  */
 function runner(options: { initialMs: number; turnTimerMs?: number }) {
-  const clock = createManualClock(1_700_000_000_000)
+  const clock = fixedClock(1_700_000_000_000)
   let state: ToyState = { toMove: WHITE, outcome: null, passes: 0 }
   let sequence = 0
   const events: ToyEvent[] = []
