@@ -6,32 +6,33 @@
  * probe batteries) is in `./conformance-subject.ts`, with the measurement behind
  * every number it declares.
  *
- * ## The abort-cause split, stated rather than left as a hole
+ * ## Both abort causes, both reached from the suite
  *
- * Chess reaches `reason: 'abort'` two ways, and only one of them is reachable
- * from `abortScenarios`:
+ * Chess reaches `reason: 'abort'` two ways, and `abortScenarios` declares both:
  *
- *   - **`cause: 'agreed'`** — a player aborts inside the window. Covered here, at
- *     both ends of the window (`afterSteps: 0` and `afterSteps: 1`).
- *   - **`cause: 'first_move_timeout'`** — nobody moved within 30 s. **Not**
- *     reachable through `abortScenarios`, and covered by unit test at
- *     `player-endings.test.ts` instead.
+ *   - **`cause: 'agreed'`** — a player aborts inside the window. The action arm,
+ *     at both ends of the window (`afterSteps: 0` and `afterSteps: 1`).
+ *   - **`cause: 'first_move_timeout'`** — nobody moved within 30 s. The timer arm
+ *     (ADR-0010): the driver replays the `setTimer` chess returns from
+ *     `createInitialState` and fires it at `startedAt + 30_000`, which is exactly
+ *     the boundary the reducer checks. `player-endings.test.ts` still unit-tests
+ *     the rule itself.
  *
- * Why it is unreachable: the driver dispatches the abort at
- * `sequence = afterSteps + 1` with `now = startNow + sequence * nowStepMs`, and
- * `nowStepMs` defaults to 1,000 ms. Chess's first-move deadline is
- * `startedAt + 30_000`, where `startedAt` is `ctx.now` at sequence 0. `afterSteps`
- * is itself capped at 1 by `canAbort`, so `ctx.now` at the abort is at most
- * `startNow + 2_000` and the reducer correctly returns
- * `first_move_deadline_not_reached`. The only lever is `nowStepMs`, which is
- * subject-level and shared by every check: raising it to 30,000 would advance
- * every playout's clock 30 s per ply and flag a bullet preset mid-playout. A
- * per-scenario clock offset on `AbortScenario` would close this, but that is a
- * testkit contract change and belongs to the CTO (PER-47 / PER-136), not to a
- * game.
+ * Before ADR-0010 the timeout was unreachable from here, and this block said so.
+ * That was accurate, and the reason is worth keeping because the obstacle was
+ * never the one it looks like. It was not the clock: the driver dispatched an
+ * abort at `now = startNow + (afterSteps + 1) * nowStepMs`, `nowStepMs` defaults
+ * to 1,000 ms, and `afterSteps` is capped at 1 by `canAbort`, so the reducer
+ * correctly returned `first_move_deadline_not_reached`. It was not the
+ * `{ seatId }` shape either — chess handles `first_move_timeout` before the seat
+ * check, so any roster seat is accepted.
  *
- * The `{ seatId }` shape is not the obstacle: chess handles `first_move_timeout`
- * before the seat check, so any roster seat would be accepted.
+ * It was that the only arm was a *player action*, and `first_move_timeout` is
+ * deliberately absent from `chessActionSchema` because the server raises it
+ * through `onTimer`. That is also why `ActionAbortScenario.advanceMs` (PER-136)
+ * does not close it, despite being built for deadline-gated aborts: there is no
+ * client action to offset the clock for. A game whose timeout is *claimed* by the
+ * opponent would use `advanceMs`; chess's is raised, so it needs the timer arm.
  */
 
 import { describeTurnBasedConformance } from '@playhall/game-testkit/vitest'
