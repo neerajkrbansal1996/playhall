@@ -62,6 +62,13 @@ function mutateHiddenHand(
   )
 }
 
+/** Every `reducer-purity` failure message, joined so a test can grep it. */
+function purityMessages(report: ConformanceReport): string {
+  return (report.checks.find((check) => check.id === 'reducer-purity')?.failures ?? [])
+    .map((failure) => failure.message)
+    .join('\n')
+}
+
 function expectCaughtBy(report: ConformanceReport, check: ConformanceCheck): void {
   expect(
     report.passed,
@@ -194,6 +201,41 @@ describe('determinism', () => {
     })
     expect(report.passed).toBe(false)
     expect(failedChecks(report)).toContain('reducer-purity')
+    expect(purityMessages(report)).toContain('applyAction mutated the state it was given')
+  })
+
+  /**
+   * PER-269: the mutation `reducer-purity` used to miss completely.
+   *
+   * The baseline it compares against was `stableStringify(step.before)` read at
+   * check time, and `step.before` was the very object the playout had already
+   * passed through the impure reducer. So the check was really asking "does a
+   * *second* application change anything?", and a reducer that writes the same
+   * value every call answered no.
+   *
+   * This is not a contrived shape. It is memoisation — the single most natural
+   * optimisation to reach for in a reducer that re-derives a position from a
+   * move list (see PER-92) — and on this subject it shipped the whole suite
+   * green, not merely this one check.
+   */
+  it('catches a reducer that memoises a constant onto the state it was given', () => {
+    const report = mutateTicTacToe({
+      applyAction: (ctx, state, seatId, action) => {
+        // `state.cache = analyse(state)` in miniature: idempotent, JSON-safe,
+        // and identical on every call.
+        ;(state as unknown as Record<string, unknown>).memo = 'analysed'
+        return ticTacToeSubject.server.applyAction(ctx, state, seatId, action)
+      },
+    })
+    expectCaughtBy(report, 'reducer-purity')
+    expect(purityMessages(report)).toContain('applyAction mutated the state it was given')
+
+    // The sharp half. Before the fix this list was `[]` — the mutation was
+    // invisible to the entire suite. It must also stay exactly this: a
+    // `determinism` or `serialization-round-trip` entry appearing here would
+    // mean a driver call site stopped handing the game its own copy, so a
+    // purity bug is being reported as a replay or Redis failure instead.
+    expect(failedChecks(report)).toEqual(['reducer-purity'])
   })
 
   it('catches a non-deterministic getViewFor', () => {
