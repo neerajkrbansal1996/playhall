@@ -206,36 +206,93 @@ test('a clean pasted code is accepted as-is', async ({ page }) => {
 })
 
 /**
- * KNOWN DEFECT — a pasted code containing a separator is silently truncated.
+ * Bulk-insertion shapes that all carry the canonical code `ABC234` and nothing
+ * else, paired with what the field **actually** holds today.
+ *
+ * Every one of these normalises to exactly `ABC234` if normalisation runs before
+ * the length cap, so there is no judgement call in any row: the `expected`
+ * column is the only defensible answer for all of them, and `actual` is measured,
+ * not predicted. `actual` is recorded here so the *severity* is in the file
+ * rather than only in an issue comment — the loss is not a uniform one character.
+ *
+ * Measured identically on Chromium and WebKit, and identically via
+ * `locator.fill()` and `keyboard.insertText()` (see the note on `fill` below).
+ */
+const PASTE_SHAPES = [
+  // The original report: a space between the letter and digit groups.
+  { raw: 'abc 234', actual: 'ABC23' },
+  // The hyphen form, the other shape `JoinByCodeForm`'s doc comment promises.
+  { raw: 'ABC-234', actual: 'ABC23' },
+  // A *clean* code with one leading space — no separator anywhere, still broken.
+  { raw: ' abc234', actual: 'ABC23' },
+  // Double-tap-to-select on iOS and Android routinely grabs the surrounding
+  // spaces, so this is a likelier shape than the bare 7-character ones above.
+  { raw: '  abc-234  ', actual: 'ABC' },
+  // Six characters of leading whitespace — an indented or quoted chat line —
+  // consumes the entire cap and the field ends up **empty**.
+  { raw: '      abc234', actual: '' },
+] as const
+
+/**
+ * KNOWN DEFECT — a bulk-inserted code is silently truncated, by one character to all of them.
  *
  * `maxLength={ROOM_CODE_LENGTH}` is enforced by the browser on the **raw**
- * pasted string, before React's `onChange` can strip the separator. So pasting
- * `abc 234` (7 raw characters) clips to `abc 23` and normalises to `ABC23` — a
- * five-character code, in a field the player cannot tell is wrong.
+ * inserted string, before React's `onChange` can strip anything. So the field
+ * keeps only the canonical characters among the *first six raw* characters, and
+ * the damage scales with how much non-canonical text precedes the code rather
+ * than being a fixed off-by-one: `abc 234` lands as `ABC23`, `  abc-234  ` as
+ * `ABC`, and `      abc234` as the empty string.
  *
  * `JoinByCodeForm`'s own doc comment claims "a player who pastes `abc 234` or
  * `ABC-234` from a chat message watches it become `ABC234`". Both of its
  * examples are seven raw characters, so neither does. The `maxLength` rationale
  * — "a 7th character is never part of a code" — is only true of *canonical*
  * characters; a 7th raw character routinely is, once a space or hyphen is
- * stripped.
+ * stripped. `packages/platform-core/src/rooms/join.ts` already trims its input;
+ * the server is tolerant and the field in front of it is not, which is why this
+ * only ever surfaces as a wrong value in the input.
  *
- * Marked `test.fail()`, not skipped: skipping hides it, while an expected
- * failure keeps the defect executing on every run and makes Playwright report an
- * error the moment it starts passing — which is the signal that the fix landed.
+ * None of it is announced, so a player sees a plausible-looking short code and
+ * the friendly not-found path, with nothing to connect either to their paste.
+ * That breaks **zero friction** and **share-first** on the primary acquisition
+ * path: a code copied out of a chat app on a phone.
  *
- * Tracked as [PER-197](/PER/issues/PER-197) (Frontend Engineer). **Remove this
- * annotation in the same commit as the fix**, so the test starts guarding it.
+ * ## Why `fill()` is a fair model of a paste
+ *
+ * `locator.fill()` is not a clipboard operation — no spec in this suite reads or
+ * writes the real clipboard, because granting clipboard permission is
+ * Chromium-only and would cost the WebKit half of the matrix. It is a fair model
+ * anyway, and that was measured rather than assumed: every shape above produces
+ * a byte-identical result under `page.keyboard.insertText()`, which is the same
+ * single-operation insertion path the browser uses for a paste and which honours
+ * `maxLength` natively. Both engines agree with each other too. A real
+ * clipboard paste remains unverified, and is noted as such in the M2 report.
+ *
+ * ## Why `test.fail()` and not `skip`
+ *
+ * Skipping hides it. An expected failure keeps the defect executing on every run
+ * and makes Playwright report an error the moment it starts passing — which is
+ * the signal that the fix landed. One case per shape, deliberately: a single
+ * combined test would go green on a fix that handles the seven-character
+ * examples and still leaves the leading-whitespace shapes broken.
+ *
+ * Tracked as [PER-197](/PER/issues/PER-197) (Frontend Engineer). **Remove these
+ * annotations in the same commit as the fix**, so the tests start guarding it.
  */
-test('a pasted code with a separator is normalised', async ({ page }) => {
-  test.fail()
+for (const { raw, actual } of PASTE_SHAPES) {
+  test(`a bulk-inserted ${JSON.stringify(raw)} is normalised to the code`, async ({ page }) => {
+    test.fail()
 
-  const input = page.getByTestId(testIds.joinCodeInput)
+    const input = page.getByTestId(testIds.joinCodeInput)
 
-  await input.fill('abc 234')
+    await input.fill(raw)
 
-  await expect(input).toHaveValue(PREVIEW_CODE)
-})
+    await expect(
+      input,
+      `${JSON.stringify(raw)} should normalise to ${PREVIEW_CODE}; it currently lands as ${JSON.stringify(actual)}`,
+    ).toHaveValue(PREVIEW_CODE)
+  })
+}
 
 /**
  * A short code is rejected with an announced message, and submit stays enabled.
