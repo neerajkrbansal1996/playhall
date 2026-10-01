@@ -64,8 +64,15 @@ export const FAKE_MATCH_ID = asMatchId('conformance-match')
  * `serialization-round-trip` on its own terms, and a driver crash there would
  * be reported as "the game threw during a playout", which is the wrong
  * attribution.
+ *
+ * Exported because a *check* that calls one of those three functions has the
+ * same obligation as the driver: `illegal-action-rejected` calls
+ * `validateAction` many times per step, and a raw `step.before` there rewrites
+ * the driver's log entry for every check that runs afterwards (PER-278). The
+ * fallback matters more in a check than in the driver — a `structuredClone`
+ * failure must not turn a rejection probe into a thrown-error report.
  */
-function handOver<T>(state: T): T {
+export function handOver<T>(state: T): T {
   try {
     return detachedClone(state)
   } catch {
