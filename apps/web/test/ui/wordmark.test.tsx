@@ -16,6 +16,19 @@ import { Wordmark } from '@playhall/ui'
  * run: that the name is text from the prop, that no brand literal leaked into the
  * component, and that the shrink classes are still present.
  */
+/**
+ * Render at one size and hand back the root's class list.
+ *
+ * A function per size rather than an array of roots: `noUncheckedIndexedAccess` is on, so
+ * destructuring a mapped array hands back `HTMLElement | undefined` and the cases would
+ * have to assert away a `possibly undefined` that cannot happen. It also keeps each
+ * expectation pinned to its own size, which is the thing being tested.
+ */
+function rootClassAt(size: 'sm' | 'md' | 'lg'): string {
+  const { container } = render(<Wordmark name={BRAND.name} size={size} />)
+  return (container.firstElementChild as HTMLElement).className
+}
+
 describe('Wordmark', () => {
   it('renders an arbitrary name — the component holds no brand string of its own', () => {
     // If `Wordmark` ever imported BRAND or hard-coded a name, this case is what fails.
@@ -139,34 +152,25 @@ describe('Wordmark', () => {
   })
 
   it('uses --text-base at sm, --text-xl at md and --text-5xl/6xl at lg, all 700', () => {
-    const roots = (['sm', 'md', 'lg'] as const).map((size) => {
-      const { container } = render(<Wordmark name={BRAND.name} size={size} />)
-      return container.firstElementChild as HTMLElement
-    })
-    const [sm, md, lg] = roots
+    for (const size of ['sm', 'md', 'lg'] as const) {
+      expect(rootClassAt(size)).toContain('font-bold')
+    }
 
-    for (const root of roots) expect(root.className).toContain('font-bold')
-
-    expect(sm.className).toContain('text-base')
-    expect(md.className).toContain('text-xl')
+    expect(rootClassAt('sm')).toContain('text-base')
+    expect(rootClassAt('md')).toContain('text-xl')
     // Design tokens §3 allocates --text-5xl to the landing headline on mobile and
     // --text-6xl to it on desktop. The hero wordmark *is* that headline.
-    expect(lg.className).toContain('text-5xl')
-    expect(lg.className).toContain('md:text-6xl')
+    expect(rootClassAt('lg')).toContain('text-5xl')
+    expect(rootClassAt('lg')).toContain('md:text-6xl')
   })
 
   it('carries tracking-tight only at lg, because tokens forbid it at body size', () => {
     // Design tokens §3: --tracking-tight only at --text-3xl and above, never at body
     // size. `sm` is --text-base, i.e. body size, so a root-level tracking-tight — which
     // is what this was — violated the token rule outright.
-    const tracking = (size: 'sm' | 'md' | 'lg') => {
-      const { container } = render(<Wordmark name={BRAND.name} size={size} />)
-      return (container.firstElementChild as HTMLElement).className
-    }
-
-    expect(tracking('sm')).not.toContain('tracking-tight')
-    expect(tracking('md')).not.toContain('tracking-tight')
-    expect(tracking('lg')).toContain('tracking-tight')
+    expect(rootClassAt('sm')).not.toContain('tracking-tight')
+    expect(rootClassAt('md')).not.toContain('tracking-tight')
+    expect(rootClassAt('lg')).toContain('tracking-tight')
   })
 
   it('defaults to a span and is a heading only when asked', () => {
