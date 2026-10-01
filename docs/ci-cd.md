@@ -172,6 +172,16 @@ pending gate then fails instead of passing, so a gate cannot silently regress to
 implemented". Owner and trigger: [PER-98](/PER/issues/PER-98) at M1 close — "set it once M1
 closes" in a code comment is not a commitment anything honours.
 
+Set it on the **gate jobs**, not on `ci-gate`. Those are separate job environments, and the
+PR gate table deliberately ignores `CI_STRICT_GATES` entirely
+([PER-263](/PER/issues/PER-263)): it re-derives each gate's state from the registry and the
+root `package.json`, so reading a variable only the aggregate job could see would answer a
+question about the wrong job. Before that fix, setting it on `ci-gate` alone suppressed
+every `⏸ pending` row while the placeholder gate jobs went on exiting `0` — the
+[PER-236](/PER/issues/PER-236) defect, restored verbatim at the moment the switch was
+supposed to be closing it. Under a correct strict run the placeholder job exits `1`, so the
+table renders `❌ FAIL` from the real result and no flag is needed to get there.
+
 A gate declared **live** (`pendingOwner: null`) whose root script is missing is a different
 case — a demotion, not an unwritten implementation — and it fails hard regardless of
 `CI_STRICT_GATES`. Rename the root `lint` script and CI says so, instead of reporting PENDING

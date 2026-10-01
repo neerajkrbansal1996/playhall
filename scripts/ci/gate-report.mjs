@@ -31,7 +31,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { classifyGate, strictGatesEnabled } from './gates.mjs'
+import { classifyGate } from './gates.mjs'
 
 /** The HTML marker that lets the workflow find and update its own comment. */
 export const COMMENT_MARKER = '<!-- playhall-ci-gate -->'
@@ -62,11 +62,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
  * @param {object} options
  * @param {Record<string, { result?: string }>} options.needs parsed `toJSON(needs)`
  * @param {Record<string, string> | undefined} options.scripts the root package.json `scripts`
- * @param {boolean} [options.strict] whether `CI_STRICT_GATES=1` was set on the gate jobs
  * @param {Set<string>} [options.skipAllowed]
  * @returns {{ rows: GateRow[], failures: GateRow[], pending: GateRow[] }}
  */
-export function buildGateReport({ needs, scripts, strict = false, skipAllowed = SKIP_ALLOWED }) {
+export function buildGateReport({ needs, scripts, skipAllowed = SKIP_ALLOWED }) {
   const rows = Object.entries(needs)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([job, info]) => {
@@ -78,7 +77,15 @@ export function buildGateReport({ needs, scripts, strict = false, skipAllowed = 
       // calls pending somehow reported non-success, the real result wins — the
       // run is the evidence, this re-derivation is only how the run's silence
       // about PENDING is recovered.
-      const verdict = classifyGate(job, scripts, { strict })
+      //
+      // Always non-strict (PER-263). `CI_STRICT_GATES=1` goes on the *gate*
+      // jobs' env, which `ci-gate` does not share, so reading it here answered a
+      // question about the wrong job: set on the aggregate job alone it replaced
+      // every `pending` with `missing` and the placeholders went back to reading
+      // `✅ pass` while still exiting 0 — PER-236 restored verbatim. It bought
+      // nothing either, because under real strict mode the placeholder job
+      // exits 1 and the `!ok` branch above has already decided the row.
+      const verdict = classifyGate(job, scripts)
       if (result === 'success' && verdict.state === 'pending') {
         return { job, result, state: 'pending', pendingOwner: verdict.pendingOwner }
       }
@@ -181,7 +188,7 @@ export function reportFromEnv(env = process.env) {
   }
 
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
-  return buildGateReport({ needs, scripts: pkg.scripts, strict: strictGatesEnabled(env) })
+  return buildGateReport({ needs, scripts: pkg.scripts })
 }
 
 /**

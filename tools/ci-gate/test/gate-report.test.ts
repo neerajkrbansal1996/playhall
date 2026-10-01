@@ -118,6 +118,48 @@ function footerOf(body: string): string {
   return body.trimEnd().split('\n').at(-3) ?? ''
 }
 
+/** True for a YAML line that sets `ref:`, at any indent. Not `ref` in prose. */
+function declaresRef(line: string): boolean {
+  return /^\s*ref:/.test(line)
+}
+
+/**
+ * Every two-space key in the workflow that opens a block of its own. Mostly
+ * jobs; `on:`'s triggers come along too, which is harmless because callers
+ * filter on what the block contains rather than trusting the name.
+ */
+function jobNames(yaml: string): string[] {
+  return [...yaml.matchAll(/^ {2}([a-z][\w-]*):$/gm)].flatMap((m) => m[1] ?? [])
+}
+
+/**
+ * The body of one top-level job in a workflow, as lines — everything under
+ * `  <job>:` up to the next key at the same two-space indent.
+ */
+function jobBlock(yaml: string, job: string): string[] {
+  const lines = yaml.split('\n')
+  const start = lines.indexOf(`  ${job}:`)
+  if (start === -1) throw new Error(`could not locate the \`${job}:\` job in ci.yml`)
+  const body = lines.slice(start + 1)
+  const end = body.findIndex((line) => /^ {2}\S/.test(line))
+  return end === -1 ? body : body.slice(0, end)
+}
+
+/**
+ * The lines of the single step inside `block` that mentions `needle`, `with:`
+ * block included — found by walking back to the `- ` that opens the step and
+ * forward to the one that opens the next.
+ */
+function stepContaining(block: string[], needle: string): string[] {
+  const isStepStart = (line: string) => /^ {6}- /.test(line)
+  const hit = block.findIndex((line) => line.includes(needle))
+  if (hit === -1) throw new Error(`no step in the job mentions \`${needle}\``)
+  let start = hit
+  while (start > 0 && !isStepStart(block[start] ?? '')) start -= 1
+  const end = block.slice(start + 1).findIndex(isStepStart)
+  return end === -1 ? block.slice(start) : block.slice(start, start + 1 + end)
+}
+
 /** Root scripts as `main` has them: `test:coverage` and `test:integration` absent. */
 const MAIN_SCRIPTS = {
   lint: 'true',
@@ -208,24 +250,56 @@ describe('a PENDING gate in the PR comment', () => {
   })
 })
 
-describe('CI_STRICT_GATES=1', () => {
-  it('leaves no gate in the pending state', () => {
-    // PER-98's switch is unchanged by this work, and the two states must not
-    // overlap: under strict, a missing root script fails its gate job, so
-    // `pending` is not a verdict the table can reach. Feeding it the `success`
-    // that only non-strict mode could produce proves the renderer does not
-    // invent a third state behind the switch.
+describe('CI_STRICT_GATES is not an input to the report', () => {
+  // PER-263. `CI_STRICT_GATES=1` belongs on the *gate* jobs' env — that is what
+  // `gate.mjs`'s header instructs, and it is what makes a placeholder exit 1.
+  // `ci-gate` is a different job environment. The report used to read the
+  // variable out of its own env and pass it to `classifyGate`, where `strict`
+  // replaces the `pending` state with `missing`, so setting it on the aggregate
+  // job alone suppressed every `⏸ pending` row while the placeholder gate jobs
+  // went on exiting 0 — PER-236's defect, restored verbatim, at the exact moment
+  // PER-98 was supposed to be closing it.
+  //
+  // The flag never earned anything here. Under real strict mode the placeholder
+  // *job* fails, so `needs.<job>.result` is `failure` and the raw result decides
+  // the row before the registry is consulted. It only changed the output in a
+  // state production cannot reach, and in the misconfigured one it lied.
+
+  it('does not suppress the pending rows when only the aggregate job can see it', () => {
     const body = prComment(MAIN_SCRIPTS, ALL_SUCCESS, { CI_STRICT_GATES: '1' })
 
-    expect(body).not.toContain('⏸ pending')
-    expect(footerOf(body)).toBe('All gates passed.')
+    expect(body).toContain('| `coverage` | ⏸ pending')
+    expect(body).toContain('| `integration` | ⏸ pending')
+    expect(body).not.toContain('| `coverage` | ✅ pass |')
+    expect(footerOf(body)).toContain('2 of 12 ran nothing')
   })
 
-  it('is read as exactly "1", same as the gate runner', () => {
-    for (const value of ['0', 'true', 'yes', '']) {
+  it('renders a byte-identical table whatever the variable says', () => {
+    // Stronger than checking each value against `⏸ pending`: nothing about the
+    // comment may vary with an environment the gate jobs did not share.
+    const baseline = prComment(MAIN_SCRIPTS, ALL_SUCCESS)
+    for (const value of ['0', '1', 'true', 'yes', '']) {
       const body = prComment(MAIN_SCRIPTS, ALL_SUCCESS, { CI_STRICT_GATES: value })
-      expect(body, `CI_STRICT_GATES=${value}`).toContain('⏸ pending')
+      expect(body, `CI_STRICT_GATES=${value}`).toBe(baseline)
     }
+  })
+
+  it('renders a placeholder as FAIL from the result strict mode actually produces', () => {
+    // The real strict contract, asserted from the state production reaches.
+    // With the variable on the gate jobs, `gate.mjs` classifies `coverage` as
+    // `missing` and exits 1, so GitHub records `failure` — and that is what has
+    // to reach the table. `success` under strict is not a thing; the old case
+    // fed the renderer one and so proved nothing about PER-98's switch.
+    const body = prComment(
+      MAIN_SCRIPTS,
+      { ...ALL_SUCCESS, coverage: { result: 'failure' }, integration: { result: 'failure' } },
+      { CI_STRICT_GATES: '1' },
+    )
+
+    expect(body).toContain('| `coverage` | ❌ FAIL |')
+    expect(body).toContain('| `integration` | ❌ FAIL |')
+    expect(body).not.toContain('⏸ pending')
+    expect(footerOf(body)).toContain('2 gate(s) not passing')
   })
 })
 
@@ -281,6 +355,37 @@ describe('the workflow posts what the renderer rendered', () => {
     expect(yaml).not.toContain("const icon = { success: 'pass'")
     expect(yaml).not.toMatch(/const skipAllowed = new Set/)
     expect(yaml).not.toContain("'All gates passed.'")
+  })
+
+  it('checks out the bytes the gates ran on, with no `ref:` anywhere', () => {
+    // PER-263. The whole design re-derives each gate's state from *this*
+    // checkout's `package.json` instead of plumbing a status out of every gate
+    // job — which is sound only because `ci-gate` reads the same bytes the gate
+    // jobs read. A checkout step with no `ref:` resolves to `github.sha`, and
+    // that is fixed for the entire workflow run. Give any of these a `ref:`, or
+    // point one at a branch, and the aggregate job starts reporting on a tree
+    // the gates never ran, with nothing else in the repo to notice.
+    //
+    // Asserted on both sides, not just `ci-gate`: the property is that the two
+    // agree, and pinning one end leaves the other free to move.
+    const yaml = source()
+
+    // `jobBlock` throws on an absent job, so renaming `ci-gate` cannot make
+    // this case quietly stop covering it. A second checkout step would be a
+    // second tree in the same job, which the per-step scan below cannot see.
+    const ciGate = jobBlock(yaml, 'ci-gate')
+    expect(ciGate.filter((line) => line.includes('actions/checkout@'))).toHaveLength(1)
+
+    const checkedOut = jobNames(yaml).filter((job) =>
+      jobBlock(yaml, job).some((line) => line.includes('actions/checkout@')),
+    )
+    expect(checkedOut).toContain('ci-gate')
+    // Every gate job, plus the aggregate one: a dozen-odd jobs, not a lucky two.
+    expect(checkedOut.length).toBeGreaterThan(5)
+    for (const job of checkedOut) {
+      const step = stepContaining(jobBlock(yaml, job), 'actions/checkout@')
+      expect(step.filter(declaresRef), `${job} checkout`).toEqual([])
+    }
   })
 
   it('reads the comment marker back off the rendered body', () => {
