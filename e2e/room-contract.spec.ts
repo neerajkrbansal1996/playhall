@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { seatTestId, testIds } from '../apps/web/src/lib/testids'
 
@@ -170,6 +170,28 @@ test('the spectator count attribute agrees with its text', async ({ page }) => {
  */
 function joinAlert(page: Page) {
   return page.locator('form', { has: page.getByTestId(testIds.joinCodeInput) }).getByRole('alert')
+}
+
+/**
+ * `aria-describedby` is a space-separated **list** of ids, and the join field
+ * uses two of them: the always-present hint, then the message when there is
+ * one. Splitting is not a detail — `[id="${attr}"]` against the raw attribute
+ * matches nothing at all once a second id appears, which is a silent miss
+ * rather than a failure if the assertion is only `toBeVisible`.
+ */
+async function describedByIds(input: Locator): Promise<readonly string[]> {
+  const attr = await input.getAttribute('aria-describedby')
+  expect(attr, 'aria-describedby on the join input').toBeTruthy()
+  return (attr ?? '').split(/\s+/).filter((id) => id.length > 0)
+}
+
+/**
+ * An `[id="…"]` selector rather than `#…`: React's `useId` emits ids containing
+ * `«»`, which are not valid in a CSS id selector, and `CSS.escape` is a browser
+ * API unavailable in the Node-side spec.
+ */
+function byId(page: Page, id: string) {
+  return page.locator(`[id="${id}"]`)
 }
 
 /**
@@ -356,6 +378,11 @@ test('a short code is rejected accessibly, with submit still enabled', async ({ 
   const input = page.getByTestId(testIds.joinCodeInput)
   const submit = page.getByTestId(testIds.joinSubmit)
 
+  // The hint describes the field before anything has gone wrong, and keeps
+  // describing it afterwards — so `aria-describedby` is a *list*, and reading
+  // it as a single id silently stops resolving the moment a message appears.
+  expect(await describedByIds(input), 'resting description is the hint alone').toHaveLength(1)
+
   await input.fill('ABC')
   // Nothing may be announced before the player has actually pressed join.
   await expect(joinAlert(page)).toHaveCount(0)
@@ -367,13 +394,12 @@ test('a short code is rejected accessibly, with submit still enabled', async ({ 
   await expect(joinAlert(page)).toBeVisible()
 
   // The wiring, not just the presence: `aria-describedby` must name the element
-  // that is actually showing the message.
-  const describedBy = await input.getAttribute('aria-describedby')
-  expect(describedBy, 'aria-describedby on the join input').toBeTruthy()
-  // An `[id="…"]` selector rather than `#…`: React's `useId` emits ids
-  // containing `«»`, which are not valid in a CSS id selector, and `CSS.escape`
-  // is a browser API unavailable in the Node-side spec.
-  await expect(page.locator(`[id="${describedBy}"]`)).toHaveText(await joinAlert(page).innerText())
+  // that is actually showing the message, and must still name the hint — in
+  // that order, matching `fieldIds()` in the settings form.
+  const ids = await describedByIds(input)
+  expect(ids, 'hint and message are both named').toHaveLength(2)
+  await expect(byId(page, ids[0])).toHaveText(/Codes never use/)
+  await expect(byId(page, ids[1])).toHaveText(await joinAlert(page).innerText())
 })
 
 /**
