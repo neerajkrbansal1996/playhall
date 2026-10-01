@@ -167,8 +167,12 @@ const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
  * a follow-up. `guest-token.ts` signs with `node:crypto`'s `createHmac`/`timingSafeEqual`; the
  * WebCrypto equivalent is `crypto.subtle.sign`, which is async, so swapping it turns
  * `signGuestToken` / `verifyGuestToken` async and ripples through
- * `GuestIdentityService.issue()`/`authenticate()`. ADR-0011 §Alternatives 1 rejected that swap on
- * reversibility, so the import stays and the exception stays with it.
+ * `GuestIdentityService.issue()`/`authenticate()`. ADR-0011 §Alternatives 1 rejected that swap, and
+ * leads with the objection that actually settles it: converting this file would not make the
+ * default entrypoint edge-importable either, because `identity/service.ts` sits in the same barrel
+ * subtree and the entrypoint's whole graph is what decides. On the property it is named for the
+ * swap buys nothing, while making `issue()`/`authenticate()` permanently async. Reversibility is
+ * the second reason, not the first. So the import stays and the exception stays with it.
  *
  * The exception is a single `$`-anchored path on purpose. The policy the rule enforces — "the list
  * is short enough to read" — is only defensible while the list is one entry, so a second entry is

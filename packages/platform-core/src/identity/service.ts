@@ -93,10 +93,19 @@ export interface IssuedGuestIdentity {
  * Injectable so tests are deterministic. Defaults to `webCryptoRandomSource()`
  * — the package's `RandomSource` port, backed by the global Web Crypto API.
  *
- * Deliberately not a Node builtin: `platform-core` has to stay importable from
- * an edge runtime (`runtime.ts` header), and `src/index.ts` re-exports this file,
- * so a builtin import here would decide that for the whole package. Enforced by
- * the `no-platform-core-node-builtins` boundary rule, not by this comment.
+ * A port rather than a direct `node:crypto` import — but *not* because this
+ * package is edge-importable. It is not, and ADR-0011 §3 explains why that claim
+ * cannot be made of a package at all: edge-importability is a property of an
+ * entrypoint's module graph, and `src/index.ts` re-exports a subtree that reaches
+ * `node:crypto` through `guest-token.ts`. The default entrypoint targets Node and
+ * Cloudflare Workers, which support `node:crypto` in full (§1).
+ *
+ * The two reasons that do hold: entropy is an ambient capability, and a port is
+ * the right shape for one — it is what makes this file testable without patching
+ * a global. And `no-platform-core-node-builtins` keeps the Node-builtin list in
+ * `platform-core/src` at a single named, ADR-governed entry, which is only worth
+ * anything while the list stays short enough to read. Enforced by that rule, not
+ * by this comment.
  */
 export type RandomBytes = (size: number) => Uint8Array
 

@@ -343,7 +343,9 @@ describe('clearCookie', () => {
  * Every other test in this file injects `randomBytes`, which is what makes tokens
  * byte-reproducible — and also means the *default* was never executed. It was
  * `node:crypto`'s `randomBytes`; it is now the package's `RandomSource` port, so
- * that `platform-core` stays importable from an edge runtime (PER-162).
+ * the Node-builtin list in `platform-core/src` stays at one named, ADR-governed
+ * entry (PER-162; ADR-0011 §Decision part 4) — not to make the package
+ * edge-importable, which ADR-0011 §3 shows it is not and cannot be.
  *
  * That swap is exactly the kind a passing suite can miss. The default is written
  * as `webCryptoRandomSource().randomBytes`, a method pulled off its object: if it
