@@ -21,7 +21,7 @@
  *      the crash.)
  */
 
-import type { GameEvent } from '@playhall/game-sdk'
+import type { GameEvent, MatchLog } from '@playhall/game-sdk'
 import { CheckRecorder } from '../report.js'
 import { type Prepared, healthyRuns } from '../internal/prepare.js'
 import { contextAt, playout, replay, statesOf } from '../internal/driver.js'
@@ -95,8 +95,13 @@ export function checkDeterminism<
     }))
 
     // 2. Rebuild from the match log alone, as the runner does after a restart.
-    const log = first.steps.map((step) => ({
+    // Every step a playout produces is an action, so every entry is `kind:
+    // 'action'`; `onTimer` entries exist in the shape (ADR-0013) but the driver
+    // has no clock that can reach a deadline, so a playout cannot generate one.
+    const log: MatchLog<TAction> = first.steps.map((step) => ({
+      kind: 'action' as const,
       sequence: step.sequence,
+      nowMs: contextAt(run.context, step.sequence).now,
       seatId: step.seatId,
       action: step.action,
     }))

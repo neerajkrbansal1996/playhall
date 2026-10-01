@@ -103,6 +103,18 @@ export { DEFAULT_DISCONNECT_POLICY } from './disconnect.js'
 export type { MatchRecord } from './record.js'
 
 export type {
+  ActionLogEntry,
+  DisconnectLogEntry,
+  MatchLog,
+  MatchLogEntry,
+  MatchLogEntryBase,
+  MatchLogEntryKind,
+  ReconnectLogEntry,
+  TimerLogEntry,
+} from './match-log.js'
+export { MATCH_LOG_ENTRY_KINDS } from './match-log.js'
+
+export type {
   GameCatalogEntry,
   GameCategory,
   GameManifest,

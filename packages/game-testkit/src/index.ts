@@ -72,6 +72,7 @@ export { describeProblem } from './checks/result-standings.js'
 export {
   type ActionChooser,
   type ContextOptions,
+  type DriverServer,
   type Playout,
   type PlayoutStep,
   buildDefaultRoster,

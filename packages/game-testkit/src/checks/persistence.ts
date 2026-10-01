@@ -16,7 +16,7 @@
  * it against `getViewFor(liveState, viewer)` for every viewer kind.
  */
 
-import type { GameEvent } from '@playhall/game-sdk'
+import type { GameEvent, MatchLog } from '@playhall/game-sdk'
 import { CheckRecorder } from '../report.js'
 import { type Prepared, healthyRuns } from '../internal/prepare.js'
 import { contextAt, replay, statesOf } from '../internal/driver.js'
@@ -109,8 +109,10 @@ export function checkSerializationRoundTrip<
     const midIndex = Math.floor(run.playout.steps.length / 2)
     const midStep = run.playout.steps[midIndex]
     if (midStep !== undefined) {
-      const log = run.playout.steps.map((step) => ({
+      const log: MatchLog<TAction> = run.playout.steps.map((step) => ({
+        kind: 'action' as const,
         sequence: step.sequence,
+        nowMs: contextAt(run.context, step.sequence).now,
         seatId: step.seatId,
         action: step.action,
       }))
