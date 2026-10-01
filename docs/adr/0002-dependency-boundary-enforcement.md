@@ -187,10 +187,14 @@ every row above must too. As of rev 3:
   [ADR-0007](./0007-settings-form-descriptor.md) (Consequences), which owns the
   `settings-form.ts` / `settings.ts` split it enforces.
   `no-platform-core-node-builtins` (`^packages/platform-core/src/` → `core`, added in
-  [PER-162](/PER/issues/PER-162)) is the mechanical form of the edge-importability invariant stated
-  in `packages/platform-core/src/runtime.ts`, not a games boundary; whether that invariant survives
-  is [PER-164](/PER/issues/PER-164)'s ADR to decide, and that ADR owns the rule's single `pathNot`
-  exception for `identity/guest-token.ts`. Listed here so the config reconciles.
+  [PER-162](/PER/issues/PER-162)) belongs to
+  [ADR-0011](./0011-platform-core-edge-importability.md) (§Decision part 4), not to this ADR's
+  games boundaries. It does not enforce a package-wide edge-importability invariant — ADR-0011 §3
+  shows a path denylist cannot express one — but the weaker, checkable claim that every Node
+  builtin in `platform-core/src` is in the rule's exception list and that the list stays short
+  enough to read. ADR-0011 governs its single permanent `pathNot` exception for
+  `identity/guest-token.ts`, and defers re-keying the rule to a reachability assertion over the
+  `/edge` graph. Listed here so the config reconciles.
   `no-orphans` and `not-to-unresolvable` run at `warn` by design.
 - **Contract-only, not yet in the config** — `no-testkit-to-platform`, and the §2.3 retirement of
   `no-game-to-shared-internals`, which is still a live `error` rule in `.dependency-cruiser.cjs`

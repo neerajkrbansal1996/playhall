@@ -1,15 +1,14 @@
 # expect: no-platform-core-node-builtins
-# why: platform-core reaching a Node builtin, which makes the package's single entrypoint unloadable on an edge runtime while every test, typecheck and lint stays green
+# why: a Node builtin in platform-core that is not the one documented exception — the list the rule keeps readable grows silently, because every test, typecheck and lint stays green
 === file: packages/platform-core/src/rooms.ts ===
 // The realistic shape of this violation: someone needs entropy for a room code, reaches for the
-// builtin they know, and nothing stops them. `runtime.ts` states the invariant in prose twice —
-// "nothing in platform-core reads the wall clock or the system CSPRNG directly" — and prose does
-// not fail a build.
+// builtin they know, and nothing stops them. The ports in `runtime.ts` are documented, not wired,
+// so prose is all that asks for them — and prose does not fail a build.
 //
 // Nothing else in the suite would go red. The unit tests run on Node, so they pass. `tsc` is
-// happy, @types/node is a real dependency. ESLint has no rule for it. The break surfaces only
-// when apps/web imports the package's index on an edge runtime, which is a deploy-time failure
-// on a target CI does not exercise.
+// happy, @types/node is a real dependency. ESLint has no rule for it. The cost lands on the next
+// consumer that cannot take a Node builtin — ADR-0011 §2: a Next.js Edge middleware importing
+// this package fails `next build` with webpack's UnhandledSchemeError, in a build CI does not run.
 import { randomBytes } from 'node:crypto'
 
 export const roomCodeSeed = (): Uint8Array => randomBytes(16)

@@ -25,8 +25,9 @@ export const games = {
 //
 // Paired with no-platform-core-node-builtins-sibling-of-exception.fixture, which adds a second
 // file under the same directory and must go red, the two together pin the exception to one file
-// instead of one folder. Removing this edge is PER-164's job, and when it lands, this block and
-// the rule's `pathNot` come out in the same commit.
+// instead of one folder. The edge is permanent — ADR-0011 §Decision part 4 governs it and
+// §Alternatives 1 rejects the async swap that would remove it — so this block is not waiting on a
+// follow-up. It comes out only if that ADR is amended.
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
 export const sign = (input: string, key: string): Buffer => createHmac('sha256', key).update(input).digest()

@@ -3,8 +3,9 @@
 === file: packages/platform-core/src/identity/guest-token.ts ===
 // The single exception the rule carries, at its exact path. It is allowed to import node:crypto
 // because the WebCrypto equivalent of createHmac is crypto.subtle.sign, which is async, and
-// making it async turns signGuestToken/verifyGuestToken async too — a contract change that
-// PER-164 owns. `_legal.fixture` proves this file on its own leaves the gate green.
+// making it async turns signGuestToken/verifyGuestToken async too — a contract change ADR-0011
+// §Alternatives 1 rejected, which is why the exception is permanent rather than pending.
+// `_legal.fixture` proves this file on its own leaves the gate green.
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
 export const sign = (input: string, key: string): Buffer => createHmac('sha256', key).update(input).digest()

@@ -161,19 +161,19 @@ const SDK_PURE_SETTINGS = '^packages/game-sdk/src/settings-form\\.ts$'
 const SDK_SETTINGS_SCHEMAS = '^packages/game-sdk/src/settings\\.ts$'
 
 /**
- * The one file in `packages/platform-core/src/` still allowed to reach a Node builtin.
+ * The one file in `packages/platform-core/src/` allowed to reach a Node builtin.
  *
- * Owned by PER-164, the ADR that decides whether `platform-core` stays edge-importable.
- * `guest-token.ts` signs with `node:crypto`'s `createHmac`/`timingSafeEqual`; the WebCrypto
- * equivalent is `crypto.subtle.sign`, which is async, so swapping it turns `signGuestToken` /
- * `verifyGuestToken` async and ripples through `GuestIdentityService.issue()`/`authenticate()`.
- * That is a contract change, so it is a decision rather than a cleanup, and it does not get made
- * inside a lint rule.
+ * **Permanent and governed by ADR-0011 §Decision part 4** — not a temporary carve-out expiring on
+ * a follow-up. `guest-token.ts` signs with `node:crypto`'s `createHmac`/`timingSafeEqual`; the
+ * WebCrypto equivalent is `crypto.subtle.sign`, which is async, so swapping it turns
+ * `signGuestToken` / `verifyGuestToken` async and ripples through
+ * `GuestIdentityService.issue()`/`authenticate()`. ADR-0011 §Alternatives 1 rejected that swap on
+ * reversibility, so the import stays and the exception stays with it.
  *
- * The exception is a single `$`-anchored path on purpose. One visible, countable exception is
- * what turns "we might have an edge-portability problem" into "we have exactly one, it is here,
- * and this issue owns removing it". Adding a second entry is not a mechanical fix — it means the
- * invariant in `runtime.ts` no longer holds and the ADR needs to say so.
+ * The exception is a single `$`-anchored path on purpose. The policy the rule enforces — "the list
+ * is short enough to read" — is only defensible while the list is one entry, so a second entry is
+ * never a mechanical fix: it trips ADR-0011's revisit trigger #2 and needs that ADR amended, not
+ * this line extended. Port the capability instead (see the rule's comment below).
  */
 const PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS =
   '^packages/platform-core/src/identity/guest-token\\.ts$'
@@ -304,18 +304,23 @@ module.exports = {
       name: 'no-platform-core-node-builtins',
       severity: 'error',
       comment:
-        'packages/platform-core has to stay importable from an edge runtime — that is the ' +
-        'invariant runtime.ts states twice, and the reason webCryptoRandomSource() exists ' +
-        'instead of node:crypto. A node: import at module top level breaks it for the whole ' +
-        'package, because src/index.ts re-exports every subtree, so one file decides whether ' +
-        'the single entrypoint loads on an edge worker at all. Nothing else would go red: the ' +
-        'unit tests run on Node, typecheck is clean, and the break only shows up at deploy ' +
-        'time on a runtime CI does not exercise. That gap is why this is a rule and not a ' +
-        'comment. The fix is to take the capability as a port instead of importing it: the ' +
-        'RandomSource / Clock / IdSource interfaces in runtime.ts exist for exactly this, and ' +
-        'webCryptoRandomSource() is the default. If the capability has no WebCrypto equivalent ' +
-        'with the same signature (async vs sync counts as "no equivalent"), that is a contract ' +
-        'change: bring an ADR (PER-164) rather than adding yourself to the exception below.',
+        'This rule does not say "platform-core reaches no Node builtin" — ADR-0011 §1 shows we ' +
+        'do not want that (Workers support node:crypto in full) and §3 shows a path denylist ' +
+        'cannot express it. What it says is: every Node builtin in packages/platform-core/src is ' +
+        'in the exception list above, and that list is short enough to read. One entry, named, ' +
+        'governed by an ADR. A new node: import at module top level is load-bearing for a whole ' +
+        'entrypoint, because src/index.ts re-exports every subtree, and nothing else goes red: ' +
+        'the unit tests run on Node, typecheck is clean, and the break surfaces at build time in ' +
+        'a consumer CI does not exercise (ADR-0011 §2 — webpack says UnhandledSchemeError, never ' +
+        '"edge runtime"). That gap is why this is a rule and not a comment. The fix is to take ' +
+        'the capability as a port instead of importing it: the RandomSource / Clock / IdSource ' +
+        'interfaces in runtime.ts exist for exactly this, and webCryptoRandomSource() is the ' +
+        'documented default. If the capability has no WebCrypto equivalent with the same ' +
+        'signature (async vs sync counts as "no equivalent"), do not make the identity API async ' +
+        'to satisfy a bundler: an edge consumer gets @playhall/platform-core/edge, a second ' +
+        'entrypoint whose graph reaches no Node builtin, specified surface-by-surface in ' +
+        'ADR-0011 §Decision part 2 and deliberately not built until a consumer exists. Build ' +
+        'that to spec, or amend ADR-0011 — do not add yourself to the exception above.',
       from: {
         path: '^packages/platform-core/src/',
         pathNot: PLATFORM_CORE_NODE_BUILTIN_EXCEPTIONS,
