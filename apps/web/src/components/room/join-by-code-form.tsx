@@ -268,12 +268,23 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
           never colour alone.
 
           The hint above carries no role, so this stays the field's only `alert`.
+
+          `items-start` plus `[&_svg]:mt-0.5`, not `items-center`: the overflow
+          message wraps to two lines at 360 px, and centring against the whole
+          block parks the icon in the gutter between them, aligned to neither.
+          `mt-0.5` is the exact centring offset for the *first* line, not a nudge
+          by eye — `text-sm` is a 14 px font in a 20 px line box and the icon is
+          `size-4` = 16 px, so (20 − 16) / 2 = 2 px. One-line messages therefore
+          render pixel-identically to the old `items-center`. `shrink-0` is
+          defensive: `size-4` sets a width but not a flex-basis, so a future copy
+          revision carrying a long unbroken token could squeeze the icon into an
+          ellipse.
         */}
         {message ? (
           <p
             id={messageId}
             role="alert"
-            className="flex items-center gap-1.5 text-sm text-destructive [&_svg]:size-4"
+            className="flex items-start gap-1.5 text-sm text-destructive [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0"
           >
             <AlertCircle aria-hidden="true" />
             {message}
