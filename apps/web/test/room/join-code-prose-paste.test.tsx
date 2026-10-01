@@ -61,14 +61,22 @@ afterEach(cleanup)
  * bearing no resemblance to the one the player was sent, and a computed
  * expectation would restate the implementation instead of pinning that.
  *
- * The invite link is a member of this class and the highest-traffic one — every
- * lobby has a link as well as a code, and "tap the link text, paste it" is at
- * least as common as pasting a sentence. The host is deliberately
- * `example.test`: the product domain is an open board decision and nothing
- * under `apps/web/src` or `packages/shared/src` hard-codes one. The row pins
- * what the field does with a link *today*; whether a pasted link should have
- * its code extracted is a product decision tracked on
- * [PER-242](/PER/issues/PER-242), not something this file asserts.
+ * **The invite link used to be a row here and is deliberately no longer one.**
+ * It was pinned as `{ raw: 'https://example.test/join/ABC234', kept: 'HTTPSE' }`
+ * — measurement only, because `HTTPSE` was never desired behaviour — while
+ * whether to extract a pasted link was open on
+ * [PER-242](/PER/issues/PER-242). That question is now answered: a link is read
+ * as a link and its code lifted out ([PER-235](/PER/issues/PER-235)), so the
+ * row would assert the bug it was filed against. It cannot simply be re-pointed
+ * at `ABC234` either, because this table's self-check below requires every
+ * `kept` to be a plausible *wrong* code — which is the property that makes
+ * these rows prose rows at all.
+ *
+ * The shape did not stop being measured: `join-code-link-paste.test.tsx` drives
+ * `https://playhall.app/join/ABC234` through this same component and asserts the
+ * lifted `ABC234`, and `read-room-code-input.test.ts` holds the case table
+ * either side of the prose/link boundary. Only the *prose* half lives here, and
+ * PER-242 ratified leaving it exactly as it is: normalise, cap, announce.
  */
 const LEADING_PROSE = [
   { raw: 'Code: ABC234', kept: 'CDEABC' },
@@ -77,7 +85,6 @@ const LEADING_PROSE = [
   { raw: 'Room code is ABC234', kept: 'RMCDES' },
   { raw: 'ok ABC234', kept: 'KABC23' },
   { raw: 'Join my game: ABC234 - see you there', kept: 'JNMYGA' },
-  { raw: 'https://example.test/join/ABC234', kept: 'HTTPSE' },
 ] as const
 
 describe('a code pasted with prose in front of it', () => {

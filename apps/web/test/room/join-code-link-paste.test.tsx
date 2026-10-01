@@ -37,6 +37,13 @@ describe('an invite link pasted into the code field', () => {
     'https://playhall.app/join/ABC234',
     'Join: https://playhall.app/r/ABC234',
     'playhall.app/r/ABC234',
+    // The exact fixture PER-234 pinned as `kept: 'HTTPSE'` while extraction was
+    // still an open question, carried over verbatim — host included — so
+    // retiring that row from `join-code-prose-paste.test.tsx` moves the shape
+    // here rather than dropping it. A second host also keeps the suite honest
+    // about matching URL *shape* and not one brand: `playhall.app` and
+    // `example.test` have different label lengths and different TLDs.
+    'https://example.test/join/ABC234',
   ] as const) {
     it(`joins the room the link names for ${JSON.stringify(raw)}`, async () => {
       const user = userEvent.setup()
