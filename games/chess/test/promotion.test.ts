@@ -97,16 +97,28 @@ describe('promotion — the server always requires an explicit piece', () => {
   describe.each([
     // A pawn one rank short of promoting. The near miss, and the reason a
     // "harmless" reading is tempting.
-    { label: 'a pawn push that is one rank short', fen: '4k3/8/P7/8/8/8/8/4K3 w - - 0 1', from: 'a6', to: 'a7' },
+    {
+      label: 'a pawn push that is one rank short',
+      fen: '4k3/8/P7/8/8/8/8/4K3 w - - 0 1',
+      from: 'a6',
+      to: 'a7',
+    },
     // A rook reaching the eighth rank: the exact input the gate caught.
-    { label: 'a rook lift to the eighth rank', fen: '4k3/R7/8/8/8/8/8/4K3 w - - 0 1', from: 'a7', to: 'a8' },
+    {
+      label: 'a rook lift to the eighth rank',
+      fen: '4k3/R7/8/8/8/8/8/4K3 w - - 0 1',
+      from: 'a7',
+      to: 'a8',
+    },
     // A knight move, where a promotion letter is pure nonsense.
     { label: 'a knight move', fen: '4k3/8/8/8/8/8/8/4K1N1 w - - 0 1', from: 'g1', to: 'f3' },
   ])('rejects a promotion piece attached to $label', ({ fen, from, to }) => {
     it('is an illegal move, and the clean spelling still plays', () => {
       const game = newGame({ fen })
       const seat = seatOf(game, 'w')
-      expect(applyAction(game, { type: 'move', move: { from, to, promotion: 'q' } }, seat, ctx())).toEqual({
+      expect(
+        applyAction(game, { type: 'move', move: { from, to, promotion: 'q' } }, seat, ctx()),
+      ).toEqual({
         ok: false,
         error: 'illegal_move',
       })
