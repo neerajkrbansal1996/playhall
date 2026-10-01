@@ -114,10 +114,12 @@ export type SettingsFormIssueCode =
   | 'defaults_rejected'
   | 'duplicate_field_key'
   | 'unknown_field_key'
+  | 'setting_without_field'
   | 'non_scalar_field_key'
   | 'number_bounds_invalid'
   | 'number_bound_rejected'
   | 'option_rejected'
+  | 'toggle_value_rejected'
   | 'visibility_target_missing'
   | 'visibility_target_self'
   | 'visibility_target_conditional'
@@ -150,9 +152,13 @@ function issuesToMessage(issues: readonly z.ZodIssue[]): string {
  * Cross-check a descriptor against the schema and defaults it claims to render.
  *
  * Every issue returned here is a bug that would otherwise ship as a control
- * wired to nothing, a chip that always fails to submit, or a conditional field
- * that can never appear. `validateManifest` runs this at registry load and the
- * conformance testkit fails the build on a non-empty result.
+ * wired to nothing, a setting with no control, a chip or toggle position that
+ * always fails to submit, or a conditional field that can never appear. The
+ * check runs in both directions on purpose — a descriptor that has forgotten a
+ * setting is as broken a form as one that has invented a setting, and the
+ * descriptor is the only thing `apps/web` ever sees. `validateManifest` runs
+ * this at registry load and the conformance testkit fails the build on a
+ * non-empty result.
  *
  * Pure: no I/O, no clock, no randomness. Safe to call at module load.
  */
@@ -270,6 +276,26 @@ export function checkSettingsForm<TSettings>(
       }
     }
 
+    if (field.kind === 'toggle') {
+      // A toggle's options are implicit, so they are easy to forget to check —
+      // but a schema that pins the key to a literal, or a `.refine()` that
+      // forbids one position alongside another setting, ships a control that
+      // always fails to submit in that position. Its own code rather than
+      // `option_rejected` because the path has to name the position (`.true`)
+      // and not an `options` index a toggle does not have — the same reason
+      // `number` has `number_bound_rejected` and `.min`/`.max`.
+      for (const value of [true, false]) {
+        const probe = schema.safeParse({ ...base, [field.key]: value })
+        if (!probe.success) {
+          add(
+            'toggle_value_rejected',
+            `${at}.${String(value)}`,
+            `settingsSchema rejects ${String(value)}, so this toggle could never be submitted in that position: ${issuesToMessage(probe.error.issues)}`,
+          )
+        }
+      }
+    }
+
     if (field.kind === 'number') {
       if (!(field.min <= field.max)) {
         add('number_bounds_invalid', at, `min (${field.min}) must not exceed max (${field.max}).`)
@@ -288,6 +314,27 @@ export function checkSettingsForm<TSettings>(
         }
       }
     }
+  }
+
+  // The other direction. The loop above proves every control is wired to a
+  // setting; this proves every setting has a control. An unbound setting is not
+  // cosmetic: the descriptor is the only thing `apps/web` receives
+  // (`toCatalogEntry` drops the live schema), so a host can never move that
+  // setting off its default and nothing downstream can notice it is missing.
+  for (const key of Object.keys(defaults)) {
+    if (seenKeys.has(key)) continue
+    const value = defaults[key]
+    // A non-scalar cannot be bound by any of the three field kinds, so a
+    // control for it is not something the descriptor could express. A field
+    // that does try reports `non_scalar_field_key` above.
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      continue
+    }
+    add(
+      'setting_without_field',
+      `defaultSettings.${key}`,
+      `'${key}' has no field bound to it, so the create-lobby form would render no control and a host could never change it from its default.`,
+    )
   }
 
   return issues
