@@ -2,6 +2,13 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
+- **Amended:** 2026-10-01 (rev 2) — **§4a decides the equal-deadline tie-break the two
+  implementations read differently.** `TimerQueue` broke an exact tie by `timerId` ascending, as
+  §4's fixture requires; `TimerService.poll` broke it by the order the game's reducer emitted its
+  `set` commands. §4a makes **`timerId` ascending normative** and the service is corrected. Nothing
+  else in this ADR changes, no `packages/game-sdk` runtime surface changes, and §4's obligation is
+  unaltered — this is the first time it was exercised, and it worked. Raised as
+  [PER-255](/PER/issues/PER-255) from the §4 discharge on [PER-252](/PER/issues/PER-252).
 - **Author:** CTO
 - **Milestone:** M1
 - **Issue:** [PER-142](/PER/issues/PER-142) (raised from [PER-136](/PER/issues/PER-136), which
@@ -233,6 +240,94 @@ reversible. If the two implementations still diverge, the promotion path is the 
 into `game-sdk` next to `timers.ts` — by ADR, at that point, not pre-emptively now against an
 implementation that is not on `main`.
 
+### 4a. An equal-deadline tie fires in `timerId` ascending order, not in arm order (rev 2)
+
+§4's obligation worked exactly as written: discharging it on [PER-252](/PER/issues/PER-252) found
+that the two readings disagree on one thing, and the disagreement reached an ADR instead of being
+closed by whoever noticed it.
+
+**The disagreement, measured.** For two timers with the _same_ deadline:
+
+| reading                                                              | equal-deadline order                                    |
+| -------------------------------------------------------------------- | ------------------------------------------------------- |
+| `TimerQueue` (`packages/game-testkit/src/internal/timer-queue.ts`)   | `timerId` ascending — what the fixture's row requires   |
+| `TimerService.poll` (`packages/platform-core/src/timers/service.ts`) | the order the game's reducer emitted its `set` commands |
+
+The service's `due.sort((a, b) => a.dueAtMs - b.dueAtMs)` has no secondary key.
+`Array.prototype.sort` is stable and `#records` is a `Map` iterated in insertion order, so an
+equal-deadline batch reached `onExpire` — and through the room runner, `game.onTimer` — in arm
+order. [PER-252](/PER/issues/PER-252) asserted it positively in _both_ directions (arm `alpha`
+then `beta` → `['alpha','beta']`; arm `beta` then `alpha` → `['beta','alpha']`), so it was
+insertion order specifically and not an id-descending sort that happens to look like it. Both
+suites were green throughout, which is the point: this is a divergence no test could see, because
+each side only tested itself.
+
+**Decision: `timerId` ascending is normative.** The fixture row was already right; the service is
+corrected, in both of its ordering sites (see below).
+
+Why, by the lenses that decide it:
+
+- **Determinism.** The guarantee is that the same seed plus the same inputs reproduce the same
+  outcome. Arm order makes the fire order a function of _the order two lines appear in inside
+  `applyAction`_ — not of the match, the seed, the log, or anything a replay carries. Swapping two
+  adjacent `setTimer` calls is a refactor with no semantic content, and under arm order it can
+  change who wins, because `onTimer` can end a match. `timerId` ascending is a function of the
+  declared ids, which are manifest data, and which **version pinning** already freezes for the
+  life of a match.
+- **Blast radius.** Arm order is not stated anywhere; it is an emergent property of `Map`
+  insertion order, `list()`, `snapshot()`'s JSON array, Redis, and `restore()`'s re-insertion loop.
+  Five layers would have to preserve an invariant none of them declares, and any future change to
+  the snapshot encoding — a keyed object, a migration that re-sorts, a Redis hash — would silently
+  change live match outcomes with every test still green. The chosen rule is one comparator, and
+  cannot be broken that way.
+- **Reversibility.** `timerId` ascending is a two-call-site change behind a fixture row that
+  already existed. Arm order would have meant rewriting the testkit queue, rewriting the fixture
+  row, _and_ taking on the durability invariant above.
+
+**The alternatives, and why not.**
+
+- _(a) Arm order is normative._ Rejected on the three lenses above. Note that the fixture row's own
+  rationale already calls this a reproducibility bug, and it is right.
+- _(b) Underspecified — drop the row, document equal deadlines as unordered._ Rejected, and it is
+  the tempting one because it is free. An unordered contract is a contract two implementations are
+  free to keep drifting on. Worse here specifically: `onTimer` can end a match, so "unordered"
+  means "the same inputs may produce different results", and the conformance suite's whole job is
+  to certify a game's determinism. You cannot certify a game against an underspecified platform.
+- _(c) Promote a shared timer reducer into `packages/game-sdk` so there is only one reading._ Still
+  the right answer eventually and still not now — this is §4's alternative (d) and its trigger has
+  not fired. One divergence, found by the mechanism designed to find it and fixed by a comparator,
+  is evidence the fixture is working, not that it is insufficient.
+
+**Two corrections this required beyond the reported one.** [PER-255](/PER/issues/PER-255) named
+`poll`. There were two ordering sites, and a fix applied only where the issue pointed would have
+left the second:
+
+1. `poll` — the primary path, `onExpire` → room runner → `game.onTimer`.
+2. `#forceExpireDue` — the `MAX_DRAIN_PASSES` escape hatch, which reports through
+   `onDrainExhausted` and had the same deadline-only sort. The shared fixture **cannot** reach it:
+   its driver observes `onExpire` only, and `TimerQueue` has no drain cap for a row to describe. It
+   is covered by a direct test in `packages/platform-core/test/timer-command-semantics.test.ts`
+   instead, and this is a known limit of the fixture rather than a gap in it.
+
+Both now use one `compareFireOrder` helper, so the next site cannot be added with a different rule.
+
+**The fixture gains a row, and the existing one was not enough on its own.** §4 says a changed
+tie-break adds a row before it changes either implementation. Strictly this tie-break is not
+_changed_ — the table always said `timerId` ascending and the service never implemented it — but
+the table could not tell the chosen rule apart from a plausible wrong one. The existing row
+`ties-break-by-timer-id-ascending` arms in reverse id order, so it is **also satisfied by a rule
+that simply reverses arm order**. `ties-break-by-timer-id-ascending-when-armed-in-id-order` arms
+the same tie in id order; only the pair pins `timerId` ascending, and the property being pinned is
+that arm order does not decide this at all. Measured: the new row passes against the _unfixed_
+service too, because arm order and id order agree in that direction — it is a guard against a
+future wrong fix, and the old row is what catches the divergence this amendment closes.
+
+`packages/game-sdk/src/timers.ts` gains a sentence stating the guarantee where a game author writes
+the commands, since the fixture is a test file and was the contract's only statement of it. That is
+documentation on an existing type: no field, no signature and no runtime behaviour changes, so
+[ADR-0008](./0008-game-sdk-contract-v1.md)'s contract-v1 freeze is not engaged and no board
+approval is needed — and in any case this lands in M1, before the M2 gate it describes.
+
 ### 5. `result-standings-well-formed` keeps its name and its id
 
 The check id does not change and no 12th check is added. The trigger is how the harness reaches
@@ -428,6 +523,14 @@ Nothing here is persisted, versioned, or visible to a game's source.
   Reopen before adding the fourth, not after.
 - **`maxFires` default 1 turns out to be wrong for real games.** Cheap to change, recorded so
   the change is understood as maintenance rather than a contract break.
+- **A second §4 divergence is found (rev 2).** One was evidence the fixture works. A second —
+  especially one the table cannot express, as `#forceExpireDue` could not — means the two readings
+  are drifting faster than a data table can hold them, and §4 alternative (d), promoting a shared
+  timer reducer into `packages/game-sdk`, becomes the answer. Reopen on the second, not the third.
+- **A game needs two timers to resolve a tie in an order other than `timerId` ascending (rev 2).**
+  §4a is a total order chosen for determinism, not for game semantics. A game that needs "the match
+  timer always wins a tie" is asking for a priority on `TimerSpec`, which is an SDK contract change
+  and board-gated after M2. The answer is probably that it should not land on the same millisecond.
 - **A game needs to assert the timer fired and the match stayed live** (a warning timer). That
   is not an abort scenario at all and must not be bent into one; it is the separate timer check
   the queue makes cheap.

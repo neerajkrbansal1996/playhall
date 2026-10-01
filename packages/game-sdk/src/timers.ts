@@ -10,6 +10,19 @@
  *
  * Delays are relative (`delayMs`). The runner resolves them against the same
  * `ctx.now` it passed in, so the same input always produces the same deadline.
+ *
+ * ## Fire order
+ *
+ * Earliest deadline first. Two timers that fall due at the *same* instant reach
+ * `onTimer` in **`timerId` ascending** order — never in the order this array
+ * listed them (ADR-0010 §4a). Reordering two `setTimer` calls is therefore a
+ * refactor and not a rules change, which is the whole point: `onTimer` can end a
+ * match, so if emission order decided a tie then the same seed and the same
+ * inputs could produce two different results.
+ *
+ * The normative statement of this, and of every other `TimerCommand` behaviour,
+ * is the data table at `packages/game-sdk/test/fixtures/timer-command-semantics.json`,
+ * which both the platform scheduler and the conformance driver are tested against.
  */
 
 import type { SeatId, TimerId } from './ids.js'
