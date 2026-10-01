@@ -68,9 +68,12 @@
   substance, not tidiness: an app is a composition root, and `apps/web` and `apps/realtime` both
   import `platform-core` already, so the reverse edge inverts the dependency and is a cycle
   waiting to happen. Whether a package's `test/` tree deserves a narrower allowance (a type-only
-  import of a server contract, say) is **not** decided here and is a CTO ruling, not a `pathNot`
-  added later. Implemented on [PER-251](/PER/issues/PER-251); the stale comment was corrected on
-  [PER-241](/PER/issues/PER-241).
+  import of a server contract, say) was deferred to a CTO ruling rather than bolted on as a
+  `pathNot`. That ruling is **no carve-out**, and it is written up in §2 beside the rule it
+  constrains so it cannot be re-asked as an open question. Implemented on
+  [PER-251](/PER/issues/PER-251); the stale comment was corrected on
+  [PER-241](/PER/issues/PER-241); the §2 overlap note, the `test/` ruling and the reconciliation
+  stamp were corrected in review on [PER-256](/PER/issues/PER-256).
 - **Author:** CTO
 - **Milestone:** M0
 - **Issue:** [PER-5](/PER/issues/PER-5) (epic [PER-3](/PER/issues/PER-3))
@@ -188,18 +191,39 @@ CI output is where an engineer meets this rule for the first time.
 `no-orphans` runs at `warn`, not `error` — a temporarily unreferenced file during development
 is not a boundary violation and failing the build on it trains people to ignore the tool.
 
-**Two rows forbid `game-sdk` → app, and that overlap is intended (rev 2.4).** `^packages/` in
-`no-package-to-app` includes `packages/game-sdk`, whose own row already denies it `^apps/`. One
-edge therefore trips two rules and prints two lines. The alternative — excluding `game-sdk` from
-`no-package-to-app` — would make the rule stop saying the thing it is named for, "no package
-imports an app", and would leave the next reader checking two rows to answer one question. A
-duplicated denial costs a line of CI output; a narrowed one costs the invariant.
+**An app denial in a narrower row is a deliberate duplicate, not a bug (rev 2.4).** `^packages/`
+in `no-package-to-app` includes every package that already has its own, narrower row naming
+`^apps/` — and there are **two** of those, not one: `no-sdk-to-platform`, which is live, and
+`no-testkit-to-platform`, which is contract-only until [PER-139](/PER/issues/PER-139). So a
+`game-sdk → app` edge trips two rules and prints two lines today, and a `game-testkit → app` edge
+will do the same once PER-139 lands. Both are intended. The alternative — excluding those
+packages from `no-package-to-app` — would make the rule stop saying the thing it is named for,
+"no package imports an app", and would leave the next reader checking two rows to answer one
+question. A duplicated denial costs a line of CI output; a narrowed one costs the invariant. The
+consequence for §5 is a constraint on fixtures, not a loosening of the rule: a fixture proving
+`no-package-to-app` must be written from a package with no narrower row of its own, or it fires
+two error rules and fails the suite's precision assertion.
+
+**A package's `test/` tree gets no carve-out (rev 2.4 — normative, CTO ruling).** The question
+rev 2.4 raised and deferred is answered: no. `no-package-to-app` covers `^packages/` including
+every `test/` tree, with no `pathNot`, and the narrower allowance actually asked for — a
+type-only import of an app's server contract — is **denied**. Two reasons, both checkable. First,
+`pnpm --filter <pkg> test` has to be runnable against that package alone; an edge into an app
+makes a package's test suite depend on a Next.js or server app resolving, which is the same
+unpublishability the rule's `comment` objects to, arriving through `devDependencies` instead of
+`dependencies`. Second, type-only is not a weaker edge here — dependency-cruiser sees it, and if
+a package's test needs an app's contract type then the contract is in the wrong place: move it
+into `packages/shared` or the package itself and let the app import it, which is the direction
+that already works and the same answer §2 gives every other reach across this boundary. Revisit
+only on a measured case where that move is impossible, and a `pathNot` then lands **after** the
+ADR amendment that authorises it, never before.
 
 **Reconciling this table against the config (rev 3 — normative).** This table is the contract, and
 the contract is allowed to lead the config. But a reader must be able to tell which rows are live
 **without** grepping, because not being able to is the exact defect rev 3 exists to fix. Every
 `severity: error` rule in `.dependency-cruiser.cjs` must appear in exactly one line below, and
-every row above must too. As of rev 2.4:
+every row above must too. As of **2026-10-01** (rev 2.4 — the stamp is a date on purpose, see
+below):
 
 - **Live, and in this table** — `no-game-to-platform`, `no-game-to-app`, `no-game-to-game`,
   `no-package-to-app`, `no-platform-to-game`, `no-sdk-to-platform`, `no-game-node-builtins`,
@@ -230,6 +254,22 @@ every row above must too. As of rev 2.4:
 
 A rule added to either side without a line here is the drift rev 3 had to come back and correct.
 **Name the state when you add the rule.**
+
+**Revision numbers here are section-keyed, not chronological — never order them numerically
+(rev 2.4 — normative).** A `rev 2.x` amends §2; `rev 3` was a whole-ADR naming correction across
+the ADR. The two series run independently, so rev 2.3 was adopted **after** rev 3 (both
+2026-09-30, and the revision history lists 2.3 below 3), and rev 2.4 is later still
+(2026-10-01). A reader who compares revision numbers to decide whether the enumeration above is
+current therefore gets the wrong answer: "as of rev 2.4" under a heading marked "rev 3" reads as
+stale when it is in fact the newest state. Two consequences. **The stamp above carries a date**,
+because a number cannot carry that information here. And **the authority for ordering revisions
+is the revision history's own order** — read it top to bottom, the last entry wins — not the
+number and not the date, since rev 3 and rev 2.3 share one. The convention stays as it is,
+because a `2.x` number tells you which section moved and a monotonic counter would not, and
+renumbering a revision already cited from the §2 table row, §5 and
+`packages/platform-core/test/fixtures/real-clock.ts` costs more than it buys. The obligation that
+comes with keeping it: the next §2 amendment is rev 2.5, is appended **last** in the revision
+history, and **must re-stamp the date above** rather than only adding its name to a bucket.
 
 #### 2.1 Every target above is matched three ways, not one (rev 2.2 — normative)
 
