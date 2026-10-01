@@ -112,10 +112,24 @@ describe('timer commands', () => {
       seatId: seatA,
       delayMs: 5_000,
     })
-    expect(setTimer(timer, 1_000).seatId).toBeNull()
     expect(clearTimer(timer)).toEqual({ op: 'clear', timerId: timer })
     expect(pauseTimer(timer)).toEqual({ op: 'pause', timerId: timer })
     expect(resumeTimer(timer)).toEqual({ op: 'resume', timerId: timer })
+  })
+
+  it('makes the owning seat a stated decision, not an omission', () => {
+    // A match-wide timer says so out loud.
+    expect(setTimer(timer, 1_000, null).seatId).toBeNull()
+
+    // Re-arming for a different seat transfers ownership; that is why there is
+    // no "unchanged" value, and why omitting the seat must not compile. With a
+    // `= null` default, `setTimer(timer, 1_000)` read as "re-arm the deadline"
+    // and in fact disowned it, so the runner's seat scope could no longer
+    // freeze the mover's own clock when the mover disconnected.
+    expect(setTimer(timer, 1_000, seatB).seatId).toBe(seatB)
+
+    // @ts-expect-error the owning seat is required — see the doc comment on setTimer
+    setTimer(timer, 1_000)
   })
 })
 

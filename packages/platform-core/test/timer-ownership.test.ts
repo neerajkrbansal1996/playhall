@@ -84,18 +84,42 @@ describe('a re-armed turn timer must follow its new owner', () => {
     expect(service.isRunning(TURN)).toBe(false)
   })
 
-  it('disowns through `apply` when the game names no seat', () => {
+  it('disowns through `apply` only when the game writes `null`', () => {
     const { service } = newService()
     service.apply([setTimer(TURN, 30_000, WHITE)], 1_000_000)
-    // `setTimer`'s seat defaults to `null` and a `TimerCommand` has no way to
-    // say "unchanged", so through `apply` the command is always a statement of
-    // ownership — and it matches what the create branch already does with the
-    // same command. A game that wants the seat kept names it.
-    service.apply([setTimer(TURN, 30_000)], 1_005_000)
+    // `SetTimerCommand.seatId` is `SeatId | null` and *required*, so unlike
+    // `set`'s `undefined` above a command has no way to say "unchanged":
+    // through `apply` it is always a statement of ownership, matching what the
+    // create branch does with the same command. Since PER-174 `setTimer` has
+    // no default either, so the disown below is a thing the game wrote down
+    // rather than one it omitted — see the re-arm case underneath.
+    service.apply([setTimer(TURN, 30_000, null)], 1_005_000)
 
     expect(service.get(TURN)?.seatId).toBeNull()
     service.pauseForSeat(WHITE, 1_006_000)
     expect(service.isRunning(TURN)).toBe(true)
+  })
+
+  /**
+   * [PER-174](/PER/issues/PER-174). The two-argument `setTimer(TURN, 30_000)`
+   * used to compile and meant the disown above, while reading at the call site
+   * as the re-arm below. These two tests are the same four lines apart from the
+   * third argument, and they freeze on opposite disconnects — which is why the
+   * argument is required and why the compile-time pin in
+   * `game-sdk/test/contracts.test.ts` is not the whole guard.
+   */
+  it('keeps the mover’s deadline frozen on their own drop after a re-arm', () => {
+    const { service } = newService()
+    service.apply([setTimer(TURN, 30_000, WHITE)], 1_000_000)
+    // White is still on move — a reducer extending its own deadline. Naming
+    // the seat is what keeps the timer theirs.
+    service.apply([setTimer(TURN, 30_000, WHITE)], 1_005_000)
+
+    expect(service.get(TURN)?.seatId).toBe(WHITE)
+    // White drops on mobile data. Their own deadline must stop, or they lose
+    // on a timeout they never saw.
+    service.pauseForSeat(WHITE, 1_006_000)
+    expect(service.isRunning(TURN)).toBe(false)
   })
 })
 

@@ -117,15 +117,15 @@ describe('apply() validates the whole batch before executing any of it', () => {
 
   it('rejects an issuedAtMs that is not an instant', () => {
     const { service } = newService()
-    expect(() => service.apply([setTimer(TURN, 1_000)], Number.NaN)).toThrow(RangeError)
+    expect(() => service.apply([setTimer(TURN, 1_000, WHITE)], Number.NaN)).toThrow(RangeError)
     expect(service.get(TURN)).toBeUndefined()
   })
 
   it('names the timer the bad command was for', () => {
     const { service } = newService()
-    expect(() => service.apply([setTimer(TURN, Number.POSITIVE_INFINITY)], 1_000_000)).toThrow(
-      /turn\.delayMs/,
-    )
+    expect(() =>
+      service.apply([setTimer(TURN, Number.POSITIVE_INFINITY, WHITE)], 1_000_000),
+    ).toThrow(/turn\.delayMs/)
   })
 
   it('rejects an undeclared timer id before executing anything either', () => {
@@ -137,7 +137,7 @@ describe('apply() validates the whole batch before executing any of it', () => {
     // commands in front of it applied — the half-batch this contract rules
     // out, and the one `docs/timers.md` promises cannot reach the match log.
     expect(() =>
-      service.apply([setTimer(TURN, 30_000), setTimer(ghost, 1_000)], 1_000_000),
+      service.apply([setTimer(TURN, 30_000, WHITE), setTimer(ghost, 1_000, null)], 1_000_000),
     ).toThrow(/not declared in the game manifest/)
 
     expect(service.get(TURN)).toBeUndefined()
