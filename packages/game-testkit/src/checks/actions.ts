@@ -31,7 +31,7 @@
 import { type GameEvent, STANDARD_ACTION_ERROR_CODES, type SeatId } from '@playhall/game-sdk'
 import { CheckRecorder } from '../report.js'
 import { type Prepared, healthyRuns } from '../internal/prepare.js'
-import { contextAt, outsiderSeatId } from '../internal/driver.js'
+import { contextAt, handOver, outsiderSeatId } from '../internal/driver.js'
 import { preview, stableStringify } from '../internal/value.js'
 
 /** Junk every `actionSchema` must reject, regardless of the game. */
@@ -131,9 +131,23 @@ export function checkIllegalActionRejected<
         description: string,
         expectedCodes?: readonly string[],
       ): void => {
+        // Per `probe()` call, not per step. Each call is an independent "would
+        // you reject this?" question asked of the same position, so each one
+        // has to start from pristine state — and `probe()` runs several times
+        // per step with different seats and actions.
+        //
+        // Cloning is also what keeps the *playout record* pristine. A game
+        // whose `validateAction` writes onto its input would otherwise edit
+        // `step.before` in place here, and every check that runs after this one
+        // (`serialization-round-trip`, `reconnect-snapshot-matches-live`) would
+        // read the pollution and fail on a property that is not broken
+        // (PER-278). Detection power is unchanged: `stateBefore` is captured
+        // above, before any call, and the assertion below compares this clone
+        // against it.
+        const probeState = handOver(step.before)
         let outcome: { readonly ok: boolean; readonly error?: { readonly code: string } }
         try {
-          outcome = prep.guard(() => server.validateAction(ctx, step.before, seatId, action))
+          outcome = prep.guard(() => server.validateAction(ctx, probeState, seatId, action))
         } catch (error) {
           recorder.fail({
             message: `validateAction threw instead of returning a typed rejection for ${description}`,
@@ -160,7 +174,7 @@ export function checkIllegalActionRejected<
             where,
           }))
         }
-        recorder.assert(stableStringify(step.before) === stateBefore, () => ({
+        recorder.assert(stableStringify(probeState) === stateBefore, () => ({
           message: `state changed while rejecting ${description}`,
           where,
         }))
@@ -208,10 +222,14 @@ export function checkIllegalActionRejected<
       const lastStep = run.playout.steps[run.playout.steps.length - 1]
       if (lastStep !== undefined) {
         for (const seat of run.scenario.roster) {
+          // Same per-call clone as `probe()` above: `finalState` is the record
+          // every later check replays against, and each seat is an independent
+          // question (PER-278).
+          const probeState = handOver(finalState)
           let outcome: { readonly ok: boolean; readonly error?: { readonly code: string } }
           try {
             outcome = prep.guard(() =>
-              server.validateAction(ctx, finalState, seat.seatId, lastStep.action),
+              server.validateAction(ctx, probeState, seat.seatId, lastStep.action),
             )
           } catch (error) {
             recorder.fail({
@@ -226,7 +244,7 @@ export function checkIllegalActionRejected<
             where: where0,
             detail: preview(lastStep.action, 160),
           }))
-          recorder.assert(stableStringify(finalState) === finalStateText, () => ({
+          recorder.assert(stableStringify(probeState) === finalStateText, () => ({
             message: 'state changed while rejecting an action after the match ended',
             where: where0,
           }))
@@ -323,7 +341,14 @@ export function checkLegalActionsAgree<
 
         // Forward: everything listed must validate.
         for (const action of listed) {
-          const outcome = prep.guard(() => server.validateAction(ctx, state, seat.seatId, action))
+          // `state` here is `initial.state` or a `step.after` straight out of
+          // the playout record, and this check runs before
+          // `serialization-round-trip` and `reconnect-snapshot-matches-live`.
+          // A `validateAction` that writes onto its input would otherwise make
+          // both of them fail on a property that is not broken (PER-278).
+          const outcome = prep.guard(() =>
+            server.validateAction(ctx, handOver(state), seat.seatId, action),
+          )
           recorder.assert(outcome.ok, () => ({
             message: `getLegalActions offered an action that validateAction rejects with '${outcome.ok ? '' : outcome.error.code}'`,
             where: `${where0} step=${index} seat=${String(seat.seatId)}`,
@@ -342,7 +367,9 @@ export function checkLegalActionsAgree<
         }
         for (const action of reverseCorpus) {
           if (listedKeys.has(stableStringify(action))) continue
-          const outcome = prep.guard(() => server.validateAction(ctx, state, seat.seatId, action))
+          const outcome = prep.guard(() =>
+            server.validateAction(ctx, handOver(state), seat.seatId, action),
+          )
           recorder.assert(!outcome.ok, () => ({
             message: `validateAction accepts an action that getLegalActions does not list for seat ${String(seat.seatId)}`,
             where: `${where0} step=${index}`,

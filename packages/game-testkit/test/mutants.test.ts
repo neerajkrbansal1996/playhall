@@ -62,11 +62,16 @@ function mutateHiddenHand(
   )
 }
 
-/** Every `reducer-purity` failure message, joined so a test can grep it. */
-function purityMessages(report: ConformanceReport): string {
-  return (report.checks.find((check) => check.id === 'reducer-purity')?.failures ?? [])
+/** Every failure message one check recorded, joined so a test can grep it. */
+function messagesFor(report: ConformanceReport, check: ConformanceCheck): string {
+  return (report.checks.find((candidate) => candidate.id === check)?.failures ?? [])
     .map((failure) => failure.message)
     .join('\n')
+}
+
+/** Every `reducer-purity` failure message, joined so a test can grep it. */
+function purityMessages(report: ConformanceReport): string {
+  return messagesFor(report, 'reducer-purity')
 }
 
 function expectCaughtBy(report: ConformanceReport, check: ConformanceCheck): void {
@@ -266,6 +271,26 @@ describe('determinism', () => {
     // it was given instead of returning a new one' as well, because the check
     // itself had polluted the baseline that assertion reads.
     expect(purityMessages(report)).not.toContain('applyAction mutated')
+
+    // PER-278: the same mutation used to be blamed on a *third* function as
+    // well. `illegal-action-rejected` and `legal-actions-agree` both ran
+    // `validateAction` against the retained `step.before` / `step.after` /
+    // `finalState`, so by the time `serialization-round-trip` replayed the
+    // match the record carried the stray key and the replay could not
+    // reproduce it. That is a spurious check name in an already-red run,
+    // pointing a game author at a serialization bug that does not exist.
+    //
+    // This list is the whole pin. A `serialization-round-trip` or
+    // `reconnect-snapshot-matches-live` entry reappearing here means a
+    // `validateAction` call site in a check stopped cloning.
+    expect(failedChecks(report)).toEqual(['reducer-purity', 'illegal-action-rejected'])
+
+    // Cloning must not weaken what `illegal-action-rejected` already gets
+    // right: it captures its baseline before the call either way, so it still
+    // reports the mutation against itself.
+    expect(messagesFor(report, 'illegal-action-rejected')).toContain(
+      'state changed while rejecting ',
+    )
   })
 
   it('catches a non-deterministic getViewFor', () => {
