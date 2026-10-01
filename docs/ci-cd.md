@@ -279,6 +279,33 @@ loop. Readiness failure only removes the instance from rotation.
 answers the same question as `/health`. M1 appends a Redis check and a Postgres check —
 one entry each, with no change to the endpoints, the probe script, or the uptime workflow.
 
+### `GET /ws/probe` — the M0 AC2a transport probe, and why it is not in that table
+
+There is a fourth route on `apps/realtime`, and it is deliberately not a health endpoint:
+`GET /ws/probe` upgrades to a WebSocket and answers one `ping` frame with one `pong` to the
+same socket. It exists to prove a WebSocket round trip completes (M0 AC2 —
+[ADR-0009](adr/0009-m0-websocket-transport-probe.md), [PER-94](/PER/issues/PER-94)) and to
+measure how long a silent socket survives, which sets the heartbeat interval in
+[PER-15](/PER/issues/PER-15). It defines no part of the wire protocol.
+
+It differs from the health routes in three ways that matter operationally:
+
+- **Off unless opted in.** `REALTIME_WS_PROBE=1` attaches it; unset or `0` leaves no
+  `upgrade` listener at all and `/ws/probe` is a 404. Any other value fails boot rather than
+  quietly meaning off. It is set in dev, must be set on **staging**, and must stay unset in
+  **production**. That variable lives on the hosting provider, not in a workflow, so setting
+  it on staging is part of [PER-7](/PER/issues/PER-7)'s provisioning step (M0 AC2b) — the
+  round trip against a deployed URL cannot be demonstrated until it is.
+- **Not probed by a deploy or uptime check.** `assert-gates`, the deploy probes and
+  `uptime.yml` all stay on `/health` and `/ready`. Nothing in CI or monitoring depends on
+  `/ws/probe` existing, which is what lets it be deleted without touching a workflow.
+- **Scheduled for deletion.** ADR-0009 commits us to removing `apps/realtime/src/ws-probe.ts`
+  and the flag when PER-15's transport adapter lands, or folding it into that adapter's
+  conformance test.
+
+The round trip is covered in the `unit` gate, not `integration`: the probe needs neither
+Redis nor Postgres, and `integration` is still PENDING behind both.
+
 ### What each deploy probe asks
 
 `.github/workflows/*` all pass `health-path: /api/health`. That is a **request, not the

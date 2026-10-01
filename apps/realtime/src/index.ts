@@ -3,6 +3,7 @@ import { BRAND, healthHttpStatus, type HealthPayload } from '@playhall/shared'
 import { PLATFORM_CORE_VERSION, platformBuildInfo } from '@playhall/platform-core'
 import { loadEnv } from './env'
 import { liveness, readiness, type HealthContext } from './health'
+import { attachWsProbe } from './ws-probe'
 
 const env = loadEnv()
 
@@ -53,8 +54,24 @@ const server = createServer((req, res) => {
   sendJson(res, 404, { error: { code: 'not_found', message: 'No such route.' } })
 })
 
+// M0 AC2a transport probe (ADR-0009). Attached only when opted in, so with the
+// flag unset there is no `upgrade` listener at all and `/ws/probe` is a 404 from
+// the handler above — production keeps exactly the behaviour it has today.
+// Deleted with `./ws-probe` when the M1.6 transport adapter lands.
+if (env.REALTIME_WS_PROBE) {
+  attachWsProbe(server)
+}
+
 server.listen(env.REALTIME_PORT, () => {
-  console.log(`[realtime] listening on http://localhost:${env.REALTIME_PORT} (${env.NODE_ENV})`)
+  // The bound address, not the requested one: `REALTIME_PORT=0` asks the OS for
+  // an ephemeral port, and a test or a dev running two instances needs to learn
+  // which one it got. Printing the requested value would be a lie in that case.
+  const address = server.address()
+  const port = typeof address === 'object' && address !== null ? address.port : env.REALTIME_PORT
+  console.log(`[realtime] listening on http://localhost:${port} (${env.NODE_ENV})`)
+  if (env.REALTIME_WS_PROBE) {
+    console.log(`[realtime] ws transport probe enabled at ws://localhost:${port}/ws/probe`)
+  }
 })
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
