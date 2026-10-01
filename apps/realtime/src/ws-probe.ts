@@ -23,6 +23,13 @@ import { z } from 'zod'
  * `REALTIME_WS_PROBE` flag when the transport adapter in M1.6 lands, or folding
  * it into that adapter's conformance test. Adding a second message type here is
  * the ADR's revisit trigger: stop, and take the design to M1.6 instead.
+ *
+ * Delete this in the **same commit** that attaches a second `upgrade` listener.
+ * Node fires `upgrade` on every listener, and `onUpgrade` below answers 404 for
+ * every path that is not ours — so while both are attached this probe writes
+ * `HTTP/1.1 404` onto the socket the new adapter is about to use. The probe is
+ * enabled in dev and staging by design, so the symptom looks like an adapter
+ * bug, in the one environment where the adapter is first tried.
  */
 
 /** The single route. Anything else is not this probe's business. */
@@ -151,8 +158,9 @@ export function attachWsProbe(server: Server, options: ProbeOptions = {}): Attac
       return
     }
 
-    // No `handleProtocols`, so no subprotocol is ever negotiated. A probe that
-    // negotiates a subprotocol has started to define the wire protocol.
+    // `handleProtocols` above refuses every offer, so no subprotocol is ever
+    // negotiated. A probe that negotiates one has started to define the wire
+    // protocol, which is M1.6's to define.
     wss.handleUpgrade(req, socket, head, (ws) => {
       sockets.add(ws)
       handleSocket(ws)
@@ -172,36 +180,13 @@ export function attachWsProbe(server: Server, options: ProbeOptions = {}): Attac
 
     armIdleTimer()
 
+    // Everything that can produce a reply lives in `respondTo`, at module scope.
+    // The socket set is not in its lexical scope at all, so fan-out from the
+    // reply path is a compile error rather than something a reviewer has to
+    // notice. All that stays in this closure is the idle timer, which needs it.
     ws.on('message', (data: RawData, isBinary: boolean) => {
-      const serverRecvAtMs = now()
       armIdleTimer()
-
-      // Binary is not a supported shape here. The binary path belongs to the
-      // real-time codec in M6 and must stay unprejudiced by this file.
-      if (isBinary) {
-        fail(ws, 'binary frames are not supported by the probe')
-        return
-      }
-
-      const parsed = parseFrame(data)
-      if (!parsed.ok) {
-        fail(ws, parsed.reason)
-        return
-      }
-
-      const pong: PongFrame = {
-        t: 'pong',
-        nonce: parsed.frame.nonce,
-        // Reflected verbatim. Not read, not compared, not trusted.
-        clientSentAtMs: parsed.frame.clientSentAtMs,
-        serverRecvAtMs,
-        serverSentAtMs: now(),
-      }
-
-      // One socket, one reply, to itself. There is deliberately no reference to
-      // `sockets` in this handler: fan-out is impossible here by construction,
-      // not by discipline.
-      send(ws, PongFrame.parse(pong))
+      respondTo(ws, data, isBinary, now)
     })
 
     ws.on('close', () => {
@@ -211,13 +196,6 @@ export function attachWsProbe(server: Server, options: ProbeOptions = {}): Attac
 
     // A transport error is not a server error; drop the socket and move on.
     ws.on('error', () => ws.close(1011, 'probe socket error'))
-  }
-
-  const fail = (ws: WebSocket, reason: string): void => {
-    // `send` then `close` is ordered by `ws`: the error frame is flushed before
-    // the close frame, so the caller always learns why.
-    send(ws, ErrorFrame.parse({ t: 'error', reason }))
-    ws.close(1003, 'probe rejected frame')
   }
 
   server.on('upgrade', onUpgrade)
@@ -232,6 +210,47 @@ export function attachWsProbe(server: Server, options: ProbeOptions = {}): Attac
       await new Promise<void>((resolve) => wss.close(() => resolve()))
     },
   }
+}
+
+/**
+ * The whole reply path: one socket in, exactly one frame back to that same
+ * socket. Deliberately at module scope — `attachWsProbe`'s socket set is not
+ * reachable from here, so "no fan-out" (ADR-0009 §3) is enforced by what this
+ * function can see rather than by what nobody wrote.
+ */
+function respondTo(ws: WebSocket, data: RawData, isBinary: boolean, now: () => number): void {
+  const serverRecvAtMs = now()
+
+  // Binary is not a supported shape here. The binary path belongs to the
+  // real-time codec in M6 and must stay unprejudiced by this file.
+  if (isBinary) {
+    fail(ws, 'binary frames are not supported by the probe')
+    return
+  }
+
+  const parsed = parseFrame(data)
+  if (!parsed.ok) {
+    fail(ws, parsed.reason)
+    return
+  }
+
+  const pong: PongFrame = {
+    t: 'pong',
+    nonce: parsed.frame.nonce,
+    // Reflected verbatim. Not read, not compared, not trusted.
+    clientSentAtMs: parsed.frame.clientSentAtMs,
+    serverRecvAtMs,
+    serverSentAtMs: now(),
+  }
+
+  send(ws, PongFrame.parse(pong))
+}
+
+function fail(ws: WebSocket, reason: string): void {
+  // `send` then `close` is ordered by `ws`: the error frame is flushed before
+  // the close frame, so the caller always learns why.
+  send(ws, ErrorFrame.parse({ t: 'error', reason }))
+  ws.close(1003, 'probe rejected frame')
 }
 
 type ParseResult = { ok: true; frame: PingFrame } | { ok: false; reason: string }
@@ -251,21 +270,41 @@ function parseFrame(data: RawData): ParseResult {
 
   const parsed = PingFrame.safeParse(json)
   if (!parsed.success) {
-    // Field names only — never the received values, which are attacker-supplied
-    // and would make the error frame a reflector. An `unrecognized_keys` issue
-    // carries no path (the object as a whole is wrong), so its rejected key
-    // names are named explicitly; otherwise every strictness failure reads
-    // "(root)" and tells the caller nothing about what to remove.
+    // **Field names only, never field values**, and even the names are bounded.
+    //
+    // Values are attacker-supplied and would make the error frame a reflector.
+    // Names are mostly schema-derived, but an `unrecognized_keys` issue carries
+    // no path (the object as a whole is wrong), so naming the rejected keys is
+    // the only way the caller learns what to remove — and those key names *are*
+    // caller-supplied. `maxFrameBytes` alone bounds them loosely enough to echo
+    // ~1 KiB back, so they are capped here instead: at most
+    // `MAX_REPORTED_KEYS`, each clipped to `MAX_REPORTED_KEY_CHARS`. Keeping
+    // this invariant literally true matters more than the diagnostic detail —
+    // it is the invariant M1.6 inherits, and there fan-out exists.
     const detail = parsed.error.issues
       .map((issue) =>
         issue.code === 'unrecognized_keys'
-          ? `unexpected ${issue.keys.join(', ')}`
+          ? `unexpected ${summariseKeys(issue.keys)}`
           : issue.path.join('.') || '(root)',
       )
       .join(', ')
     return { ok: false, reason: `frame is not a valid ping: ${detail}` }
   }
   return { ok: true, frame: parsed.data }
+}
+
+/** How much of a caller-supplied key set the error frame may quote back. */
+const MAX_REPORTED_KEYS = 3
+const MAX_REPORTED_KEY_CHARS = 32
+
+function summariseKeys(keys: readonly string[]): string {
+  const shown = keys
+    .slice(0, MAX_REPORTED_KEYS)
+    .map((key) =>
+      key.length > MAX_REPORTED_KEY_CHARS ? `${key.slice(0, MAX_REPORTED_KEY_CHARS)}…` : key,
+    )
+  const hidden = keys.length - shown.length
+  return hidden > 0 ? `${shown.join(', ')} (+${hidden} more)` : shown.join(', ')
 }
 
 /**
