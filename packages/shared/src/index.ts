@@ -12,4 +12,5 @@ export {
   extractRoomCode,
   isValidRoomCode,
   normalizeRoomCode,
+  type RoomCodeExtraction,
 } from './room-code'

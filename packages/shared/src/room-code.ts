@@ -53,13 +53,23 @@ function canonicalRuns(input: string): string[] {
 }
 
 /**
+ * What `extractRoomCode` found. The two refusals are separate outcomes rather
+ * than one `undefined`, because they call for different things to be said to
+ * the player: `ambiguous` means we had candidates and could not choose between
+ * them, `declined` means there was no candidate at all.
+ */
+export type RoomCodeExtraction =
+  | { readonly outcome: 'extracted'; readonly code: string }
+  | { readonly outcome: 'ambiguous'; readonly codes: readonly string[] }
+  | { readonly outcome: 'declined' }
+
+/**
  * Pull a room code out of input that carries more than the code — an invite
- * link, or a code wrapped in a chat sentence. Returns `undefined` when the
- * input does not unambiguously contain one, which is the caller's signal to
- * fall back to `normalizeRoomCode` + a length cap.
+ * link, or a code wrapped in a chat sentence. Anything but `extracted` is the
+ * caller's signal to fall back to `normalizeRoomCode` + a length cap.
  *
- * **The rule: exactly one run of exactly six alphabet characters.** No URL
- * parsing, no host list, no "strip the scheme" special case — so there is
+ * **The rule: exactly one _distinct_ run of exactly six alphabet characters.**
+ * No URL parsing, no host list, no "strip the scheme" special case — so there is
  * nothing here that a change of product domain could invalidate, and the final
  * name and domain remain an open decision (see `brand.ts`).
  *
@@ -69,26 +79,60 @@ function canonicalRuns(input: string): string[] {
  * six-run present, and it is found without knowing anything about what precedes
  * it.
  *
+ * **Why _distinct_** ([PER-250](/PER/issues/PER-250) B1). Every lobby hands its
+ * host both a link and a code, so "here's the link …/join/ABC234 — code is
+ * ABC234" is a message shape the product itself produces. Counting runs rather
+ * than values made that the one shape where the same code, said twice, read as
+ * two candidates and lost to the cap. Deduplicating costs one `Set` and moves no
+ * other case: two six-runs that disagree are still ambiguous.
+ *
  * Two refusals are deliberate, and each is load-bearing:
  *
  * - **A seven-run is not a code.** `ABC2345` — a genuine typo — contains no
- *   six-run, so this returns `undefined` and the caller's cap drops the 7th
- *   character and announces it ([PER-214](/PER/issues/PER-214)). Taking the
- *   first six characters of an over-long run would silently swallow exactly the
- *   loss that issue exists to report. A substring search would also find
- *   `ABC234` *inside* `ABC2345`, which is why this matches whole runs only.
- * - **Two six-runs are not a code either.** Nothing distinguishes them, so
- *   guessing would be a coin flip presented as certainty; `undefined` routes the
- *   input to the cap, which keeps the first six and says it dropped something.
+ *   six-run, so this declines and the caller's cap drops the 7th character and
+ *   announces it ([PER-214](/PER/issues/PER-214)). Taking the first six
+ *   characters of an over-long run would silently swallow exactly the loss that
+ *   issue exists to report. A substring search would also find `ABC234` *inside*
+ *   `ABC2345`, which is why this matches whole runs only.
+ * - **Two different six-runs are not a code either.** Nothing distinguishes
+ *   them, so guessing would be a coin flip presented as certainty. The caller
+ *   keeps the first six and says it could not choose.
  *
- * A six-run can still be the wrong six — a host or a word of prose that happens
- * to be six alphabet characters long, next to a code that is not. That is the
- * residual risk and it is strictly smaller than the one it replaces, where the
- * *leading* fragment of any prose won by position alone.
+ * ## The residual risk, stated accurately
+ *
+ * A six-run can still be the wrong six: a word of prose that happens to be six
+ * alphabet characters long, standing next to a code that is *not* six. Then the
+ * prose is the only six-run present, so this accepts it confidently and the
+ * caller says nothing.
+ *
+ * ```
+ * 'Secret code ABC2345'  -> SECRET      'Secret code ABC23'  -> SECRET
+ * 'Your answer: ABC2345' -> ANSWER
+ * ```
+ *
+ * For that family the risk is **larger** than the one it replaces, not smaller:
+ * before extraction the cap also landed `SECRET`, but it said something had been
+ * dropped. These rows are pinned in `room-code.test.ts`, and one of them at the
+ * component level, so the hole is found by reading the tests rather than
+ * rediscovered in support.
+ *
+ * It is not closed here because every mechanism that closes it costs more than
+ * it saves, measured rather than assumed — see that test file's
+ * `the family this rule is silently wrong about` block, which runs the two
+ * candidate rules over the pinned corpus. "Decline when any run is longer than
+ * six" throws away `?utm_source=whatsapp` (`WHATSAPP` is an eight-run); "decline
+ * when some other run is near code length" throws away every `https://` link
+ * (`HTTPS` is a five-run). Both trade a rare wrong code for a common lost one.
+ * The property to aim at, if a cheaper mechanism appears: *do not go silent
+ * about a run rejected for being the wrong length* — that run is usually the
+ * player's real code, mistyped.
  */
-export function extractRoomCode(input: string): string | undefined {
+export function extractRoomCode(input: string): RoomCodeExtraction {
   const sixes = canonicalRuns(input).filter((run) => run.length === ROOM_CODE_LENGTH)
-  return sixes.length === 1 ? sixes[0] : undefined
+  const [first, ...rest] = [...new Set(sixes)]
+  if (first === undefined) return { outcome: 'declined' }
+  if (rest.length === 0) return { outcome: 'extracted', code: first }
+  return { outcome: 'ambiguous', codes: [first, ...rest] }
 }
 
 export function isValidRoomCode(code: string): boolean {

@@ -72,10 +72,10 @@ export interface JoinByCodeFormProps {
  * they were sent**, or landed on the friendly not-found page, with nothing
  * connecting either outcome to the character we removed.
  *
- * So `overflowed` announces it, through the same `role="alert"` node and
- * `aria-describedby` wiring the short-code and server messages already use —
- * one message slot, so the two can never stack or contradict each other. Three
- * properties of that choice are load-bearing:
+ * So the `overflowed` paste outcome announces it, through the same
+ * `role="alert"` node and `aria-describedby` wiring the short-code and server
+ * messages already use — one message slot, so the two can never stack or
+ * contradict each other. Three properties of that choice are load-bearing:
  *
  * - It is keyed on the **canonical** length, not the raw one. Seven raw
  *   characters that normalise to six (`ABC-234`) lost nothing, and shouting at
@@ -86,8 +86,8 @@ export interface JoinByCodeFormProps {
  *   late is saying so after the wrong room has already opened.
  * - It does **not** veto the press. Six canonical characters is a well-formed
  *   code and the server owns whether that room exists. This one is a judgement
- *   call rather than a forced move: an acknowledge-once veto — clear `overflowed`
- *   on the refused press, send on the second — would strand nobody either. We
+ *   call rather than a forced move: an acknowledge-once veto — clear the
+ *   outcome on the refused press, send on the second — would strand nobody. We
  *   take the non-vetoing form because the shape this is calibrated against is a
  *   typo, where the six characters are usually the ones the player meant, and a
  *   press that visibly does nothing is the phone failure mode the enabled-submit
@@ -109,10 +109,10 @@ export interface JoinByCodeFormProps {
  * the link text, paste it" is the most likely paste there is.
  *
  * So `onChange` tries `extractRoomCode` before the cap. **The rule is: exactly
- * one run of exactly six alphabet characters, where a run is a maximal stretch
- * of `ROOM_CODE_ALPHABET` characters after upper-casing.** It lives in
- * `packages/shared`, next to the alphabet it depends on, where its own doc
- * comment carries the reasoning. Three consequences are worth having here:
+ * one _distinct_ run of exactly six alphabet characters, where a run is a
+ * maximal stretch of `ROOM_CODE_ALPHABET` characters after upper-casing.** It
+ * lives in `packages/shared`, next to the alphabet it depends on, where its own
+ * doc comment carries the reasoning. Three consequences are worth having here:
  *
  * - **No URL parsing and no host.** `:` and `/` are boundaries like any other
  *   non-alphabet character, so `https://` is just a five-run. The rule therefore
@@ -130,9 +130,31 @@ export interface JoinByCodeFormProps {
  *   before this. The cap's announcement is unchanged for everything extraction
  *   declines.
  *
- * Ambiguity is not guessed at. Two six-runs in one paste return `undefined`, so
- * the input falls through to the cap and the player is told something was
- * dropped rather than shown a coin flip.
+ * Silence has a known cost, and it is not smaller everywhere. `Secret code
+ * ABC2345` — a six-letter word of prose beside a *mistyped* code — has exactly
+ * one six-run, so the field now shows `SECRET` and says nothing, where before it
+ * showed `SECRET` and at least said something had been dropped. That family is
+ * pinned rather than papered over, here and in `room-code.ts`, which also
+ * records the two candidate fixes and the measurement that rejects both.
+ *
+ * ## Ambiguity is a different message, not a quieter one ([PER-250](/PER/issues/PER-250))
+ *
+ * Two *different* six-runs in one paste are not guessed at: the input falls
+ * through to the cap, which keeps the first six. What the field says about that
+ * is its own string, because the overflow copy's diagnosis is false here —
+ * nothing was "extra", we picked the wrong one of two candidates, and "check the
+ * code you were sent" asks the player to verify a value we chose rather than to
+ * supply the one we could not choose. `AMBIGUOUS_MESSAGE` says that instead, and
+ * outranks the overflow note: a paste with two candidates always overflows too,
+ * so without an order the less accurate of the two would win by position.
+ *
+ * The same code written *twice* — "here's the link …/join/ABC234 — code is
+ * ABC234", the shape we cause by handing every host both a link and a code — is
+ * not ambiguous at all. The rule counts distinct runs, so that extracts
+ * silently like any other link.
+ *
+ * `aria-invalid` stays true for both: in either case the value in the field may
+ * not be the one the player was sent.
  *
  * The submit button is **never disabled for validation**. A disabled control
  * with no explanation is the worst of both worlds on a phone: nothing happens
@@ -143,18 +165,28 @@ export interface JoinByCodeFormProps {
  */
 const TOO_SHORT_MESSAGE = `A room code is ${ROOM_CODE_LENGTH} characters.`
 const OVERFLOW_MESSAGE = `${TOO_SHORT_MESSAGE} Extra characters were not used — check the code you were sent.`
+const AMBIGUOUS_MESSAGE = `More than one ${ROOM_CODE_LENGTH}-character code in that paste — enter just the one you were sent.`
+
+/**
+ * What the last `onChange` made of the input, beyond the value it produced.
+ * One state rather than two booleans: a paste carrying two candidates also
+ * overflows, and these are two accounts of the same event, so they must not be
+ * able to both be set and race for the one message slot.
+ */
+type PasteOutcome = 'clean' | 'overflowed' | 'ambiguous'
 
 /**
  * The single message the field shows, in authority order: a real join outcome,
- * then a character we dropped, then a code too short to send.
+ * then what we could not do with the paste, then a code too short to send.
  */
 function fieldMessage(
   error: string | undefined,
-  overflowed: boolean,
+  paste: PasteOutcome,
   tooShort: boolean,
 ): string | undefined {
   if (error !== undefined) return error
-  if (overflowed) return OVERFLOW_MESSAGE
+  if (paste === 'ambiguous') return AMBIGUOUS_MESSAGE
+  if (paste === 'overflowed') return OVERFLOW_MESSAGE
   if (tooShort) return TOO_SHORT_MESSAGE
   return undefined
 }
@@ -169,9 +201,9 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
   const [tooShort, setTooShort] = useState(false)
   // Set as it happens, by contrast: a dropped character is already lost, and
   // the field cannot show the player what it removed.
-  const [overflowed, setOverflowed] = useState(false)
+  const [paste, setPaste] = useState<PasteOutcome>('clean')
 
-  const message = fieldMessage(error, overflowed, tooShort)
+  const message = fieldMessage(error, paste, tooShort)
 
   return (
     <form
@@ -218,12 +250,12 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
               setTooShort(false)
 
               // Extraction first: an invite link or a chat sentence carrying one
-              // six-run yields that run, and nothing was dropped that the player
-              // needed, so there is nothing to announce.
-              const extracted = extractRoomCode(event.target.value)
-              if (extracted !== undefined) {
-                setCode(extracted)
-                setOverflowed(false)
+              // distinct six-run yields that run, and nothing was dropped that
+              // the player needed, so there is nothing to announce.
+              const extraction = extractRoomCode(event.target.value)
+              if (extraction.outcome === 'extracted') {
+                setCode(extraction.code)
+                setPaste('clean')
                 return
               }
 
@@ -234,7 +266,13 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
               // not `event.target.value.length`.
               const canonical = normalizeRoomCode(event.target.value)
               setCode(canonical.slice(0, ROOM_CODE_LENGTH))
-              setOverflowed(canonical.length > ROOM_CODE_LENGTH)
+              setPaste(
+                extraction.outcome === 'ambiguous'
+                  ? 'ambiguous'
+                  : canonical.length > ROOM_CODE_LENGTH
+                    ? 'overflowed'
+                    : 'clean',
+              )
             }}
             className="h-11 w-full rounded-md border bg-background px-4 text-center font-mono text-lg tracking-[0.3em] uppercase outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive sm:w-48 sm:text-left"
           />
@@ -247,7 +285,7 @@ export function JoinByCodeForm({ onJoin, error, pending = false, className }: Jo
         {/*
           `role="alert"` rather than a polite live region on a permanently-mounted
           node. The reason this used to give — the message only ever appears in
-          response to a press — is no longer true: `overflowed` fires while
+          response to a press — is no longer true: the overflow note fires while
           typing. The choice stands on a different one. A polite region queues
           behind the character echo the field is already producing, so its
           announcement can land after the player has tapped Join; for a character

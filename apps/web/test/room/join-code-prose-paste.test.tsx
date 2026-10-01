@@ -18,19 +18,23 @@
  * characters had been dropped and could not be told the ones kept were wrong.
  *
  * [PER-242](/PER/issues/PER-242) settled that: the field now extracts, with the
- * rule **exactly one run of exactly six alphabet characters**
+ * rule **exactly one distinct run of exactly six alphabet characters**
  * (`extractRoomCode`). Every row below yields `ABC234` and says nothing, because
  * `ABC234` is the only six-run present in any of them — `https://` is a
  * five-run, `join/` is `J` then `N`, `Code: ` is `C` then `DE`.
  *
- * Three things this file is really here to hold down, each in its own `describe`
+ * Five things this file is really here to hold down, each in its own `describe`
  * below:
  *
  * - Extraction matches **whole runs**, never a substring. A substring search
  *   finds `ABC234` inside `ABC2345` and would silently swallow the dropped-7th
  *   character that `join-code-overflow.test.tsx` exists to report.
- * - Extraction does **not** guess between two six-runs, and the cap's
- *   announcement still fires for everything extraction declines.
+ * - The same code written twice — the link-*and*-code message we cause by
+ *   handing every host both — is one candidate, not two ([PER-250](/PER/issues/PER-250) B1).
+ * - Two *different* six-runs get their own message, not the overflow one, whose
+ *   diagnosis is false for them (PER-250 B2).
+ * - A six-run of prose beside a code that is not six is taken **silently**, and
+ *   that hole is pinned here rather than left for support to find (PER-250 B3).
  * - The "treat `canonical.length > 6` as *not a code* and refuse the press" rule
  *   discussed on PER-197 is still **not** implemented and must not be. The
  *   trailing-prose rows are the guard: they are pastes that join the right room.
@@ -40,12 +44,13 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isValidRoomCode } from '@playhall/shared'
+import { APPROVED_NAME, isValidRoomCode } from '@playhall/shared'
 
 import { JoinByCodeForm } from '@/components/room'
 import { testIds } from '@/lib/testids'
 
 const OVERFLOW = /extra characters were not used/i
+const AMBIGUOUS = /more than one 6-character code/i
 
 /** Click into the field and bulk-insert `text`, the paste-from-chat path. */
 async function pasteInto(user: ReturnType<typeof userEvent.setup>, text: string) {
@@ -175,7 +180,7 @@ describe('what extraction deliberately declines', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true')
   })
 
-  it('does not guess between two six-character runs', async () => {
+  it('does not guess between two different six-character runs', async () => {
     const user = userEvent.setup()
     const onJoin = vi.fn()
     render(<JoinByCodeForm onJoin={onJoin} />)
@@ -183,15 +188,158 @@ describe('what extraction deliberately declines', () => {
     // `SECRET` is six alphabet characters — no `0 1 I L O` in it — so this paste
     // carries two six-runs and nothing distinguishes them. Returning either
     // would present a coin flip as certainty, so extraction declines and the cap
-    // keeps the first six and says it dropped something.
+    // keeps the first six.
     await pasteInto(user, 'Secret code ABC234')
 
     const input = screen.getByTestId(testIds.joinCodeInput)
     expect(input).toHaveAttribute('data-value', 'SECRET')
-    expect(screen.getByRole('alert')).toHaveTextContent(OVERFLOW)
 
     // Still not a veto: six canonical characters is a well-formed code and the
     // server owns whether that room exists.
+    await user.click(screen.getByTestId(testIds.joinSubmit))
+    expect(onJoin).toHaveBeenCalledWith('SECRET')
+  })
+})
+
+describe('ambiguity gets its own message, not the overflow one', () => {
+  // PER-250 call 3 / B2. Both outcomes used to share one string, and for this
+  // one that string's diagnosis is false: nothing was "extra", the field picked
+  // the wrong one of two candidates, and "check the code you were sent" asks the
+  // player to verify a value we chose rather than to supply the one we could
+  // not. The two must not be interchangeable — asserting the ambiguous copy is
+  // present is not enough on its own, because the overflow copy would also be
+  // present if the precedence were wrong, so each case denies the other string.
+  it('says which problem it has when two different six-runs arrive', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    await pasteInto(user, 'Secret code ABC234')
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(AMBIGUOUS)
+    expect(alert).not.toHaveTextContent(OVERFLOW)
+
+    // A paste with two six-runs is always over six canonical characters too, so
+    // this is a precedence assertion as much as a copy one.
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    expect(input).toHaveAttribute('aria-describedby', alert.id)
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('keeps the overflow copy for a plain overflow', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    // One seven-run, no second candidate. Unchanged by PER-250.
+    await pasteInto(user, 'Code: ABC2345')
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(OVERFLOW)
+    expect(alert).not.toHaveTextContent(AMBIGUOUS)
+  })
+
+  it('clears the ambiguity note once the paste is replaced by a code', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    await pasteInto(user, 'Secret code ABC234')
+    expect(screen.getByRole('alert')).toHaveTextContent(AMBIGUOUS)
+
+    await user.clear(screen.getByTestId(testIds.joinCodeInput))
+    await user.paste('ABC234')
+
+    expect(screen.getByTestId(testIds.joinCodeInput)).toHaveAttribute('data-value', 'ABC234')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('yields the alert node to a server error, like the overflow note does', async () => {
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={vi.fn()} error="That room has closed." />)
+
+    await pasteInto(user, 'Secret code ABC234')
+
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toHaveTextContent('That room has closed.')
+  })
+})
+
+describe('the same code twice is one candidate, not two', () => {
+  /**
+   * PER-250 B1. Every lobby hands its host **both** a link and a code, so a
+   * message carrying the code twice is a shape the product itself produces —
+   * and counting runs rather than distinct values made it the one invite shape
+   * that still lost to the cap. `was` is the measured before-dedupe outcome;
+   * the first two are well-formed codes that are not the real one, and the
+   * third landed the right code under a false alarm. All three were silent
+   * about being wrong, or wrong about being worth saying.
+   *
+   * The first row reads the brand from `APPROVED_NAME` rather than spelling it:
+   * the link-and-code message is ours, so the host in it is ours too, and a
+   * rename that broke the rule must fail here rather than against a stand-in.
+   */
+  const DOUBLED = [
+    {
+      raw: `Here's the link https://${APPROVED_NAME.toLowerCase()}.gg/join/ABC234 — code is ABC234`,
+      was: 'HEREST',
+    },
+    // Single-line on purpose. The two-line form of this message is pinned in
+    // `room-code.test.ts`; here it would not test the dedupe at all, because
+    // pasting it into an `<input>` folds the lines together and `ABC234Code`
+    // becomes one seven-run, leaving only one six-run to find.
+    { raw: 'https://example.test/join/ABC234 — Code: ABC234', was: 'HTTPSE' },
+    { raw: 'ABC234 — https://example.test/join/ABC234', was: 'ABC234' },
+  ] as const
+
+  for (const { raw, was } of DOUBLED) {
+    it(`extracts the code from ${JSON.stringify(raw)}`, async () => {
+      const user = userEvent.setup()
+      const onJoin = vi.fn()
+      render(<JoinByCodeForm onJoin={onJoin} />)
+
+      await pasteInto(user, raw)
+
+      const input = screen.getByTestId(testIds.joinCodeInput)
+      expect(input).toHaveAttribute('data-value', 'ABC234')
+      expect(isValidRoomCode(was)).toBe(true)
+
+      // Silent: the same code said twice is not two candidates, so there is
+      // nothing to be ambiguous about and nothing the player needed was lost.
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      await user.click(screen.getByTestId(testIds.joinSubmit))
+      expect(onJoin).toHaveBeenCalledWith('ABC234')
+    })
+  }
+})
+
+describe('the family extraction is silently wrong about', () => {
+  /**
+   * PER-250 B3, pinned rather than fixed. A six-letter word of prose standing
+   * next to a code that is **not** six is the only six-run present, so
+   * extraction takes the prose confidently and the field says nothing — where
+   * before PER-242 the cap landed the same wrong value but at least announced a
+   * loss. For this family the residual risk is *larger*, which is why neither
+   * this file nor `room-code.ts` claims otherwise any more.
+   *
+   * `packages/shared/test/room-code.test.ts` carries the rest of the family and
+   * the measurement that rejects both candidate fixes (each costs a common
+   * paste — `?utm_source=whatsapp`, and every `https://` link — to rescue a rare
+   * one). This row is here because the *silence* is a component behaviour: the
+   * rule alone cannot show that nothing is announced.
+   */
+  it('takes SECRET from "Secret code ABC2345" and says nothing', async () => {
+    const user = userEvent.setup()
+    const onJoin = vi.fn()
+    render(<JoinByCodeForm onJoin={onJoin} />)
+
+    await pasteInto(user, 'Secret code ABC2345')
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    expect(input).toHaveAttribute('data-value', 'SECRET')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(input).not.toHaveAttribute('aria-invalid')
+
     await user.click(screen.getByTestId(testIds.joinSubmit))
     expect(onJoin).toHaveBeenCalledWith('SECRET')
   })
