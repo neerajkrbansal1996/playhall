@@ -113,6 +113,25 @@ export function analyse(initialFen: string, moves: readonly string[]): PositionI
  * Returns `null` for an illegal move instead of throwing, because an illegal
  * move is an expected client error (a stale board, a race, or a tampered
  * client), not an exceptional condition.
+ *
+ * A `promotion` letter on a move that is not a promotion makes the move illegal.
+ * chess.js silently ignores the field instead — `{ from: 'a7', to: 'a8',
+ * promotion: 'q' }` plays a legal rook lift and `{ from: 'e2', to: 'e4',
+ * promotion: 'q' }` plays the double push, both dropping the letter. That is a
+ * second wire spelling for a move that already has one, and `getLegalActions`
+ * only ever lists the clean spelling, so accepting it puts the two halves of the
+ * SDK contract in disagreement: an action the client may legally send that the
+ * platform's `legal-actions-agree` check can never find in the offered list.
+ *
+ * That disagreement is latent rather than observed. The chess conformance subject
+ * probes `{ from: 'a7', to: 'a8', promotion: 'q' }` at every state of every
+ * playout, and the suite still passes 11/11 without this guard at 96 seeded
+ * playouts (4 variants × 24) — random play essentially never puts a white rook on
+ * a7 with a8 empty, so the probe never lands on a position where the spelling is
+ * legal. The guard is here because the contract says one move has one spelling,
+ * not because a gate is red. The missing-letter
+ * direction needs no guard, because chess.js already refuses a bare `e7e8` on a
+ * promotion square rather than defaulting to a queen.
  */
 export function tryMove(chess: Chess, input: MoveInput): string | null {
   try {
@@ -121,6 +140,11 @@ export function tryMove(chess: Chess, input: MoveInput): string | null {
       to: input.to,
       ...(input.promotion ? { promotion: input.promotion } : {}),
     })
+    if (input.promotion !== undefined && move.promotion !== input.promotion) {
+      // Keep the caller's promise that a `null` return leaves the game untouched.
+      chess.undo()
+      return null
+    }
     return move.san
   } catch {
     return null
