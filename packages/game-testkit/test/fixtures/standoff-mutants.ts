@@ -161,7 +161,9 @@ export function makeStandoffServer(breakage: StandoffBreakage): StandoffServer {
         }
       }
 
-      return referenceServer.onTimer?.(ctx, state, timerId, seatId) ?? { state, events: [], timers: [] }
+      return (
+        referenceServer.onTimer?.(ctx, state, timerId, seatId) ?? { state, events: [], timers: [] }
+      )
     },
 
     getResult(state): MatchResult | null {

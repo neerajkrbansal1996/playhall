@@ -149,7 +149,7 @@ function checkAbortedMatches<
     // and there is no way to say so" used to be a true excuse, and a note that
     // mentions only `abortAction` keeps it alive.
     recorder.note(
-      'the game declares no abortScenarios, so the unrecorded half of ADR-0006 (empty standings) was never exercised; declare one with trigger:\'action\' (an abortAction a seat sends) or trigger:\'timer\' (a timerId whose expiry ends the match)',
+      "the game declares no abortScenarios, so the unrecorded half of ADR-0006 (empty standings) was never exercised; declare one with trigger:'action' (an abortAction a seat sends) or trigger:'timer' (a timerId whose expiry ends the match)",
     )
     return
   }

@@ -625,10 +625,7 @@ export function timerAbortRun<TState, TAction, TSettings, TEvent extends GameEve
   const run = <T>(body: () => T): T => (options.trapAmbient ? withoutAmbientSources(body) : body())
   const wanted = String(options.timerId)
 
-  const prologue = runPrologue(
-    { ...options, abortAction: () => null },
-    'conformance-timer-abort',
-  )
+  const prologue = runPrologue({ ...options, abortAction: () => null }, 'conformance-timer-abort')
   let state = prologue.state
   const { queue, stepsPlayed } = prologue
   const fires: TimerFire[] = []

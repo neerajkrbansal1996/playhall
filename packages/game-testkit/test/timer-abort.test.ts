@@ -190,11 +190,14 @@ describe('fire order', () => {
     // `first-move` sorts earlier, so it fires first and ends the match; the
     // declared scenario therefore passes.
     const report = runSubject(
-      makeStandoff({ tiedGrace: true }, {
-        label: 'first-move wins the tie',
-        trigger: 'timer',
-        timerId: FIRST_MOVE_TIMER,
-      }),
+      makeStandoff(
+        { tiedGrace: true },
+        {
+          label: 'first-move wins the tie',
+          trigger: 'timer',
+          timerId: FIRST_MOVE_TIMER,
+        },
+      ),
     )
 
     expect(check(report).status).toBe('passed')
@@ -205,11 +208,14 @@ describe('fire order', () => {
     // *recorded* result. A scenario that said only "some timer fires" could
     // not tell this apart from success.
     const report = runSubject(
-      makeStandoff({ earlyGraceEnds: true }, {
-        label: 'grace beats first-move',
-        trigger: 'timer',
-        timerId: FIRST_MOVE_TIMER,
-      }),
+      makeStandoff(
+        { earlyGraceEnds: true },
+        {
+          label: 'grace beats first-move',
+          trigger: 'timer',
+          timerId: FIRST_MOVE_TIMER,
+        },
+      ),
     )
 
     expect(check(report).status).toBe('failed')
@@ -219,12 +225,15 @@ describe('fire order', () => {
 
   it('fires the declared timer within a raised maxFires budget', () => {
     const report = runSubject(
-      makeStandoff({ earlyGraceEnds: true }, {
-        label: 'grace first, then first-move',
-        trigger: 'timer',
-        timerId: FIRST_MOVE_TIMER,
-        maxFires: 2,
-      }),
+      makeStandoff(
+        { earlyGraceEnds: true },
+        {
+          label: 'grace first, then first-move',
+          trigger: 'timer',
+          timerId: FIRST_MOVE_TIMER,
+          maxFires: 2,
+        },
+      ),
     )
 
     // `grace` ends the match, so even two fires cannot reach `first-move` —
@@ -235,11 +244,14 @@ describe('fire order', () => {
 
   it('spends a budget of 1 before a two-fire cascade completes', () => {
     const report = runSubject(
-      makeStandoff({ tiedGrace: true }, {
-        label: 'grace needs the second fire',
-        trigger: 'timer',
-        timerId: GRACE_TIMER,
-      }),
+      makeStandoff(
+        { tiedGrace: true },
+        {
+          label: 'grace needs the second fire',
+          trigger: 'timer',
+          timerId: GRACE_TIMER,
+        },
+      ),
     )
 
     // `first-move` sorts first and ends the match, so the single default fire
@@ -259,11 +271,14 @@ describe('reproducibility', () => {
   })
 
   it('reproduces a tie-break run too, so fire order is not insertion order', () => {
-    const subject = makeStandoff({ tiedGrace: true }, {
-      label: 'first-move wins the tie',
-      trigger: 'timer',
-      timerId: FIRST_MOVE_TIMER,
-    })
+    const subject = makeStandoff(
+      { tiedGrace: true },
+      {
+        label: 'first-move wins the tie',
+        trigger: 'timer',
+        timerId: FIRST_MOVE_TIMER,
+      },
+    )
 
     const first = runSubject(subject, 'per-175-tie-seed')
     const second = runSubject(subject, 'per-175-tie-seed')
@@ -328,13 +343,16 @@ describe('existing action-arm declarations are untouched', () => {
     // `AbortScenario`. Asserted at runtime too, since a type-only claim would
     // not notice the driver dropping the arm.
     const report = runSubject(
-      makeStandoff({}, {
-        label: 'no trigger, abortAction only',
-        abortAction: (state) => {
-          const seatId = state.order[0]
-          return seatId === undefined ? null : { seatId, action: { type: 'fire' as const } }
+      makeStandoff(
+        {},
+        {
+          label: 'no trigger, abortAction only',
+          abortAction: (state) => {
+            const seatId = state.order[0]
+            return seatId === undefined ? null : { seatId, action: { type: 'fire' as const } }
+          },
         },
-      }),
+      ),
     )
 
     // `fire` is a legal move, not an abort, so the match stays live — the

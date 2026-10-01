@@ -222,8 +222,7 @@ export interface TimerAbortScenario extends AbortScenarioBase {
 }
 
 export type AbortScenario<TState, TAction> =
-  | ActionAbortScenario<TState, TAction>
-  | TimerAbortScenario
+  ActionAbortScenario<TState, TAction> | TimerAbortScenario
 
 export interface SettingsVariant<TSettings> {
   readonly label: string

@@ -122,7 +122,9 @@ describe('the shared TimerCommand semantics fixture', () => {
   it('is version 1 and has a case for every op', () => {
     expect(fixture.version).toBe(1)
     const ops = new Set(
-      fixture.cases.flatMap((entry) => entry.steps.flatMap((step) => step.commands.map((c) => c.op))),
+      fixture.cases.flatMap((entry) =>
+        entry.steps.flatMap((step) => step.commands.map((c) => c.op)),
+      ),
     )
     expect([...ops].sort()).toEqual(['clear', 'pause', 'resume', 'set'])
   })
@@ -161,7 +163,7 @@ describe('the shared TimerCommand semantics fixture', () => {
     expect(caught).toBeInstanceOf(UndeclaredTimerError)
     const error = caught as UndeclaredTimerError
     expect(error.timerId).toBe('ghost')
-    expect(error.message).toContain("manifest.timers does not declare")
+    expect(error.message).toContain('manifest.timers does not declare')
     // Sorted, so the message does not depend on manifest order.
     expect(error.message).toContain('first-move, grace')
   })
@@ -210,7 +212,9 @@ describe('TimerQueue reporting', () => {
 
   it('does not count a rejected set as ever armed', () => {
     const queue = new TimerQueue(['a'])
-    expect(() => queue.apply(toCommands([{ op: 'set', timerId: 'ghost', delayMs: 1 }]), 0)).toThrow()
+    expect(() =>
+      queue.apply(toCommands([{ op: 'set', timerId: 'ghost', delayMs: 1 }]), 0),
+    ).toThrow()
     expect(queue.wasEverArmed('ghost')).toBe(false)
   })
 

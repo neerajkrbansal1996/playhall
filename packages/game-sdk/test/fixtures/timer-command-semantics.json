@@ -97,7 +97,10 @@
       "description": "`SetTimerCommand.replace` defaults true, so a re-set moves the deadline and there is still exactly one `a`.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 5000 }] }
       ],
       "expectedFires": [{ "timerId": "a", "deadline": 5000, "seatId": null }]
@@ -139,7 +142,10 @@
       "description": "The opening-deadline shape: a game clears its first-move timer on the first move.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "clear", "timerId": "a" }] }
       ],
       "expectedFires": []
@@ -149,7 +155,10 @@
       "description": "Not an error. A game that clears defensively on every move must not be punished for it.",
       "declaredTimerIds": ["a", "b"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 100, "commands": [{ "op": "clear", "timerId": "b" }] }
       ],
       "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
@@ -159,7 +168,10 @@
       "description": "600 ms remained when it was paused at 400, so it is due 600 ms after the resume. This is the `pausesOnDisconnect` case, and getting it wrong makes the harness fire a timer the real service had frozen — a false failure reported against the game.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
         { "now": 10000, "commands": [{ "op": "resume", "timerId": "a" }] }
       ],
@@ -170,7 +182,10 @@
       "description": "No resume, no expiry. The timer is still armed; it is simply not due.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] }
       ],
       "expectedFires": []
@@ -180,7 +195,10 @@
       "description": "The second pause must not re-measure the remaining span from the later clock, which would silently extend the timer every time a game paused defensively.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
         { "now": 900, "commands": [{ "op": "pause", "timerId": "a" }] },
         { "now": 1000, "commands": [{ "op": "resume", "timerId": "a" }] }
@@ -192,7 +210,10 @@
       "description": "Symmetric with the idempotent pause: a stray resume must not move a running deadline.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "resume", "timerId": "a" }] }
       ],
       "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
@@ -212,7 +233,10 @@
       "description": "A replacing `set` is a fresh timer, so it is running even though the id it replaced was frozen.",
       "declaredTimerIds": ["a"],
       "steps": [
-        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] },
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
         { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
         {
           "now": 500,
@@ -291,7 +315,10 @@
     "description": "A `set` for a `timerId` the manifest never declared is rejected, not armed. `TurnBasedGameServer.onTimer` promises `timerId` always corresponds to a declared `TimerSpec`, and `TimerService` enforces the same thing through its `specs` option.",
     "declaredTimerIds": ["a"],
     "steps": [
-      { "now": 0, "commands": [{ "op": "set", "timerId": "ghost", "seatId": null, "delayMs": 1000 }] }
+      {
+        "now": 0,
+        "commands": [{ "op": "set", "timerId": "ghost", "seatId": null, "delayMs": 1000 }]
+      }
     ]
   }
 }
