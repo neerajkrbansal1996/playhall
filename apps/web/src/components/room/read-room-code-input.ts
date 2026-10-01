@@ -45,12 +45,37 @@ export interface RoomCodeInputReading {
  * scheme, a `www.` label, or a dotted host followed by a path — none of which
  * prose produces by accident.
  *
+ * ## Why the schemeless branch insists on an alphabetic last label
+ *
+ * Being unanchored is what makes the schemeless alternative dangerous rather
+ * than merely loose, and the cost is paid by prose that is *not* a link. A
+ * decimal next to a slash satisfies "dotted host followed by a path":
+ *
+ * | pasted | without the `[a-z]{2,}` last label | with it |
+ * |---|---|---|
+ * | `ABC234 (see 3.5/10)` | `3.5/10)` is the URL → field **cleared** | read as characters |
+ * | `rated 4.5/5 ABC234` | `4.5/5` is the URL → field **cleared** | read as characters |
+ *
+ * The second row is the one that decides it: the code the player pasted is
+ * right there, and a false link reading throws it away and replaces it with an
+ * empty field — the same class of harm as the `HTTPSP` this file exists to
+ * remove, just arrived at from the other side. Requiring the final host label
+ * to *start with two letters* costs nothing a real link needs (punycode
+ * `xn--p1ai` still matches) and no decimal can satisfy it.
+ *
+ * **The one shape this gives up:** a schemeless IP-literal host,
+ * `1.2.3.4/r/ABC234`, is now prose. With a scheme it is still a link
+ * (`http://127.0.0.1:3000/r/ABC234` matches the first alternative), which is
+ * how a dev-server or LAN invite is actually copied, and a bare dotted-quad
+ * typed into the code box is not a shape players produce. A prose decimal is.
+ *
  * There is no host in here on purpose. The brand and the domain are still a
  * board decision, and a link pasted from staging, a preview deploy, a URL
  * shortener or a future rename has to work the same day it exists. The shape of
  * a URL is what we recognise, never which URL it is.
  */
-const URL_IN_TEXT = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)+\/\S*/i
+const URL_IN_TEXT =
+  /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}[a-z0-9-]*\/\S*/i
 
 /** Sentence punctuation that ends up glued to a URL in a chat message. */
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"»]+$/

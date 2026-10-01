@@ -41,6 +41,18 @@ describe('an invite link', () => {
     'https://playhall.app/r/ABC234?utm_source=whatsapp',
     'https://playhall.app/r/ABC234#seat=w',
     'https://playhall.app/r/ABC234/',
+    // The fragment stripped on the *schemeless* branch, which reaches
+    // `split('#')` by a different route than the schemed rows above and was
+    // the one case with no row. Without the strip the leaf segment is
+    // `ABC234#X` → `ABC234X`, seven characters, so this reads as
+    // `link-without-code` and the field clears.
+    'playhall.app/r/ABC234#x',
+    'playhall.app/r/ABC234?utm_source=whatsapp',
+    // A schemed IP-literal host: the dev-server and LAN-invite shape. Matches
+    // the scheme alternative, so the `[a-z]{2,}` last-label rule on the
+    // schemeless branch does not reach it. Port included, since that is how it
+    // is always copied.
+    'http://127.0.0.1:3000/r/ABC234',
     // The shapes a chat app actually delivers: a sentence around the link, and
     // the full stop that ends it glued to the last path segment.
     'Join: https://playhall.app/r/ABC234',
@@ -73,11 +85,18 @@ describe('an invite link', () => {
   })
 
   it('never reads the host as the code', () => {
-    // `CDE234` is a well-formed code sitting where the host goes. Scanning
-    // `pathPart.split('/')` without dropping element 0 would join it.
-    const reading = readRoomCodeInput('https://cde234.example/play/chess')
-    expect(reading.source).toBe('link-without-code')
-    expect(reading.code).toBe('')
+    // The host has to be one that *normalises* to a well-formed code for this
+    // to bite, which is why it is a short one: `ab2.cde` loses its dot and
+    // becomes `AB2CDE`, six characters the alphabet accepts. A longer host
+    // cannot — `cde234.example` normalises to twelve — so a plausible-looking
+    // row there would pass with the host-dropping `slice(1)` deleted, and
+    // measure nothing. Shape it like a link shortener, since that is the way
+    // a host this short actually reaches a player.
+    for (const raw of ['https://ab2.cde', 'https://ab2.cde/', 'https://ab2.cde/play/chess']) {
+      const reading = readRoomCodeInput(raw)
+      expect(reading.source).toBe('link-without-code')
+      expect(reading.code).toBe('')
+    }
   })
 })
 
@@ -132,6 +151,20 @@ describe('input that is not a link', () => {
     { raw: 'seat w/b ABC234', code: 'SEATWB', overflowed: true },
     // A sentence-ending dot is not a host label.
     { raw: 'the code is ABC234.', code: 'THECDE', overflowed: true },
+    // A decimal followed by a slash is the schemeless branch's false-positive
+    // class, and the reason its last host label must start with two letters.
+    // Without that, `3.5/10)` and `4.5/5` match as URLs and the field is
+    // *cleared* — which on the second row throws away the code the player
+    // pasted. These two rows are the whole guard; delete `[a-z]{2,}` from
+    // `URL_IN_TEXT` and both go red with `source: 'link-without-code'`.
+    { raw: 'ABC234 (see 3.5/10)', code: 'ABC234', overflowed: true },
+    { raw: 'rated 4.5/5 ABC234', code: 'RATED4', overflowed: true },
+    // Stated non-goal, not an oversight: a schemeless IP-literal host is prose
+    // here. `http://127.0.0.1:3000/r/ABC234` — how a dev-server or LAN invite
+    // is actually copied — still reads as a link via the scheme branch, and is
+    // pinned below. A bare dotted quad in the code box is not a shape players
+    // produce; a prose decimal is.
+    { raw: '1.2.3.4/r/ABC234', code: '234RAB', overflowed: true },
     { raw: 'ABC234', code: 'ABC234', overflowed: false },
     { raw: '', code: '', overflowed: false },
   ] as const
