@@ -22,7 +22,14 @@
     "",
     "Deadlines are absolute milliseconds. A paused timer never fires. Clamping `ctx.now` up to the",
     "previous mutation's `now` is a *driver* concern and deliberately not modelled here: this table is",
-    "about which timer is due and when, not about what clock the game is then called with."
+    "about which timer is due and when, not about what clock the game is then called with.",
+    "",
+    "The equal-deadline tie-break is `timerId` ascending, and ADR-0010 §4a decides that it is",
+    "normative against the alternative both implementations could have read: the order the game's",
+    "reducer happened to emit its `set` commands in. It is pinned by two rows, not one —",
+    "`ties-break-by-timer-id-ascending` (armed in reverse id order) and",
+    "`...-when-armed-in-id-order` — because either row alone is also satisfied by a rule that",
+    "reverses arm order, and the guarantee being made is that arm order does not decide this at all."
   ],
   "defaultMaxFires": 8,
   "cases": [
@@ -84,6 +91,24 @@
           "commands": [
             { "op": "set", "timerId": "beta", "seatId": "seat-2", "delayMs": 2000 },
             { "op": "set", "timerId": "alpha", "seatId": "seat-1", "delayMs": 2000 }
+          ]
+        }
+      ],
+      "expectedFires": [
+        { "timerId": "alpha", "deadline": 2000, "seatId": "seat-1" },
+        { "timerId": "beta", "deadline": 2000, "seatId": "seat-2" }
+      ]
+    },
+    {
+      "id": "ties-break-by-timer-id-ascending-when-armed-in-id-order",
+      "description": "The same tie armed in id order. Paired with `ties-break-by-timer-id-ascending` on purpose: that row alone is also satisfied by *reversing* arm order, which is a different rule that happens to agree when the arm order is reversed. Only the pair pins `timerId` ascending specifically, and an equal-deadline order that is a function of the ids and not of the order the reducer emitted its commands in is the whole point (ADR-0010 §4a).",
+      "declaredTimerIds": ["alpha", "beta"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "alpha", "seatId": "seat-1", "delayMs": 2000 },
+            { "op": "set", "timerId": "beta", "seatId": "seat-2", "delayMs": 2000 }
           ]
         }
       ],

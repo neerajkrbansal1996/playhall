@@ -111,7 +111,7 @@ export interface TimerServiceOptions {
    * the SDK applies to `onTimer`.
    */
   readonly specs?: readonly TimerSpec[]
-  /** Invoked once per expiry, in deadline order. */
+  /** Invoked once per expiry, in `compareFireOrder` order. */
   readonly onExpire?: (expiry: TimerExpiry) => void
   /**
    * Invoked when a single mutation's expiry drain hits `MAX_DRAIN_PASSES` — an
@@ -140,6 +140,37 @@ const FIRE_TOLERANCE_MS = 1
  * what happens then and why it is not "leave it to the scheduler".
  */
 const MAX_DRAIN_PASSES = 32
+
+/**
+ * Fire order within one pass: earliest deadline first, then `timerId` ascending
+ * ([ADR-0010](../../../../docs/adr/0010-timer-driven-unrecorded-endings.md) §4a).
+ *
+ * The secondary key is the load-bearing half, and it is not a tidy-up. Without
+ * it this is a sort by deadline alone; `Array.prototype.sort` is stable and
+ * `#records` is a `Map` iterated in insertion order, so an equal-deadline batch
+ * would reach `onExpire` — and through the room runner, `game.onTimer` — in the
+ * order the game's reducer happened to emit its `set` commands. `onTimer` can
+ * end a match, so that would make the result of a match a function of the order
+ * two lines appear in inside `applyAction`, and it would disagree with the
+ * conformance driver's `TimerQueue`, which certifies games against `timerId`
+ * ascending. ADR-0010 §4a decides that `timerId` ascending is the normative
+ * reading; `packages/game-sdk/test/fixtures/timer-command-semantics.json` is
+ * where the two implementations are held to it.
+ *
+ * Ids are compared as strings because `TimerId` is a branded string, and they
+ * are unique per manifest, so this is a total order on any batch the service can
+ * hold — the stability of the sort is never what decides the outcome.
+ */
+function compareFireOrder(
+  aDueAtMs: number,
+  aTimerId: TimerId,
+  bDueAtMs: number,
+  bTimerId: TimerId,
+): number {
+  if (aDueAtMs !== bDueAtMs) return aDueAtMs - bDueAtMs
+  if (aTimerId === bTimerId) return 0
+  return aTimerId < bTimerId ? -1 : 1
+}
 
 export class TimerService {
   readonly matchId: MatchId
@@ -546,7 +577,8 @@ export class TimerService {
    *
    * Expiries are delivered in deadline order so a match timer and a player
    * clock that expire in the same pass reach the runner in the order they
-   * actually happened.
+   * actually happened, and an exact tie is broken by `timerId` ascending rather
+   * than by arm order — see `compareFireOrder`.
    *
    * `atMs` overrides the instant "now" is taken at. Replay passes the reducer's
    * `ctx.now` so a replayed expiry gets the same `firedAtMs`/`latenessMs` as the
@@ -569,7 +601,7 @@ export class TimerService {
       this.#rearm()
       return []
     }
-    due.sort((a, b) => a.dueAtMs - b.dueAtMs)
+    due.sort((a, b) => compareFireOrder(a.dueAtMs, a.record.timerId, b.dueAtMs, b.record.timerId))
 
     // Expire everything before invoking a single handler: a handler that calls
     // back into `apply` must not observe a half-expired set.
@@ -869,7 +901,7 @@ export class TimerService {
       })
     }
     if (dropped.length === 0) return
-    dropped.sort((a, b) => a.dueAtMs - b.dueAtMs)
+    dropped.sort((a, b) => compareFireOrder(a.dueAtMs, a.timerId, b.dueAtMs, b.timerId))
     // Inside `#firing`, exactly as `poll` wraps `onExpire`, and for the same
     // reason. A handler that mutates would otherwise re-enter `#drainDue`,
     // spend another 32 passes, and arrive back here — unbounded recursion, and
