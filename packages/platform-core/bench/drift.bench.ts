@@ -104,12 +104,21 @@ function percentile(sorted: readonly number[], p: number): number {
  * and the minimum-RTT filter has something to filter. Seeded, because a bench
  * whose numbers move between runs for reasons unrelated to the code under test
  * is not evidence.
+ *
+ * **Additive only.** Queueing delay cannot make a packet beat the path's floor,
+ * and that is precisely the premise `sync.ts` relies on when it keeps the
+ * shortest round trip. A signed jitter breaks it — there is then no floor for
+ * the filter to find, the best sample's asymmetry is whatever the draw happened
+ * to be rather than the true `(UPLINK - DOWNLINK) / 2`, and the keepalive arm
+ * measures 40 ms against a 20.6 ms model for a reason that is in the harness and
+ * not in the code under test. Measured, with `(state % 60) - 10`, before this
+ * comment existed.
  */
 function seededJitter(seed: number): () => number {
   let state = seed
   return () => {
     state = (state * 1_103_515_245 + 12_345) & 0x7fffffff
-    return (state % 60) - 10
+    return state % 40
   }
 }
 
@@ -189,8 +198,8 @@ it(
 
     /** One real, asymmetric round trip for one arm. */
     async function exchange(arm: Arm, jittered: boolean): Promise<void> {
-      const upMs = jittered ? Math.max(1, UPLINK_MS + jitter()) : UPLINK_MS
-      const downMs = jittered ? Math.max(1, DOWNLINK_MS + jitter()) : DOWNLINK_MS
+      const upMs = jittered ? UPLINK_MS + jitter() : UPLINK_MS
+      const downMs = jittered ? DOWNLINK_MS + jitter() : DOWNLINK_MS
       const requestedAtMs = arm.clock.now()
       await sleep(upMs)
       const frame = service.sync()
@@ -239,8 +248,16 @@ it(
     const elapsedMs = serverClock.now() - syncedAtMs
     const results: ArmResult[] = arms.map((arm) => {
       const absolute = arm.errors.map(Math.abs).sort((a, b) => a - b)
-      // A keepalive arm is never stale for longer than its sample window, so
-      // its prediction is the window's span, not the whole run.
+      // A keepalive arm is never stale for longer than its sample window, so its
+      // prediction is the window's span, not the whole run.
+      //
+      // For a free-run arm this prediction is the whole error and lands within
+      // a millisecond. For the keepalive arm it is a **floor**: it assumes the
+      // winning sample sat on the unjittered path, and under jitter the best
+      // sample in a given window is often only the least-queued one rather than
+      // an unqueued one. Its asymmetry is then worse than `(45 - 15) / 2`, which
+      // is why the measured max runs ~10 ms above the model. Minimum RTT does
+      // not minimise asymmetry; it only correlates with it.
       const staleMs = arm.keepalive ? KEEPALIVE_STALENESS_MS : elapsedMs
       return {
         label: arm.label,
@@ -280,6 +297,7 @@ it(
         `budget                      ${DRIFT_BUDGET_MS} ms`,
         '--------------------------------------------------------------------',
         'arm                           syncs  off.err  first  final    p95  max|e|  predicted',
+        '                              (predicted is exact for free-run, a floor for keepalive)',
         ...results.map((arm) =>
           [
             arm.label.padEnd(30),

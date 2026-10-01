@@ -11,11 +11,18 @@
  *
  * Everything here is real: real system clocks on both sides, the real
  * `setTimeout` scheduler, real `await`s. That is the point.
+ *
+ * What five seconds cannot catch is clock *rate* error. The client below runs
+ * 200 ppm fast, which over five seconds is 1 ms — below the noise, and
+ * deliberately so: this file is not where that term is measured. It is measured
+ * over five minutes in `bench/drift.bench.ts`, and exactly, at any match length,
+ * in `free-run-budget.test.ts`. The rate is here only so that no clock in this
+ * package's harnesses is a constant skew pretending to be a second machine;
+ * see [PER-258](/PER/issues/PER-258) and `fixtures/real-clock.ts`.
  */
 import { asMatchId, asSeatId, asTimerId } from '@playhall/game-sdk'
 import { describe, expect, it } from 'vitest'
-import type { Clock } from '../src/runtime.js'
-import { realSystemClock } from './fixtures/real-clock.js'
+import { ratedClock, realSystemClock } from './fixtures/real-clock.js'
 import { TimerService } from '../src/timers/service.js'
 import { TimerSyncTracker } from '../src/timers/sync.js'
 
@@ -26,15 +33,11 @@ const DRIFT_BUDGET_MS = 100
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** A client machine whose hardware clock is nowhere near the server's. */
-function skewed(base: Clock, skewMs: number): Clock {
-  return { now: () => base.now() + skewMs }
-}
-
 describe('drift over a real, if short, run', () => {
   it('a client that synced once stays with the server for five seconds', async () => {
     const serverClock = realSystemClock()
-    const clientClock = skewed(realSystemClock(), 86_400_000)
+    // A different machine: a day out on the wall clock and a 200 ppm crystal.
+    const clientClock = ratedClock(realSystemClock(), { ppmFast: 200, skewMs: 86_400_000 })
 
     const service = new TimerService({ matchId: MATCH, clock: serverClock })
     service.declarePlayerClock(CLOCK, SEAT, { initialMs: 600_000 })
@@ -59,9 +62,17 @@ describe('drift over a real, if short, run', () => {
 
     const maxAbsMs = Math.max(...errors.map(Math.abs))
     expect(maxAbsMs).toBeLessThan(DRIFT_BUDGET_MS)
-    // The property the long run depends on: the last sample is no worse than
-    // the first. A countdown would show this growing.
-    expect(Math.abs(errors[errors.length - 1] as number)).toBeLessThanOrEqual(maxAbsMs)
+
+    // The property the long run depends on: error does not grow with the number
+    // of samples taken. A local countdown would.
+    //
+    // This used to read `expect(abs(last)).toBeLessThanOrEqual(maxAbsMs)`, which
+    // cannot fail — `last` is one of the values `maxAbsMs` is the maximum of. It
+    // has to compare the last sample against the *first*. Over five seconds the
+    // only legitimate growth is the client's 200 ppm crystal, which is 1 ms, so
+    // the allowance here is sampling noise and nothing more.
+    const growthMs = Math.abs(errors[errors.length - 1] as number) - Math.abs(errors[0] as number)
+    expect(growthMs).toBeLessThan(10)
   }, 30_000)
 
   it('a two-second timer fires within a few ms of its deadline', async () => {
