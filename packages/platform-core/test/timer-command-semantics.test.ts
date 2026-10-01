@@ -81,25 +81,19 @@ const MATCH = asMatchId('timer-command-semantics')
 /**
  * Table rows `TimerService` does **not** satisfy, by row id, with why.
  *
- * ADR-0010 §4 says a changed tie-break adds a row to the fixture before it
- * changes either implementation, so neither closing this by editing the table
- * nor closing it by re-ordering `poll` is this suite's call to make — which
- * reading is normative is an ADR decision (PER-252, CTO). Pinned as
- * `it.fails` rather than deleted or `it.skip`ped so the divergence is a live,
- * named assertion: the row goes red the moment either side moves, including
- * when the service is fixed, and the suite stays honest in the meantime.
+ * Intentionally empty: the service satisfies every row. The mechanism is kept
+ * rather than deleted because it is the honest way to carry a divergence that
+ * only an ADR can settle, and the next one should land in it rather than be
+ * resolved by whoever notices first — ADR-0010 §4 reserves "which reading is
+ * normative" to an ADR, not to either suite.
  *
- * `TimerService`'s actual ordering is asserted positively in
- * "orders an equal-deadline batch by arm order" below, so this records what the
- * service does and not merely that it disagrees.
+ * It last held `ties-break-by-timer-id-ascending`, where the table required
+ * `timerId` ascending and `TimerService.poll` delivered an equal-deadline batch
+ * in arm order. ADR-0010 §4a decided for the table; `compareFireOrder` in
+ * `../src/timers/service.ts` implements it, and the two directions are asserted
+ * below under "does not let arm order decide an equal-deadline batch".
  */
-const DIVERGING_ROWS: ReadonlyMap<string, string> = new Map([
-  [
-    'ties-break-by-timer-id-ascending',
-    'TimerService.poll sorts an equal-deadline batch by deadline alone, so a stable sort ' +
-      'leaves it in arm order; the table requires timerId ascending.',
-  ],
-])
+const DIVERGING_ROWS: ReadonlyMap<string, string> = new Map()
 
 /**
  * The table declares ids, not specs, because it is about `TimerCommand` and not
@@ -234,19 +228,27 @@ describe('the shared TimerCommand semantics fixture', () => {
   }
 
   /**
-   * What the service does instead, stated positively.
+   * ADR-0010 §4a, stated as the independence property rather than as an order.
    *
-   * Arm order and id order are made to disagree in both directions on purpose:
-   * one direction alone would also pass under an id-descending sort, and the
-   * finding is specifically that nothing but insertion order decides this. The
-   * room runner sees exactly this order — `poll` invokes `onExpire` in it — so a
-   * two-timer game that flags on the same millisecond resolves by whichever
-   * `set` the reducer happened to emit first.
+   * Both arm orders are driven and both must produce `timerId` ascending. Either
+   * direction alone is a weaker assertion than it looks: "arm alpha first" also
+   * passes under the arm-order reading the service used to have, and "arm beta
+   * first" also passes under a rule that simply reverses arm order. Only the
+   * pair says what §4a actually decided — that arm order does not decide this.
+   *
+   * The room runner sees exactly this order, because `poll` invokes `onExpire`
+   * in it, so this is the order `game.onTimer` is called in for a two-timer game
+   * whose clocks fall on the same millisecond.
+   *
+   * The same pair exists in the shared table as
+   * `ties-break-by-timer-id-ascending` and `...-when-armed-in-id-order`, which
+   * is what holds `TimerQueue` to it too; this keeps the property legible in the
+   * suite that owns the service.
    */
   it.each([
     ['arm alpha first', ['alpha', 'beta'] as const],
     ['arm beta first', ['beta', 'alpha'] as const],
-  ])('orders an equal-deadline batch by arm order (%s)', (_label, armOrder) => {
+  ])('does not let arm order decide an equal-deadline batch (%s)', (_label, armOrder) => {
     const clock = fixedClock(0)
     const fired: string[] = []
     const service = new TimerService({
@@ -264,7 +266,68 @@ describe('the shared TimerCommand semantics fixture', () => {
     clock.set(2000)
     service.poll(2000)
 
-    expect(fired).toEqual([...armOrder])
+    expect(fired).toEqual(['alpha', 'beta'])
+  })
+
+  /**
+   * The service's *second* ordering site, which the shared table cannot reach.
+   *
+   * `#forceExpireDue` sorts its own batch — the `MAX_DRAIN_PASSES` escape hatch
+   * reports through `onDrainExhausted`, not `onExpire`, so the fixture driver
+   * (which only observes `onExpire`) never sees it, and `TimerQueue` has no
+   * equivalent of a drain cap for a row to describe. It had the same
+   * deadline-only sort `poll` did and would have been left behind by a fix
+   * applied only where PER-255 pointed.
+   *
+   * It is a bug-signal path, but an ordered one: `onDrainExhausted` is what tells
+   * an operator which clocks a runaway handler cost a live match, and the same
+   * batch arriving in a different order on a replay than it did live is the
+   * reason the primary path is ordered in the first place.
+   */
+  it('orders the force-expired batch by timerId when the drain cap is hit', () => {
+    const clock = fixedClock(0)
+    const batches: string[][] = []
+    const service: TimerService = new TimerService({
+      matchId: MATCH,
+      clock,
+      scheduler: createManualScheduler(),
+      specs: ['zulu', 'alpha'].map(toSpec),
+      // Re-arms itself already-due on every pass: the exact runaway handler
+      // `MAX_DRAIN_PASSES` exists to terminate. The nested `apply` does not
+      // re-enter the drain — `#drainDue` is a no-op while firing — so this grows
+      // the pass count rather than the stack.
+      onExpire: (expiry) => {
+        service.apply(
+          toCommands([{ op: 'set', timerId: String(expiry.timerId), delayMs: 0 }]),
+          expiry.dueAtMs,
+        )
+      },
+      onDrainExhausted: (batch) => {
+        batches.push(batch.map((expiry) => String(expiry.timerId)))
+      },
+    })
+
+    // Armed in reverse id order and in the *future*, so `#records` insertion
+    // order and id order disagree. Arming both at `delayMs: 0` instead would
+    // prove nothing: `apply` runs each command through `set`, which is itself a
+    // mutator that drains, so the first id would hit the cap and be force-expired
+    // alone before the second was ever armed — two batches of one, which no
+    // ordering can get wrong.
+    service.apply(
+      toCommands([
+        { op: 'set', timerId: 'zulu', delayMs: 2000 },
+        { op: 'set', timerId: 'alpha', delayMs: 2000 },
+      ]),
+      0,
+    )
+
+    // One mutation that steps over the shared deadline. Both are due in the same
+    // pass, so the runaway keeps both alive to the cap and they are force-expired
+    // as one batch.
+    clock.set(2000)
+    service.apply([], 2000)
+
+    expect(batches).toEqual([['alpha', 'zulu']])
   })
 
   it('rejects a set for a timerId the manifest does not declare', () => {
