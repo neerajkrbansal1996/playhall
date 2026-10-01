@@ -12,6 +12,8 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '@playhall/shared'
+
 import { JoinByCodeForm, RoomInvite, SeatList, type SeatView } from '@/components/room'
 import { seatTestId, testIds } from '@/lib/testids'
 
@@ -115,8 +117,78 @@ describe('join by code', () => {
     await user.click(submit)
 
     expect(onJoin).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert')).toHaveTextContent('A room code is 6 characters.')
+    // The length *rule* lives in the hint, two lines up and already in this
+    // input's accessible description. The message carries the one number the
+    // hint cannot: how far along this particular code is.
+    expect(screen.getByRole('alert')).toHaveTextContent('That code has 3 of 6 characters.')
     expect(screen.getByTestId(testIds.joinCodeInput)).toHaveAttribute('aria-invalid', 'true')
+
+    // A second length, because one is not enough: with a single 3-character
+    // fixture, hard-coding the count to `3` keeps the suite green.
+    await user.type(screen.getByTestId(testIds.joinCodeInput), 'DE')
+    await user.click(submit)
+
+    expect(onJoin).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('That code has 5 of 6 characters.')
+  })
+
+  it('asks for a code rather than specifying one when the field is empty', async () => {
+    const onJoin = vi.fn()
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={onJoin} />)
+
+    await user.click(screen.getByTestId(testIds.joinSubmit))
+
+    expect(onJoin).not.toHaveBeenCalled()
+    // `That code has 0 of 6 characters.` would be a true statement about a
+    // field the player has not touched, and no instruction at all.
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the code from your invite.')
+  })
+
+  it('names which characters survived the cap, not the length rule again', async () => {
+    const onJoin = vi.fn()
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={onJoin} />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    // A 7th *canonical* character: nothing to strip, so one is really lost.
+    await user.type(input, 'ABC2345')
+
+    expect(input).toHaveValue(CODE)
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Only the first 6 characters were used. Check the code you were sent.',
+    )
+  })
+
+  it('keeps the overflow message across the press instead of swapping it', async () => {
+    const onJoin = vi.fn()
+    const user = userEvent.setup()
+    render(<JoinByCodeForm onJoin={onJoin} />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    await user.type(input, 'ABC2345')
+    await user.click(screen.getByTestId(testIds.joinSubmit))
+
+    // `overflowed` implies the value is six canonical characters, which
+    // `isValidRoomCode` accepts — so the press is a real join and `tooShort`
+    // can never be set while `overflowed` is. Asserting precedence between the
+    // two would pin nothing; this pins the exclusivity behaviourally.
+    expect(onJoin).toHaveBeenCalledWith(CODE)
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Only the first 6 characters were used. Check the code you were sent.',
+    )
+  })
+
+  it('describes the field before the first keystroke', () => {
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    // The placeholder is not an accessible description and vanishes on the
+    // first keystroke. This is the affordance that is there before it.
+    expect(input).toHaveAccessibleDescription('6 characters. Codes never use O, 0, I, 1 or L.')
+    // Resting state is not an error state.
+    expect(input).not.toHaveAttribute('aria-invalid')
   })
 
   it('wires a server-side error to the input for assistive technology', () => {
@@ -124,7 +196,35 @@ describe('join by code', () => {
 
     const input = screen.getByTestId(testIds.joinCodeInput)
     expect(input).toHaveAttribute('aria-invalid', 'true')
-    expect(input).toHaveAccessibleDescription('That room has expired.')
+    // Composed, hint first — not a substring match. The composition *is* the
+    // behaviour: a player who hits an expired room still needs the alphabet
+    // rule when they retype the code, and `fieldIds()` in
+    // `components/settings-form/field-shell.tsx` already orders help before
+    // error for every settings field.
+    expect(input).toHaveAccessibleDescription(
+      '6 characters. Codes never use O, 0, I, 1 or L. That room has expired.',
+    )
+  })
+
+  it('keeps the hint role-less and silent', () => {
+    render(<JoinByCodeForm onJoin={vi.fn()} error="That room has expired." />)
+
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    const [hintId] = (input.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean)
+    const hint = document.getElementById(hintId as string)
+
+    // The hint's copy never changes after mount, so it has nothing to announce
+    // and must not compete with the message node for the announcement queue.
+    //
+    // Asserted on the attributes, not via `getByRole('alert')` throwing on a
+    // second match: `role="status"` is a *different* role, so the ambiguity
+    // check below passes happily while the field has acquired a live region.
+    expect(hint).not.toBeNull()
+    expect(hint).not.toHaveAttribute('role')
+    expect(hint).not.toHaveAttribute('aria-live')
+
+    // And the message node is still reachable as the field's only alert.
+    expect(screen.getByRole('alert')).toHaveTextContent('That room has expired.')
   })
 
   it('submits on Enter from the field', async () => {
@@ -147,6 +247,68 @@ describe('join by code', () => {
     await user.click(screen.getByTestId(testIds.joinSubmit))
 
     expect(onJoin).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The hint's glyph list is a hard-coded literal in the component, so that
+ * rendering it costs no bundle bytes. These pins are what make that safe: the
+ * literal cannot drift from `ROOM_CODE_ALPHABET` in either direction without a
+ * failure here.
+ */
+describe("the join-code hint's glyph list", () => {
+  /** Read the hint back off the input's own `aria-describedby`, hint id first. */
+  function renderHint(): string {
+    render(<JoinByCodeForm onJoin={vi.fn()} />)
+    const input = screen.getByTestId(testIds.joinCodeInput)
+    const [hintId] = (input.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean)
+    expect(hintId).toBeDefined()
+    const hint = document.getElementById(hintId as string)
+    expect(hint).not.toBeNull()
+    return hint?.textContent ?? ''
+  }
+
+  /**
+   * Parse the list out of the sentence rather than substring-searching it. A
+   * naive `hint.includes(ch)` would report `C`, `E`, `S` and `6` as "named"
+   * because they occur in "6 characters" and "Codes never use".
+   */
+  function namedGlyphs(hint: string): readonly string[] {
+    const list = /never use ([^.]*)\./.exec(hint)?.[1]
+    expect(list, `no glyph list found in hint: ${hint}`).toBeDefined()
+    return (list as string)
+      .split(/\s*,\s*|\s+or\s+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+  }
+
+  it('names every excluded character and no permitted one', () => {
+    const named = new Set(namedGlyphs(renderHint()))
+
+    // Two-way, over the whole plausible input domain. One direction catches a
+    // hint that forbids a glyph players are allowed to type; the other catches
+    // the alphabet dropping a sixth character the hint never mentions.
+    for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') {
+      expect(named.has(ch), `hint names ${ch}`).toBe(!ROOM_CODE_ALPHABET.includes(ch))
+    }
+  })
+
+  it('names each glyph once, as a single character', () => {
+    // Without this, a malformed list such as `O0, I1 or L` would still satisfy
+    // the set comparison above under a looser parse.
+    const named = namedGlyphs(renderHint())
+    expect(named.every((glyph) => glyph.length === 1)).toBe(true)
+    expect(new Set(named).size).toBe(named.length)
+  })
+
+  it('pairs each confusable with its partner, and takes its length from shared', () => {
+    const hint = renderHint()
+
+    // Order is deliberate: each excluded letter sits next to the digit it is
+    // mistaken for, so the list reads as three facts rather than five.
+    expect(namedGlyphs(hint)).toEqual(['O', '0', 'I', '1', 'L'])
+    // The `6` is interpolated from `ROOM_CODE_LENGTH`, not typed.
+    expect(hint.startsWith(`${ROOM_CODE_LENGTH} characters.`)).toBe(true)
   })
 })
 
