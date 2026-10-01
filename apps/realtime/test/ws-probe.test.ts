@@ -2,9 +2,11 @@ import { createServer, type Server } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
+import { z } from 'zod'
 import {
   attachWsProbe,
   DEFAULT_PROBE_LIMITS,
+  shapeRejection,
   WS_PROBE_PATH,
   type AttachedProbe,
 } from '../src/ws-probe'
@@ -286,6 +288,157 @@ describe('ws probe — rejected frames', () => {
     expect(error.reason.length).toBeLessThan(160)
   })
 
+  it('does not elide anything a real ping rejection can produce', async () => {
+    // The issue cap is set to the reachable maximum for `PingFrame` — one issue
+    // per field, plus the single `.strict()` arm — so it must never fire on a
+    // real frame. It was measured as a no-op when it landed; this keeps it one.
+    //
+    // The sibling test in the record-schema block below pins the cap from the
+    // other side, and neither direction catches what this one does: lowering the
+    // cap bounds the echo *harder*, so it looks like a safer number while
+    // silently eliding diagnostics the caller needs to fix its frame. Worst case
+    // for this schema is all three fields wrong plus an extra, and all four have
+    // to survive.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'x', nonce: 1, clientSentAtMs: 'y', extra: 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe(
+      'frame is not a valid ping: t, nonce, clientSentAtMs, unexpected extra',
+    )
+    expect(error.reason).not.toContain('more)')
+  })
+
+  it('quotes a key name through a fixed alphabet, not verbatim', async () => {
+    // The cap above bounds how *much* of a key comes back. This bounds *what*:
+    // exact equality, because the point is that no byte of the key reaches the
+    // wire unless the alphabet admits it. Everything else becomes `?`.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, 'evil key!': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected evil?key?')
+  })
+
+  it('does not let a key name carry a control character or an escape sequence', async () => {
+    // The reason reaches only this socket today, so there is no sink to inject
+    // into — which is exactly why nothing stops a newline from surviving. The
+    // next sink to be handed this string (a log line, a terminal, a CI
+    // annotation) inherits the decision, so make it here: a forged log prefix
+    // and an ANSI colour run both have to come back inert.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        'x\n[realtime] FATAL forged': 1,
+        'y\u001b[31mRED\u001b[0m': 1,
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    // eslint-disable-next-line no-control-regex -- the point of the assertion
+    expect(error.reason).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(error.reason).not.toContain('[realtime]')
+    expect(error.reason).not.toContain('[31m')
+    // Still diagnostic: the caller can tell which keys to remove.
+    expect(error.reason).toContain('x??realtime?')
+    expect(error.reason).toContain('y??31mRED')
+  })
+
+  it('clips an astral key without stranding half a surrogate pair', async () => {
+    // A key outside the BMP is two UTF-16 units per character, and `slice` cuts
+    // units, so a clip can land mid-pair and put an unpaired half on the wire.
+    //
+    // The **odd-length ASCII prefix is what makes this test able to fail.** A key
+    // of astral characters alone starts every pair at an even offset, so a clip
+    // at 32 units lands on a boundary and is well-formed even with no alphabet at
+    // all — a test without the prefix asserts nothing. One `x` shifts every pair
+    // by a unit, so unit 32 is the low half of the 16th pair.
+    //
+    // Both assertions are deliberately independent of whether the alphabet runs
+    // before or after the clip, because that order is cosmetic (see `quoteKey`).
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    const astral = `x${'\u{1f4a5}'.repeat(40)}`
+    ws.send(
+      JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, [astral]: 1, [`${astral}2`]: 1 }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).not.toMatch(/[\ud800-\udfff]/)
+    // And the clip fired at all: 40 characters of key cannot come back whole.
+    expect(error.reason).not.toContain('?'.repeat(33))
+  })
+
+  it('bounds a multi-byte key in bytes, not only in characters', async () => {
+    // `MAX_REPORTED_KEY_CHARS` is a character cap, and a character is up to four
+    // bytes, so without an ASCII-only alphabet 3 keys x 32 characters is ~384
+    // bytes of reason from a frame that fits the 1 KiB inbound cap.
+    //
+    // The keys are multi-byte **letters** on purpose. An emoji is a Symbol, and
+    // the plausible widening of this alphabet is "a legitimate field name may
+    // contain any letter" (`/[^\p{L}\p{N}_.:-]/gu`) — under which an emoji still
+    // quotes to `?` and an emoji-based test still passes while the byte bound is
+    // gone. A 2-byte and a 3-byte letter both die there. Both keys stay under the
+    // character cap so no `…` marker (three bytes by itself) is in the reason,
+    // which lets the property be asserted directly instead of against a magic
+    // number: every byte out is one character out.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(
+      JSON.stringify({
+        t: 'ping',
+        nonce: 'n',
+        clientSentAtMs: 0,
+        ['é'.repeat(10)]: 1,
+        ['日'.repeat(10)]: 1,
+      }),
+    )
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(Buffer.byteLength(error.reason, 'utf8')).toBe(error.reason.length)
+    expect(error.reason).not.toContain('é')
+    expect(error.reason).not.toContain('日')
+  })
+
+  it('names an empty key rather than trailing off', async () => {
+    // `{"": 1}` is legal JSON. Quoting it contributes nothing, so without a
+    // stand-in the reason reads `unexpected ` and the caller cannot tell an
+    // empty key from a bug in the server's error path.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, '': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected (empty)')
+  })
+
+  it('does not let a caller forge the empty-key sentinel', async () => {
+    // A stand-in only names the empty key if nothing else can render as it.
+    // `(empty)` is unforgeable solely because the parentheses fall outside the
+    // alphabet — so this is a property of `UNQUOTABLE_KEY_CHAR`, not of
+    // `EMPTY_KEY`, and admitting parens for any reason would make the reason lie
+    // about which key the caller sent.
+    const { url } = await harness()
+    const ws = await open(`${url}${WS_PROBE_PATH}`)
+
+    ws.send(JSON.stringify({ t: 'ping', nonce: 'n', clientSentAtMs: 0, '(empty)': 1 }))
+    const error = (await nextMessage(ws)) as { reason: string }
+
+    expect(error.reason).toBe('frame is not a valid ping: unexpected ?empty?')
+  })
+
   it('rejects a binary frame instead of guessing at a codec', async () => {
     // The binary path belongs to the real-time codec in M6. This probe must not
     // prejudice it by accepting one shape of bytes today.
@@ -305,6 +458,58 @@ describe('ws probe — rejected frames', () => {
 
     ws.send(JSON.stringify({ t: 'ping', nonce: '', clientSentAtMs: 0 }))
     expect((await nextMessage(ws)) as { reason: string }).toMatchObject({ t: 'error' })
+  })
+})
+
+describe('ws probe — reason shaping for the schemas it does not have yet', () => {
+  /**
+   * `shapeRejection` is what M1.6's transport adapter inherits, and two of its
+   * bounds are unreachable through `PingFrame`: three fields plus `.strict()`
+   * cannot exceed the issue cap, and no `PingFrame` path segment is
+   * caller-supplied. So a socket-driven test passes with either bound deleted —
+   * the guard would ship unpinned, which is the exact failure mode this PR
+   * exists to remove. These drive the helper directly against the construct that
+   * does reach them.
+   *
+   * `z.record()` is that construct (with `z.object().catchall()`, its only peer).
+   * An array index arrives as a *number* segment, so `z.array()` renders `xs.1`
+   * and cannot carry a sender's bytes at all.
+   */
+  const Recordish = z.object({ meta: z.record(z.string(), z.number()) }).strict()
+
+  function reasonFor(value: unknown): string {
+    const result = Recordish.safeParse(value)
+    if (result.success) throw new Error('fixture was supposed to be rejected')
+    return shapeRejection(result.error)
+  }
+
+  it('caps the issue list, not only the key list inside one issue', async () => {
+    // `MAX_REPORTED_KEYS` bounds the keys named by a single `unrecognized_keys`
+    // issue. It says nothing about how many issues there are, and a record emits
+    // one per bad entry — so without an issue cap the sender picks the length of
+    // the reason. Quoting does not help: `?` substitution is length-preserving,
+    // so the alphabet fix leaves this untouched.
+    const entries = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`k${index}`, 'not a number']),
+    )
+
+    const reason = reasonFor({ meta: entries })
+
+    expect(reason).toBe('meta.k0, meta.k1, meta.k2, meta.k3 (+16 more)')
+  })
+
+  it('quotes a caller-supplied path segment, so a record cannot smuggle a newline', async () => {
+    // The `unrecognized_keys` arm is hardened because it is the one `PingFrame`
+    // can reach. One line below it, `invalid_type` renders `issue.path` — and a
+    // record puts the sender's own key there, which reverts the whole fix for
+    // any schema that has one. QA's exact marker, through the other arm.
+    const reason = reasonFor({ meta: { 'x\n[realtime] FATAL forged': 'not a number' } })
+
+    // eslint-disable-next-line no-control-regex -- the point of the assertion
+    expect(reason).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(reason).not.toContain('[realtime]')
+    // Still diagnostic, and `.` stays structural because quoting is per segment.
+    expect(reason).toBe('meta.x??realtime??FATAL?forged')
   })
 })
 

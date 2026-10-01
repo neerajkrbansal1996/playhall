@@ -270,41 +270,126 @@ function parseFrame(data: RawData): ParseResult {
 
   const parsed = PingFrame.safeParse(json)
   if (!parsed.success) {
-    // **Field names only, never field values**, and even the names are bounded.
-    //
-    // Values are attacker-supplied and would make the error frame a reflector.
-    // Names are mostly schema-derived, but an `unrecognized_keys` issue carries
-    // no path (the object as a whole is wrong), so naming the rejected keys is
-    // the only way the caller learns what to remove — and those key names *are*
-    // caller-supplied. `maxFrameBytes` alone bounds them loosely enough to echo
-    // ~1 KiB back, so they are capped here instead: at most
-    // `MAX_REPORTED_KEYS`, each clipped to `MAX_REPORTED_KEY_CHARS`. Keeping
-    // this invariant literally true matters more than the diagnostic detail —
-    // it is the invariant M1.6 inherits, and there fan-out exists.
-    const detail = parsed.error.issues
-      .map((issue) =>
-        issue.code === 'unrecognized_keys'
-          ? `unexpected ${summariseKeys(issue.keys)}`
-          : issue.path.join('.') || '(root)',
-      )
-      .join(', ')
-    return { ok: false, reason: `frame is not a valid ping: ${detail}` }
+    return { ok: false, reason: `frame is not a valid ping: ${shapeRejection(parsed.error)}` }
   }
   return { ok: true, frame: parsed.data }
 }
+
+/**
+ * Renders a rejection as **field names only, never field values**, with every
+ * name bounded in amount and in alphabet.
+ *
+ * Values are attacker-supplied and would make the error frame a reflector.
+ * `maxFrameBytes` alone bounds a name loosely enough to echo ~1 KiB back, so the
+ * bounds live here instead: `MAX_REPORTED_ISSUES` and `MAX_REPORTED_KEYS` /
+ * `MAX_REPORTED_KEY_CHARS` bound how *much* comes back, and `quoteKey` bounds
+ * *what*.
+ *
+ * **Exported for the schema it is not used with.** Every bound below is
+ * unconditional in this function, but for `PingFrame` two of them are
+ * unreachable — three fields plus `.strict()` cannot exceed `MAX_REPORTED_ISSUES`,
+ * and no `PingFrame` path segment is caller-supplied — so driving this through
+ * the socket cannot pin them and a mutation that deletes them passes. The test
+ * drives it directly against a `z.record()` fixture instead. That is also the
+ * honest shape of the thing: this helper is what M1.6's transport adapter
+ * inherits, and it is being asked to hold for schemas that do not exist yet.
+ *
+ * Every arm goes through `quoteKey`, unconditionally, and that is the point. For
+ * `PingFrame` only the `unrecognized_keys` arm can carry caller bytes: it has no
+ * path (the object as a whole is wrong), so naming the rejected keys is the only
+ * way the caller learns what to remove. A *path segment* is caller-supplied only
+ * under `z.record()` / `z.object().catchall()` — the one pair of zod constructs
+ * that puts a caller's own key into `issue.path`. An array index arrives as a
+ * number, and an object key is schema-derived. No such schema exists in this
+ * tree today, so quoting the segments changes no reason this file can currently
+ * produce, which is precisely why it is worth doing now instead of writing the
+ * caveat down: shaping that holds only *given this schema* does not survive the
+ * move into M1.6's schema set, because the caveat does not travel with the code
+ * and there fan-out exists. Quote per segment rather than the joined string, so
+ * `.` stays structural.
+ */
+export function shapeRejection(error: z.ZodError): string {
+  return summarise(
+    error.issues.map((issue) =>
+      issue.code === 'unrecognized_keys'
+        ? `unexpected ${summarise(issue.keys.map(quoteKey), MAX_REPORTED_KEYS)}`
+        : issue.path.map((segment) => quoteKey(String(segment))).join('.') || '(root)',
+    ),
+    MAX_REPORTED_ISSUES,
+  )
+}
+
+/**
+ * How many rejected *issues* the error frame may list.
+ *
+ * `MAX_REPORTED_KEYS` bounds the key list inside **one** `unrecognized_keys`
+ * issue, which leaves the number of issues bounded by a property of the schema
+ * rather than of this function: `PingFrame` has three fields, so it cannot
+ * exceed four issues (each field, plus the one `.strict()` arm) and this cap is
+ * a measured no-op today. A schema with a `z.record()` has no such ceiling — one
+ * issue per caller-supplied entry — so a sender picks the length of the reason.
+ * A bounded alphabet over an unbounded list is still an unbounded echo.
+ */
+const MAX_REPORTED_ISSUES = 4
 
 /** How much of a caller-supplied key set the error frame may quote back. */
 const MAX_REPORTED_KEYS = 3
 const MAX_REPORTED_KEY_CHARS = 32
 
-function summariseKeys(keys: readonly string[]): string {
-  const shown = keys
-    .slice(0, MAX_REPORTED_KEYS)
-    .map((key) =>
-      key.length > MAX_REPORTED_KEY_CHARS ? `${key.slice(0, MAX_REPORTED_KEY_CHARS)}…` : key,
-    )
-  const hidden = keys.length - shown.length
+/**
+ * Everything a quoted key may *not* contribute. An allowlist rather than a
+ * blocklist of known-bad characters: the set of characters that are inert in
+ * every sink a reason string can reach is not knowable from here, but the set a
+ * legitimate protocol field name needs is — identifier characters, and the two
+ * separators (`.`, `:`) a nested path can carry.
+ */
+const UNQUOTABLE_KEY_CHAR = /[^A-Za-z0-9_.:-]/g
+
+/**
+ * `{"": 1}` is legal JSON, and quoting that key contributes nothing — the reason
+ * would read `unexpected ` and trail off. Name it instead.
+ */
+const EMPTY_KEY = '(empty)'
+
+/**
+ * The one `(+N more)` idiom, shared by both caps so a reader does not have to
+ * check whether the issue list and the key list elide the same way. Callers pass
+ * already-quoted parts — this function bounds amount only, never alphabet.
+ */
+function summarise(parts: readonly string[], max: number): string {
+  const shown = parts.slice(0, max)
+  const hidden = parts.length - shown.length
   return hidden > 0 ? `${shown.join(', ')} (+${hidden} more)` : shown.join(', ')
+}
+
+/**
+ * Renders one caller-supplied key name as something safe to put on the wire.
+ *
+ * The count/length caps above bound how *much* comes back; they say nothing
+ * about *what*. A 32-character slice of a caller's key still carries a newline,
+ * a `\r`, or an ANSI escape introducer verbatim, and that is a property of the
+ * sink, not of this file: today the reason reaches only the socket that sent the
+ * frame, so there is nothing to inject into, but the next sink to be given this
+ * string — a structured log line, a terminal, a CI annotation, an HTML error
+ * panel — gets to be wrong about it. Shaping the string at the source is the
+ * only place that choice does not have to be re-made per sink.
+ *
+ * `MAX_REPORTED_KEY_CHARS` bounds bytes and not only characters, and the
+ * invariant that buys that is **the allowlist is single-byte**, not the order of
+ * the two steps below. `UNQUOTABLE_KEY_CHAR` admits ASCII alone, so the clip only
+ * ever sees one byte per character, and a lone surrogate half is itself outside
+ * the allowlist and lands as `?` whichever step runs first — a 32-character key
+ * costs 32 bytes rather than the up-to-128 a multi-byte one would. Widening the
+ * alphabet to admit a non-ASCII field name (`\p{L}`, say) gives that up with the
+ * order untouched, so widen the test in `ws-probe.test.ts` with it. Classing
+ * before clipping buys only that the `…` marker is not itself quoted into `?`,
+ * which is cosmetic; the marker is three bytes, so a clipped result measures
+ * `MAX_REPORTED_KEY_CHARS` bytes plus that fixed three.
+ */
+function quoteKey(key: string): string {
+  const safe = key.replace(UNQUOTABLE_KEY_CHAR, '?')
+  if (safe.length === 0) return EMPTY_KEY
+  return safe.length > MAX_REPORTED_KEY_CHARS ? `${safe.slice(0, MAX_REPORTED_KEY_CHARS)}…` : safe
 }
 
 /**
