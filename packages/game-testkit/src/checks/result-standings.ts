@@ -23,11 +23,22 @@
  * most likely to fill them in anyway. The abort half is driven from the
  * game's declared `abortScenarios`.
  *
- * The abort's clock is the scenario's to declare. `now` at the dispatch is
- * `startNow + (afterSteps + 1) * nowStepMs + advanceMs`, so an ending gated on
- * a real deadline — a first-move timeout, a lobby idle-kick — is reached by
- * declaring `advanceMs`, not by stretching the subject's `nowStepMs` (which is
- * shared by every check and would trip time-based endings mid-playout).
+ * There are two arms to that half (ADR-0010), and this check runs both without
+ * forking the check id — the trigger is how the harness reaches the ending; the
+ * thing being asserted is still ADR-0006's encoding:
+ *
+ *   - `trigger: 'action'` — a seat sends something. The abort's clock is the
+ *     scenario's to declare: `now` at the dispatch is
+ *     `startNow + (afterSteps + 1) * nowStepMs + advanceMs`, so an ending gated
+ *     on a real deadline is reached by declaring `advanceMs`, not by stretching
+ *     the subject's `nowStepMs` (which is shared by every check and would trip
+ *     time-based endings mid-playout).
+ *   - `trigger: 'timer'` — nobody acts. The driver fires the timers the game
+ *     itself armed, and `now` is computed from the game's own `delayMs` rather
+ *     than declared, so it cannot drift from the deadline it has to clear.
+ *
+ * A `trigger: 'timer'` scenario on a game with no `onTimer` is a failure, not a
+ * skip: a declared abort that cannot run is a hole in the gate.
  */
 
 import {
@@ -41,7 +52,7 @@ import {
   validateMatchResult,
 } from '@playhall/game-sdk'
 import { CheckRecorder } from '../report.js'
-import { abortRun, seedFor, type ContextOptions } from '../internal/driver.js'
+import { abortRun, seedFor, timerAbortRun, type ContextOptions } from '../internal/driver.js'
 import type { Prepared } from '../internal/prepare.js'
 import { preview } from '../internal/value.js'
 
@@ -133,34 +144,67 @@ function checkAbortedMatches<
     // Deliberately a note and not a failure: a game with no unrecorded ending
     // is legal. It is loud because the alternative is a suite that reports a
     // green `result-standings-well-formed` having never seen empty standings.
+    //
+    // Both arms are named on purpose (ADR-0010 §5): "my ending is timer-driven
+    // and there is no way to say so" used to be a true excuse, and a note that
+    // mentions only `abortAction` keeps it alive.
     recorder.note(
-      'the game declares no abortScenarios, so the unrecorded half of ADR-0006 (empty standings) was never exercised; every abortable lobby should declare one',
+      "the game declares no abortScenarios, so the unrecorded half of ADR-0006 (empty standings) was never exercised; declare one with trigger:'action' (an abortAction a seat sends) or trigger:'timer' (a timerId whose expiry ends the match)",
     )
     return
   }
+
+  const declaredTimerIds = prep.subject.manifest.timers.map((spec) => spec.id)
 
   for (const scenario of prep.scenarios) {
     const context = prep.runs.find((run) => run.scenario === scenario)?.context
     for (const abort of scenarios) {
       const where = `${scenario.label} · abort:${abort.label}`
       const afterSteps = abort.afterSteps ?? 0
-      let outcome
+      const shared = {
+        server: prep.subject.server,
+        settings: scenario.settings,
+        variantLabel: scenario.label,
+        roster: scenario.roster,
+        context: contextFor(scenario, context, prep.baseSeed, abort.label),
+        maxSteps: prep.maxSteps,
+        chooseAction: prep.chooseAction,
+        trapAmbient: prep.trapAmbient,
+        afterSteps,
+        declaredTimerIds,
+      }
+
+      let outcome: { readonly state: TState; readonly result: MatchResult | null }
+      let unreachable: string | null
+      /** Names the lever in the "still running" message; differs by arm. */
+      let stillRunning: string
+
       try {
-        outcome = abortRun<TState, TAction, TSettings, TEvent>({
-          server: prep.subject.server,
-          settings: scenario.settings,
-          variantLabel: scenario.label,
-          roster: scenario.roster,
-          context: contextFor(scenario, context, prep.baseSeed, abort.label),
-          maxSteps: prep.maxSteps,
-          chooseAction: prep.chooseAction,
-          trapAmbient: prep.trapAmbient,
-          afterSteps,
-          // The declared one-dispatch clock offset. Scoped here and nowhere
-          // else: the plies above still run on the subject's `nowStepMs`.
-          advanceMs: abort.advanceMs ?? 0,
-          abortAction: (state, roster) => abort.abortAction(state, roster),
-        })
+        if (abort.trigger === 'timer') {
+          const timed = timerAbortRun<TState, TAction, TSettings, TEvent>({
+            ...shared,
+            timerId: abort.timerId,
+            maxFires: abort.maxFires ?? 1,
+          })
+          outcome = timed
+          unreachable = timed.unreachable
+          stillRunning = `the expiry of '${String(abort.timerId)}' left getResult() null, so the match never ended (fired at ctx.now=${String(timed.abortNow)}, deadline ${String(timed.fires.at(-1)?.deadline ?? 'n/a')}); onTimer has to reach the ending itself`
+        } else {
+          const acted = abortRun<TState, TAction, TSettings, TEvent>({
+            ...shared,
+            // The declared one-dispatch clock offset. Scoped to the abort and
+            // nowhere else: the plies above still run on the subject's
+            // `nowStepMs`.
+            advanceMs: abort.advanceMs ?? 0,
+            abortAction: (state, roster) => abort.abortAction(state, roster),
+          })
+          outcome = acted
+          unreachable = acted.unreachable
+          // The clock is named because a deadline-gated abort is the common
+          // reason for this failure and looks nothing like a bug from here:
+          // the action ran, the game simply decided it was too early.
+          stillRunning = `the abort action left getResult() null, so the match never ended (dispatched at ctx.now=${String(acted.abortNow)}, ${String(abort.advanceMs ?? 0)} ms of declared advanceMs; an abort gated on a deadline needs AbortScenario.advanceMs)`
+        }
       } catch (error) {
         recorder.fail({
           message: `the game threw while reaching the abort: ${error instanceof Error ? error.message : String(error)}`,
@@ -169,9 +213,9 @@ function checkAbortedMatches<
         continue
       }
 
-      if (outcome.unreachable !== null) {
+      if (unreachable !== null) {
         recorder.fail({
-          message: `the declared abort never ran (${outcome.unreachable}), so empty standings were not exercised`,
+          message: `the declared abort never ran (${unreachable}), so empty standings were not exercised`,
           where,
         })
         continue
@@ -179,10 +223,7 @@ function checkAbortedMatches<
 
       const result = outcome.result
       recorder.assert(result !== null, () => ({
-        // The clock is named because a deadline-gated abort is the common
-        // reason for this failure and looks nothing like a bug from here: the
-        // action ran, the game simply decided it was too early.
-        message: `the abort action left getResult() null, so the match never ended (dispatched at ctx.now=${String(outcome.abortNow)}, ${String(abort.advanceMs ?? 0)} ms of declared advanceMs; an abort gated on a deadline needs AbortScenario.advanceMs)`,
+        message: stillRunning,
         where,
         detail: preview(outcome.state, 300),
       }))

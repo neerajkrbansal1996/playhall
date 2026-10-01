@@ -42,10 +42,13 @@ export {
 
 export {
   type AbortScenario,
+  type AbortScenarioBase,
+  type ActionAbortScenario,
   type ActionCandidate,
   type SecretDescriptor,
   type SecretHolding,
   type SettingsVariant,
+  type TimerAbortScenario,
   type TurnBasedConformanceOptions,
   type TurnBasedConformanceSubject,
   perSeatSecret,
@@ -81,6 +84,14 @@ export {
   replay,
   statesOf,
 } from './internal/driver.js'
+
+/**
+ * The conformance driver's reading of `TimerCommand` semantics (ADR-0010).
+ * Exported so `platform-core` can diff its own `TimerService` against it; the
+ * two are held together by the shared fixture at
+ * `packages/game-sdk/test/fixtures/timer-command-semantics.json`.
+ */
+export { type ArmedTimer, TimerQueue, UndeclaredTimerError } from './internal/timer-queue.js'
 
 export { AmbientAccessError, withoutAmbientSources } from './internal/ambient.js'
 export {

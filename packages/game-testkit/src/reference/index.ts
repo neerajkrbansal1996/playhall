@@ -12,6 +12,8 @@
  *
  * `hidden-hand` is the one with secrets in it. Tic-tac-toe is
  * perfect-information, so it cannot exercise the leak fuzzer at all.
+ * `standoff` is the one whose only unrecorded ending is a first-move timeout,
+ * which is the consumer ADR-0010's `TimerAbortScenario` was shaped by.
  */
 
 export {
@@ -29,3 +31,18 @@ export {
 } from './hidden-hand.js'
 
 export { hiddenHandSubject } from './hidden-hand-subject.js'
+
+export {
+  type StandoffAction,
+  type StandoffEvent,
+  type StandoffSettings,
+  type StandoffState,
+  type StandoffView,
+  FIRST_MOVE_TIMER as standoffFirstMoveTimer,
+  actionSchema as standoffActionSchema,
+  manifest as standoffManifest,
+  server as standoffServer,
+  settingsSchema as standoffSettingsSchema,
+} from './standoff.js'
+
+export { standoffSubject } from './standoff-subject.js'

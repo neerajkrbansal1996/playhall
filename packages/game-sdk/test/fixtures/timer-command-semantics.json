@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "doc": [
+    "Normative semantics of `TimerCommand` (packages/game-sdk/src/timers.ts), as a data table.",
+    "",
+    "ADR-0010 §4 makes this fixture the contract between the two implementations that must agree:",
+    "  - `TimerQueue` in packages/game-testkit/src/internal/timer-queue.ts (the conformance driver);",
+    "  - `TimerService` in packages/platform-core/src/timers/ (the real room-runner scheduler).",
+    "The testkit boundary rule `no-testkit-to-platform` (ADR-0002 §2) forbids the testkit importing",
+    "the platform, so the two cannot share code. They share this table instead. `TimerService`",
+    "passing it is a condition of merging `m1.5/timer-service`, and a new op or a changed tie-break",
+    "adds a row here before it changes either implementation.",
+    "",
+    "How to run a case:",
+    "  1. Build an empty queue that knows `declaredTimerIds` (a `set` for anything else is an error).",
+    "  2. For each entry in `steps`, in order, apply `commands` as if a game call whose `ctx.now` was",
+    "     `now` had returned them. A `set`'s deadline is `now + delayMs`.",
+    "  3. Then drain: repeatedly fire the earliest-deadline armed, unpaused timer, breaking ties by",
+    "     `timerId` ascending, removing it as it fires, and applying `onFire[timerId]` (if present) at",
+    "     a clock of `max(deadline, previous fire's clock)`. Stop after `maxFires` fires (default 8).",
+    "  4. The observed `(timerId, deadline, seatId)` sequence must equal `expectedFires` exactly.",
+    "",
+    "Deadlines are absolute milliseconds. A paused timer never fires. Clamping `ctx.now` up to the",
+    "previous mutation's `now` is a *driver* concern and deliberately not modelled here: this table is",
+    "about which timer is due and when, not about what clock the game is then called with."
+  ],
+  "defaultMaxFires": 8,
+  "cases": [
+    {
+      "id": "set-fires-at-emitting-now-plus-delay",
+      "description": "The base case. `delayMs` is relative to the `ctx.now` of the call that returned the command.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
+    },
+    {
+      "id": "delay-is-relative-to-a-nonzero-now",
+      "description": "Same rule from a later call. A queue that measured from match start would say 1000.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 7000,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": "seat-1", "delayMs": 1000 }]
+        }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 8000, "seatId": "seat-1" }]
+    },
+    {
+      "id": "zero-delay-is-due-immediately",
+      "description": "A `delayMs` of 0 is due at the emitting `now`, not skipped and not an error.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        { "now": 500, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 0 }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 500, "seatId": null }]
+    },
+    {
+      "id": "earliest-deadline-fires-first",
+      "description": "Fire order is by deadline, not by the order the commands arrived in.",
+      "declaredTimerIds": ["slow", "quick"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "slow", "seatId": null, "delayMs": 5000 },
+            { "op": "set", "timerId": "quick", "seatId": null, "delayMs": 1000 }
+          ]
+        }
+      ],
+      "expectedFires": [
+        { "timerId": "quick", "deadline": 1000, "seatId": null },
+        { "timerId": "slow", "deadline": 5000, "seatId": null }
+      ]
+    },
+    {
+      "id": "ties-break-by-timer-id-ascending",
+      "description": "Two timers with the same deadline. Armed in reverse id order on purpose: insertion order must not decide this, or a two-timer game is a reproducibility bug.",
+      "declaredTimerIds": ["beta", "alpha"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "beta", "seatId": "seat-2", "delayMs": 2000 },
+            { "op": "set", "timerId": "alpha", "seatId": "seat-1", "delayMs": 2000 }
+          ]
+        }
+      ],
+      "expectedFires": [
+        { "timerId": "alpha", "deadline": 2000, "seatId": "seat-1" },
+        { "timerId": "beta", "deadline": 2000, "seatId": "seat-2" }
+      ]
+    },
+    {
+      "id": "set-replaces-by-default",
+      "description": "`SetTimerCommand.replace` defaults true, so a re-set moves the deadline and there is still exactly one `a`.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 5000 }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 5000, "seatId": null }]
+    },
+    {
+      "id": "replace-false-keeps-the-existing-deadline",
+      "description": "An explicit `replace: false` is a no-op against a live timer — including its seat.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": "seat-1", "delayMs": 1000 }]
+        },
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "a", "seatId": "seat-2", "delayMs": 5000, "replace": false }
+          ]
+        }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": "seat-1" }]
+    },
+    {
+      "id": "replace-false-still-arms-when-nothing-is-there",
+      "description": "`replace: false` guards an existing timer; it does not mean 'do nothing'.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000, "replace": false }
+          ]
+        }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
+    },
+    {
+      "id": "clear-disarms",
+      "description": "The opening-deadline shape: a game clears its first-move timer on the first move.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "clear", "timerId": "a" }] }
+      ],
+      "expectedFires": []
+    },
+    {
+      "id": "clear-for-a-timer-that-is-not-armed-is-a-noop",
+      "description": "Not an error. A game that clears defensively on every move must not be punished for it.",
+      "declaredTimerIds": ["a", "b"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 100, "commands": [{ "op": "clear", "timerId": "b" }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
+    },
+    {
+      "id": "pause-then-resume-shifts-the-deadline-by-the-frozen-span",
+      "description": "600 ms remained when it was paused at 400, so it is due 600 ms after the resume. This is the `pausesOnDisconnect` case, and getting it wrong makes the harness fire a timer the real service had frozen — a false failure reported against the game.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
+        { "now": 10000, "commands": [{ "op": "resume", "timerId": "a" }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 10600, "seatId": null }]
+    },
+    {
+      "id": "a-paused-timer-never-fires",
+      "description": "No resume, no expiry. The timer is still armed; it is simply not due.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] }
+      ],
+      "expectedFires": []
+    },
+    {
+      "id": "pause-is-idempotent",
+      "description": "The second pause must not re-measure the remaining span from the later clock, which would silently extend the timer every time a game paused defensively.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
+        { "now": 900, "commands": [{ "op": "pause", "timerId": "a" }] },
+        { "now": 1000, "commands": [{ "op": "resume", "timerId": "a" }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1600, "seatId": null }]
+    },
+    {
+      "id": "resume-on-a-live-timer-is-a-noop",
+      "description": "Symmetric with the idempotent pause: a stray resume must not move a running deadline.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "resume", "timerId": "a" }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
+    },
+    {
+      "id": "pause-and-resume-for-an-unarmed-timer-are-noops",
+      "description": "Neither arms anything. A resume cannot conjure a timer no `set` ever created.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        { "now": 0, "commands": [{ "op": "pause", "timerId": "a" }] },
+        { "now": 100, "commands": [{ "op": "resume", "timerId": "a" }] }
+      ],
+      "expectedFires": []
+    },
+    {
+      "id": "set-over-a-paused-timer-arms-it-live",
+      "description": "A replacing `set` is a fresh timer, so it is running even though the id it replaced was frozen.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        },
+        { "now": 400, "commands": [{ "op": "pause", "timerId": "a" }] },
+        {
+          "now": 500,
+          "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }]
+        }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1500, "seatId": null }]
+    },
+    {
+      "id": "pausing-one-timer-lets-a-later-one-overtake-it",
+      "description": "Fire order is over the unpaused set only, so `late` goes first even though `early` has the earlier stored deadline.",
+      "declaredTimerIds": ["early", "late"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "early", "seatId": null, "delayMs": 1000 },
+            { "op": "set", "timerId": "late", "seatId": null, "delayMs": 3000 }
+          ]
+        },
+        { "now": 500, "commands": [{ "op": "pause", "timerId": "early" }] },
+        { "now": 4000, "commands": [{ "op": "resume", "timerId": "early" }] }
+      ],
+      "expectedFires": [
+        { "timerId": "late", "deadline": 3000, "seatId": null },
+        { "timerId": "early", "deadline": 4500, "seatId": null }
+      ]
+    },
+    {
+      "id": "an-expiry-rearms-itself",
+      "description": "`onTimer`'s own returned `timers` are applied, so a turn timer re-arms for the next seat. `maxFires` is what bounds it.",
+      "declaredTimerIds": ["turn"],
+      "maxFires": 3,
+      "steps": [
+        {
+          "now": 0,
+          "commands": [{ "op": "set", "timerId": "turn", "seatId": "seat-1", "delayMs": 1000 }]
+        }
+      ],
+      "onFire": {
+        "turn": [{ "op": "set", "timerId": "turn", "seatId": "seat-1", "delayMs": 1000 }]
+      },
+      "expectedFires": [
+        { "timerId": "turn", "deadline": 1000, "seatId": "seat-1" },
+        { "timerId": "turn", "deadline": 2000, "seatId": "seat-1" },
+        { "timerId": "turn", "deadline": 3000, "seatId": "seat-1" }
+      ]
+    },
+    {
+      "id": "an-expiry-clears-a-sibling",
+      "description": "The match-ends-on-expiry shape: the first fire cancels everything else that was pending.",
+      "declaredTimerIds": ["first-move", "grace"],
+      "steps": [
+        {
+          "now": 0,
+          "commands": [
+            { "op": "set", "timerId": "first-move", "seatId": "seat-1", "delayMs": 1000 },
+            { "op": "set", "timerId": "grace", "seatId": "seat-2", "delayMs": 2000 }
+          ]
+        }
+      ],
+      "onFire": { "first-move": [{ "op": "clear", "timerId": "grace" }] },
+      "expectedFires": [{ "timerId": "first-move", "deadline": 1000, "seatId": "seat-1" }]
+    },
+    {
+      "id": "an-expiry-does-not-rearm-itself-by-default",
+      "description": "Expiry removes the timer. A queue that left it armed would fire the same deadline forever.",
+      "declaredTimerIds": ["a"],
+      "steps": [
+        { "now": 0, "commands": [{ "op": "set", "timerId": "a", "seatId": null, "delayMs": 1000 }] }
+      ],
+      "expectedFires": [{ "timerId": "a", "deadline": 1000, "seatId": null }]
+    }
+  ],
+  "undeclaredSetIsAnError": {
+    "description": "A `set` for a `timerId` the manifest never declared is rejected, not armed. `TurnBasedGameServer.onTimer` promises `timerId` always corresponds to a declared `TimerSpec`, and `TimerService` enforces the same thing through its `specs` option.",
+    "declaredTimerIds": ["a"],
+    "steps": [
+      {
+        "now": 0,
+        "commands": [{ "op": "set", "timerId": "ghost", "seatId": null, "delayMs": 1000 }]
+      }
+    ]
+  }
+}

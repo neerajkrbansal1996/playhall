@@ -11,14 +11,19 @@ import { describe, expect, it } from 'vitest'
 import {
   VALID,
   asSeatId,
+  asTimerId,
   invalid,
+  setTimer,
   validateMatchResult,
+  type ApplyResult,
   type GameContext,
   type GameEvent,
   type MatchResult,
   type SeatId,
+  type TimerCommand,
+  type TimerId,
 } from '@playhall/game-sdk'
-import { abortRun } from '../src/internal/driver.js'
+import { abortRun, timerAbortRun } from '../src/internal/driver.js'
 import {
   AmbientAccessError,
   CheckRecorder,
@@ -257,6 +262,10 @@ describe('abortRun scopes advanceMs to the abort dispatch', () => {
       chooseAction: defaultChooseAction,
       trapAmbient: false,
       afterSteps: 2,
+      // This game arms no timers at all, so the allowlist is empty. It is a
+      // required option rather than a defaulted one on purpose: an omitted
+      // allowlist would silently reject every legal `set` a game emitted.
+      declaredTimerIds: [],
       ...(advanceMs === undefined ? {} : { advanceMs }),
       abortAction: (_state: ClockState, seats) => {
         const host = seats[0]
@@ -312,6 +321,234 @@ describe('abortRun scopes advanceMs to the abort dispatch', () => {
     const inTime = run(30_000, 31_000, true)
     expect(inTime.outcome.unreachable).toBeNull()
     expect(inTime.outcome.result).toEqual({ reason: 'aborted', standings: [] })
+  })
+})
+
+/**
+ * `timerAbortRun` at the driver seam (ADR-0010 §1–§2).
+ *
+ * Every timer-arm test above this one reaches the driver through
+ * `runTurnBasedConformance`, whose subject reads neither `ctx.now` nor the
+ * `seatId` in `onTimer` — so the queue is pinned by `test/timer-queue.test.ts`
+ * while the driver's *wiring into* the queue is not. The queue can be right
+ * while the driver hands it the wrong clock, and nothing goes red. These assert
+ * the returned `TimerFire`s directly, which is what that record exists for.
+ */
+describe('timerAbortRun fires the game’s own timers on the ADR-0010 §2 clock', () => {
+  const base = {
+    gameId: 'g',
+    gameVersion: '1.0.0',
+    sdkContractVersion: 1,
+    startNow: 1_000_000,
+    nowStepMs: 1_000,
+    seed: 'seed' as never,
+  }
+
+  const TICK = asTimerId('tick')
+  const FINAL = asTimerId('final')
+  /** The second seat, so a dropped `seatId` cannot pass as the default one. */
+  const OWNER = asSeatId('seat-2')
+  const ABORTED: MatchResult = { reason: 'aborted', standings: [] }
+
+  interface TimedState {
+    /** The opening `ctx.now`, so the game can measure elapsed time itself. */
+    readonly startedAt: number
+    readonly plays: number
+    readonly endedAt: number | null
+  }
+  type TimedAction = 'play'
+
+  /**
+   * A miniature game whose timer commands the caller supplies, so each case
+   * differs only in which call arms what and in what `onTimer` decides.
+   */
+  function drive(options: {
+    readonly declaredTimerIds: readonly string[]
+    readonly timerId: TimerId
+    readonly afterSteps: number
+    readonly maxFires?: number
+    /** Returned from `createInitialState`, resolved against its own `ctx.now`. */
+    readonly openingTimers?: readonly TimerCommand[]
+    /** Keyed by 1-based ply, resolved against that ply's `ctx.now`. */
+    readonly timersOnPly?: ReadonlyMap<number, readonly TimerCommand[]>
+    readonly onTimer: (
+      ctx: GameContext,
+      state: TimedState,
+      timerId: TimerId,
+      seatId: SeatId | null,
+    ) => ApplyResult<TimedState, GameEvent>
+  }) {
+    const nows: number[] = []
+    const server = {
+      createInitialState: (ctx: GameContext): ApplyResult<TimedState, GameEvent> => {
+        nows.push(ctx.now)
+        return {
+          state: { startedAt: ctx.now, plays: 0, endedAt: null },
+          events: [],
+          timers: options.openingTimers ?? [],
+        }
+      },
+      validateAction: () => VALID,
+      applyAction: (ctx: GameContext, state: TimedState): ApplyResult<TimedState, GameEvent> => {
+        nows.push(ctx.now)
+        const plays = state.plays + 1
+        return {
+          state: { ...state, plays },
+          events: [],
+          timers: options.timersOnPly?.get(plays) ?? [],
+        }
+      },
+      getLegalActions: (): readonly TimedAction[] => ['play'],
+      onTimer: options.onTimer,
+      getResult: (state: TimedState): MatchResult | null =>
+        state.endedAt === null ? null : ABORTED,
+    }
+
+    const outcome = timerAbortRun<TimedState, TimedAction, Record<string, never>, GameEvent>({
+      server,
+      settings: {},
+      variantLabel: 'v',
+      roster: buildDefaultRoster(2, false),
+      context: base,
+      maxSteps: 50,
+      chooseAction: defaultChooseAction,
+      trapAmbient: false,
+      afterSteps: options.afterSteps,
+      declaredTimerIds: options.declaredTimerIds,
+      timerId: options.timerId,
+      maxFires: options.maxFires ?? 1,
+    })
+    return { outcome, nows }
+  }
+
+  /** Ends the match unconditionally, recording the clock the fire ran at. */
+  const endOnFire = (ctx: GameContext, state: TimedState): ApplyResult<TimedState, GameEvent> => ({
+    state: { ...state, endedAt: ctx.now },
+    events: [],
+  })
+
+  it('resolves an opening set against createInitialState’s own ctx.now', () => {
+    const { outcome } = drive({
+      declaredTimerIds: ['final'],
+      timerId: FINAL,
+      afterSteps: 0,
+      openingTimers: [setTimer(FINAL, 5_000, OWNER)],
+      onTimer: endOnFire,
+    })
+
+    expect(outcome.unreachable).toBeNull()
+    expect(outcome.fires).toHaveLength(1)
+    // startNow + delayMs. A deadline measured from a zero epoch would be 5_000,
+    // which the clamp below would then silently absorb into the step clock.
+    expect(outcome.fires[0]?.deadline).toBe(1_005_000)
+    expect(outcome.fires[0]?.now).toBe(1_005_000)
+    expect(outcome.fires[0]?.sequence).toBe(1)
+    expect(outcome.abortNow).toBe(1_005_000)
+    expect(outcome.result).toEqual(ABORTED)
+  })
+
+  it('resolves a mid-match set against that ply’s ctx.now, not the opening one', () => {
+    const { outcome, nows } = drive({
+      declaredTimerIds: ['final'],
+      timerId: FINAL,
+      afterSteps: 2,
+      timersOnPly: new Map([[2, [setTimer(FINAL, 3_000, OWNER)]]]),
+      onTimer: endOnFire,
+    })
+
+    // createInitialState at sequence 0, then two plies at 1 and 2.
+    expect(nows).toEqual([1_000_000, 1_001_000, 1_002_000])
+    expect(outcome.stepsPlayed).toBe(2)
+    expect(outcome.unreachable).toBeNull()
+    // The arming ply ran at 1_002_000, so the deadline is that plus 3_000 —
+    // the "deadline is a pure function of the log" clause in miniature.
+    expect(outcome.fires[0]?.deadline).toBe(1_005_000)
+    expect(outcome.fires[0]?.now).toBe(1_005_000)
+    expect(outcome.fires[0]?.sequence).toBe(3)
+  })
+
+  it('clamps a deadline behind the last mutation up to that mutation’s now', () => {
+    const { outcome, nows } = drive({
+      declaredTimerIds: ['final'],
+      timerId: FINAL,
+      afterSteps: 3,
+      // 500 ms armed on ply 1 against three 1 s plies: the deadline is 1.5 s
+      // behind the last action by the time the fire is dispatched.
+      timersOnPly: new Map([[1, [setTimer(FINAL, 500, OWNER)]]]),
+      // A game that measures elapsed time from its own state, the way
+      // `test/fixtures/race.ts` does via `startedAt`. An unclamped fire rewinds
+      // `ctx.now` behind the last action, this game then refuses to end, and the
+      // suite reports a false failure against a correct game — which ADR-0010 §1
+      // calls worse than having no check at all.
+      onTimer: (ctx, state) =>
+        ctx.now - state.startedAt >= 3_000 ? endOnFire(ctx, state) : { state, events: [] },
+    })
+
+    expect(outcome.fires[0]?.deadline).toBe(1_001_500)
+    expect(outcome.fires[0]?.now).toBe(nows.at(-1))
+    expect(outcome.fires[0]?.now).toBe(1_003_000)
+    expect(outcome.abortNow).toBe(1_003_000)
+    expect(outcome.result).toEqual(ABORTED)
+  })
+
+  it('passes onTimer the seat from the game’s own set command', () => {
+    const seen: (SeatId | null)[] = []
+    const { outcome } = drive({
+      declaredTimerIds: ['final'],
+      timerId: FINAL,
+      afterSteps: 0,
+      openingTimers: [setTimer(FINAL, 5_000, OWNER)],
+      // Only the owning seat's expiry ends this match. A driver that passed
+      // `null` — or the wrong seat — would report this correct game as one
+      // whose declared timer ending production can never reach.
+      onTimer: (ctx, state, _timerId, seatId) => {
+        seen.push(seatId)
+        return String(seatId) === 'seat-2' ? endOnFire(ctx, state) : { state, events: [] }
+      },
+    })
+
+    expect(seen).toEqual([OWNER])
+    expect(outcome.fires[0]?.seatId).toBe(OWNER)
+    expect(outcome.unreachable).toBeNull()
+    expect(outcome.result).toEqual(ABORTED)
+  })
+
+  it('applies onTimer’s own commands, so one expiry can re-arm the next', () => {
+    const { outcome } = drive({
+      declaredTimerIds: ['tick', 'final'],
+      timerId: FINAL,
+      afterSteps: 0,
+      maxFires: 2,
+      // `final` is armed up front — `wasEverArmed` is checked before the first
+      // fire, so a timer only armed from inside the cascade is unreachable by
+      // construction. `tick`'s expiry then pulls it 48.5 s forward, which is
+      // the part a driver that dropped onTimer's commands would lose.
+      openingTimers: [setTimer(TICK, 1_000, OWNER), setTimer(FINAL, 50_000, OWNER)],
+      onTimer: (ctx, state, timerId) =>
+        String(timerId) === 'tick'
+          ? { state, events: [], timers: [setTimer(FINAL, 500, OWNER)] }
+          : endOnFire(ctx, state),
+    })
+
+    expect(outcome.unreachable).toBeNull()
+    expect(outcome.fires).toHaveLength(2)
+    expect(outcome.fires[0]).toEqual({
+      timerId: TICK,
+      seatId: OWNER,
+      deadline: 1_001_000,
+      now: 1_001_000,
+      sequence: 1,
+    })
+    // 1_001_000 (the `tick` fire's own clock) + 500, replacing 1_050_000.
+    expect(outcome.fires[1]).toEqual({
+      timerId: FINAL,
+      seatId: OWNER,
+      deadline: 1_001_500,
+      now: 1_001_500,
+      sequence: 2,
+    })
+    expect(outcome.abortNow).toBe(1_001_500)
+    expect(outcome.result).toEqual(ABORTED)
   })
 })
 
