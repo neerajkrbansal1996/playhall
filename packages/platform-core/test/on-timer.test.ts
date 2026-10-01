@@ -74,7 +74,8 @@ const toyGame = {
     return {
       state: { ...state, toMove: next, passes: state.passes + 1 },
       events: [{ type: 'turn_timeout', payload: { seatId: state.toMove }, audience: PUBLIC }],
-      timers: [setTimer(TURN, 30_000)],
+      // The deadline now belongs to `next`, who is the one it can time out.
+      timers: [setTimer(TURN, 30_000, next)],
     }
   },
 }
@@ -224,7 +225,7 @@ describe('the game only ever sees timers it declared', () => {
   it('refuses a set for an undeclared id', () => {
     const r = runner({ initialMs: 60_000 })
     expect(() =>
-      r.service.apply([setTimer(asTimerId('undeclared'), 1_000)], r.clock.now()),
+      r.service.apply([setTimer(asTimerId('undeclared'), 1_000, null)], r.clock.now()),
     ).toThrow(/not declared/)
   })
 })

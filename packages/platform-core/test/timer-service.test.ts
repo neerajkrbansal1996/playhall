@@ -165,7 +165,12 @@ describe('SDK timer commands', () => {
     const h = harness()
     const issuedAtMs = h.clock.now()
 
-    const commands: TimerCommand[] = [setTimer(TURN, 30_000), setTimer(MATCH_TIMER, 600_000)]
+    // The turn deadline belongs to whoever is on move; the match ceiling
+    // belongs to nobody, which is the one case `null` is for.
+    const commands: TimerCommand[] = [
+      setTimer(TURN, 30_000, WHITE),
+      setTimer(MATCH_TIMER, 600_000, null),
+    ]
     h.service.apply(commands, issuedAtMs)
     expect(h.service.remainingMs(TURN)).toBe(30_000)
 
@@ -186,7 +191,7 @@ describe('SDK timer commands', () => {
     const h = harness()
     const ctxNow = h.clock.now()
     h.clock.advance(250) // persistence, fan-out, whatever happened in between
-    h.service.apply([setTimer(TURN, 30_000)], ctxNow)
+    h.service.apply([setTimer(TURN, 30_000, WHITE)], ctxNow)
     expect(h.service.nextDeadlineMs()).toBe(ctxNow + 30_000)
   })
 
@@ -358,7 +363,10 @@ describe('re-entrancy', () => {
       scheduler: createManualScheduler(),
       onExpire: (expiry) => {
         rounds += 1
-        if (rounds < 3) service.apply([setTimer(expiry.timerId, 10_000)], expiry.dueAtMs)
+        // Re-arming the timer that just fired: `expiry.seatId` carries its
+        // owner forward, which is what "arm the next one" has to mean.
+        if (rounds < 3)
+          service.apply([setTimer(expiry.timerId, 10_000, expiry.seatId)], expiry.dueAtMs)
       },
     })
 
