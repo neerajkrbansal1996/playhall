@@ -6,3 +6,4 @@
  * trivially testable and adds no bytes to a game bundle that does not use it.
  */
 export { cn } from './cn'
+export { Wordmark, type WordmarkProps } from './wordmark'

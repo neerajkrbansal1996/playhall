@@ -1,4 +1,5 @@
 import { BRAND } from '@playhall/shared'
+import { Wordmark } from '@playhall/ui'
 
 import { Button } from '@/components/ui/button'
 
@@ -12,10 +13,20 @@ export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-12">
       <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">{BRAND.name}</h1>
-        <p className="text-muted-foreground text-sm">
-          Multiplayer in the browser. Open a lobby, share a link or a 6-character code, play.
-        </p>
+        {/*
+          `Wordmark` is the only component allowed to render the name, and the name
+          reaches it as a prop — the import of `BRAND` stops at this app layer. It is an
+          `h1` here because on the landing page the wordmark genuinely *is* the page
+          heading; in an app bar it is a `span`.
+
+          `lg`, not `md`: component specs §17 reserves `lg` for the landing hero, and
+          design tokens §3 allocates `--text-5xl`/`--text-6xl` to the landing headline —
+          which is what this element is. `md` is the landing *header bar*, and rendering
+          the hero at it put the product name at card-title size on the first screen a
+          stranger sees after tapping an invite.
+        */}
+        <Wordmark as="h1" size="lg" name={BRAND.name} />
+        <p className="text-muted-foreground text-sm">{BRAND.tagline}</p>
       </div>
 
       <div className="flex flex-col gap-3">

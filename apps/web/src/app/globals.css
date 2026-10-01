@@ -1,6 +1,15 @@
 @import 'tailwindcss';
 @plugin 'tailwindcss-animate';
 
+/*
+  Tailwind v4's automatic source detection starts at this app's own root, so a utility
+  class that only ever appears in `@playhall/ui` is never generated and the component
+  ships unstyled — with no build error and nothing in the diff to notice. Register the
+  workspace package explicitly. Every component that lands in `packages/ui` from here on
+  depends on this line.
+*/
+@source '../../../../packages/ui/src';
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
